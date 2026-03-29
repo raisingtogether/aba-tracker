@@ -1,0 +1,2245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="RT ABA">
+  <meta name="theme-color" content="#00A7C7">
+  <title>Raising Together ABA Tracker</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --primary:   #00A7C7;
+      --secondary: #FF9701;
+      --accent:    #F1196E;
+      --dark:      #5D4337;
+      --light:     #FDB889;
+      --bg:        #F0F5F7;
+      --white:     #FFFFFF;
+      --g100: #EDF2F4;
+      --g200: #D8E2E6;
+      --g400: #96B0BA;
+      --g600: #5A7D8A;
+      --g800: #1E3540;
+      --success: #22C55E;
+      --danger:  #EF4444;
+      --shadow: 0 2px 12px rgba(0,80,100,0.08);
+      --shadow-lg: 0 8px 28px rgba(0,80,100,0.14);
+      --r:    16px;
+      --r-sm: 10px;
+      --r-lg: 24px;
+    }
+    *, *::before, *::after { box-sizing: border-box; -webkit-tap-highlight-color: transparent; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Nunito', sans-serif;
+      background: var(--bg);
+      color: var(--g800);
+      min-height: 100dvh;
+      overflow-x: hidden;
+    }
+
+    /* ── SCREENS ── */
+    .screen { display: none; min-height: 100dvh; flex-direction: column; }
+    .screen.active { display: flex; }
+
+    /* ── HEADER ── */
+    .header {
+      background: var(--primary);
+      color: white;
+      padding: 14px 16px;
+      padding-top: calc(14px + env(safe-area-inset-top));
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      box-shadow: 0 2px 10px rgba(0,120,150,0.3);
+      flex-shrink: 0;
+      position: relative;
+      z-index: 5;
+    }
+    .hdr-back {
+      width: 40px; height: 40px; border-radius: 50%;
+      background: rgba(255,255,255,0.18); border: none; color: white;
+      font-size: 24px; display: flex; align-items: center; justify-content: center;
+      cursor: pointer; flex-shrink: 0; line-height: 1;
+    }
+    .hdr-title { font-size: 17px; font-weight: 800; flex: 1; }
+    .hdr-sub   { font-size: 12px; opacity: 0.82; font-weight: 600; margin-top: 1px; }
+
+    /* ── BRAND SPLASH ── */
+    .brand-splash {
+      background: linear-gradient(145deg, var(--primary) 0%, #007FA0 100%);
+      padding: 44px 20px 32px;
+      padding-top: calc(44px + env(safe-area-inset-top));
+      text-align: center;
+      color: white;
+      flex-shrink: 0;
+    }
+    .brand-icon {
+      width: 76px; height: 76px; background: white; border-radius: 22px;
+      margin: 0 auto 14px; display: flex; align-items: center; justify-content: center;
+      font-size: 38px; box-shadow: 0 6px 20px rgba(0,0,0,0.2);
+    }
+    .brand-name { font-size: 23px; font-weight: 900; }
+    .brand-tagline { font-size: 13px; opacity: 0.84; font-weight: 600; margin-top: 4px; }
+
+    /* ── SCROLLABLE CONTENT ── */
+    .content {
+      flex: 1; padding: 20px; overflow-y: auto; -webkit-overflow-scrolling: touch;
+      padding-bottom: calc(24px + env(safe-area-inset-bottom));
+    }
+
+    /* ── SECTION LABEL ── */
+    .section-lbl {
+      padding: 16px 20px 10px;
+      font-size: 12px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.9px; color: var(--g400);
+    }
+
+    /* ── CARDS ── */
+    .card {
+      background: var(--white); border-radius: var(--r);
+      padding: 18px; margin-bottom: 14px; box-shadow: var(--shadow);
+    }
+    .card-ttl {
+      font-size: 12px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.8px; color: var(--g400); margin-bottom: 14px;
+    }
+
+    /* ── THERAPIST GRID ── */
+    .therapist-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 8px 20px 20px;
+    }
+    .therapist-btn {
+      background: white; border: 3px solid var(--g200); border-radius: var(--r);
+      padding: 22px 12px; text-align: center; cursor: pointer;
+      box-shadow: var(--shadow); transition: transform .12s, border-color .12s;
+    }
+    .therapist-btn:active { transform: scale(0.95); border-color: var(--primary); }
+    .therapist-btn .av {
+      width: 58px; height: 58px; border-radius: 50%; margin: 0 auto 10px;
+      color: white; font-size: 20px; font-weight: 800;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .therapist-btn .t-name { font-size: 15px; font-weight: 800; color: var(--g800); }
+    .therapist-btn .t-init { font-size: 12px; color: var(--g400); font-weight: 600; margin-top: 2px; }
+
+    /* ── CLIENT LIST ── */
+    .client-list { padding: 8px 20px 20px; display: flex; flex-direction: column; gap: 11px; }
+    .client-btn {
+      background: white; border: 3px solid var(--g200); border-radius: var(--r);
+      padding: 18px; display: flex; align-items: center; gap: 14px;
+      cursor: pointer; box-shadow: var(--shadow); transition: transform .12s, border-color .12s;
+      text-align: left; width: 100%;
+    }
+    .client-btn:active { transform: scale(0.98); border-color: var(--secondary); }
+    .client-btn .av {
+      width: 50px; height: 50px; border-radius: 50%; flex-shrink: 0;
+      background: linear-gradient(135deg, var(--secondary), var(--light));
+      color: white; font-size: 18px; font-weight: 800;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .client-btn .c-name  { font-size: 16px; font-weight: 800; color: var(--g800); }
+    .client-btn .c-goals { font-size: 13px; color: var(--g400); font-weight: 600; margin-top: 2px; }
+    .client-btn .c-arr   { margin-left: auto; color: var(--g400); font-size: 22px; }
+
+    /* ── FORMS ── */
+    .form-group { margin-bottom: 18px; }
+    .form-lbl { display: block; font-size: 13px; font-weight: 700; color: var(--g600); margin-bottom: 8px; }
+    .form-ctrl {
+      width: 100%; padding: 13px 14px; border: 2px solid var(--g200);
+      border-radius: var(--r-sm); font-family: 'Nunito', sans-serif;
+      font-size: 15px; font-weight: 600; color: var(--g800); background: white;
+      -webkit-appearance: none; outline: none; transition: border-color .15s;
+    }
+    .form-ctrl:focus { border-color: var(--primary); }
+    textarea.form-ctrl { resize: none; }
+
+    /* ── OPTION PILLS (large) ── */
+    .opt-pills { display: flex; gap: 8px; flex-wrap: wrap; }
+    .opt-pill {
+      flex: 1; min-width: 90px; padding: 13px 10px;
+      border-radius: var(--r-sm); border: 2px solid var(--g200); background: white;
+      font-family: 'Nunito', sans-serif; font-size: 13px; font-weight: 700;
+      color: var(--g600); cursor: pointer; text-align: center; transition: all .13s;
+    }
+    .opt-pill.sel { background: var(--primary); border-color: var(--primary); color: white; }
+    .opt-pill:active { transform: scale(0.96); }
+
+    /* ── SMALL PILLS (ABC) ── */
+    .pill-group { display: flex; flex-wrap: wrap; gap: 7px; }
+    .pill {
+      padding: 9px 16px; border-radius: 100px; border: 2px solid var(--g200);
+      background: white; font-family: 'Nunito', sans-serif;
+      font-size: 13px; font-weight: 700; color: var(--g600);
+      cursor: pointer; transition: all .13s;
+    }
+    .pill.sel { background: var(--primary); border-color: var(--primary); color: white; }
+    .pill:active { transform: scale(0.94); }
+
+    /* ── BUTTONS ── */
+    .btn {
+      width: 100%; padding: 17px; border-radius: var(--r); border: none;
+      font-family: 'Nunito', sans-serif; font-size: 16px; font-weight: 800;
+      cursor: pointer; transition: transform .12s; letter-spacing: 0.2px;
+    }
+    .btn:active { transform: scale(0.98); }
+    .btn-primary { background: var(--primary); color: white; box-shadow: 0 4px 14px rgba(0,167,199,.35); }
+    .btn-accent  { background: var(--accent);  color: white; box-shadow: 0 4px 14px rgba(241,25,110,.3); }
+    .btn-ghost   { background: var(--g100);    color: var(--g600); }
+
+    /* ── INFO CHIPS ── */
+    .info-row  { display: flex; gap: 10px; }
+    .info-chip { flex: 1; background: var(--g100); border-radius: var(--r-sm); padding: 11px 8px; text-align: center; }
+    .chip-lbl  { font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--g400); font-weight: 700; }
+    .chip-val  { font-size: 14px; font-weight: 800; color: var(--g800); margin-top: 2px; }
+
+    /* ── LIVE CLOCK ── */
+    .live-clock { font-size: 13px; font-weight: 700; color: rgba(255,255,255,.85); text-align: right; }
+    .live-elapsed { font-size: 10px; opacity: 0.7; color: white; font-weight: 600; text-align: right; }
+
+    /* ── SESSION BAR ── */
+    .session-bar {
+      background: white; padding: 10px 16px; border-bottom: 2px solid var(--g100);
+      display: flex; gap: 14px; font-size: 12px; font-weight: 600; color: var(--g600);
+      overflow-x: auto; white-space: nowrap; -webkit-overflow-scrolling: touch; flex-shrink: 0;
+    }
+    .sbar-item { display: flex; align-items: center; gap: 3px; flex-shrink: 0; }
+    .sbar-lbl  { color: var(--g400); }
+    .sbar-val  { color: var(--g800); font-weight: 800; }
+
+    /* ── TAB NAV ── */
+    .tab-nav {
+      display: flex; background: white; border-top: 2px solid var(--g100);
+      flex-shrink: 0; padding-bottom: env(safe-area-inset-bottom);
+    }
+    .tab-btn {
+      flex: 1; padding: 11px 4px; border: none; background: transparent;
+      font-family: 'Nunito', sans-serif; font-size: 10px; font-weight: 700;
+      color: var(--g400); cursor: pointer; display: flex; flex-direction: column;
+      align-items: center; gap: 3px; text-transform: uppercase; letter-spacing: 0.5px;
+      transition: color .13s;
+    }
+    .tab-icon { font-size: 20px; }
+    .tab-btn.active { color: var(--primary); }
+    .tab-btn.end-btn { color: var(--accent) !important; }
+
+    /* ── TAB CONTENT ── */
+    #screen-session { overflow: hidden; }
+    .session-body { flex: 1; overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
+    .tab-content { display: none; flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+    .tab-content.active { display: block; }
+
+    /* ── BEHAVIOR COUNTERS ── */
+    .behavior-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 11px; padding: 14px 16px; }
+    .beh-card {
+      background: white; border-radius: var(--r); padding: 14px;
+      text-align: center; box-shadow: var(--shadow);
+    }
+    .beh-name  { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--g600); margin-bottom: 8px; }
+    .beh-count { font-size: 50px; font-weight: 900; line-height: 1; margin-bottom: 10px; }
+    .ctr-btns  { display: flex; gap: 8px; justify-content: center; }
+    .ctr-btn {
+      width: 48px; height: 48px; border-radius: 50%; border: none;
+      font-size: 24px; font-weight: 800; cursor: pointer;
+      display: flex; align-items: center; justify-content: center; transition: transform .1s;
+    }
+    .ctr-btn:active { transform: scale(0.88); }
+    .ctr-btn.minus { background: var(--g100); color: var(--g600); }
+    .ctr-btn.plus  { color: white; }
+
+    /* ── TANTRUM ── */
+    .tantrum-wrap { padding: 0 16px 16px; }
+    .tantrum-card { background: white; border-radius: var(--r); padding: 18px; box-shadow: var(--shadow); }
+    .tantrum-hdr { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+    .tantrum-ttl { font-size: 15px; font-weight: 800; color: var(--g800); }
+    .tantrum-badge { background: var(--accent); color: white; border-radius: 100px; padding: 4px 12px; font-size: 14px; font-weight: 800; }
+    .timer-display {
+      font-size: 54px; font-weight: 900; text-align: center;
+      color: var(--accent); font-variant-numeric: tabular-nums;
+      margin: 10px 0; letter-spacing: 3px; line-height: 1;
+    }
+    .timer-display.running { animation: pulse 1s ease-in-out infinite; }
+    @keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:.65 } }
+    .timer-btns { display: flex; gap: 8px; margin-bottom: 12px; }
+    .timer-btn {
+      flex: 1; padding: 13px; border-radius: var(--r-sm); border: none;
+      font-family: 'Nunito', sans-serif; font-size: 14px; font-weight: 800;
+      cursor: pointer; transition: transform .12s;
+    }
+    .timer-btn:active { transform: scale(0.96); }
+    .tbtn-start { background: var(--accent); color: white; }
+    .tbtn-stop  { background: var(--secondary); color: white; }
+    .tbtn-reset { background: var(--g100); color: var(--g600); }
+    .tantrum-total-lbl { text-align: center; font-size: 13px; font-weight: 700; color: var(--g400); margin-bottom: 14px; }
+    .tantrum-total-lbl span { color: var(--accent); font-size: 15px; }
+    .manual-row { display: flex; gap: 8px; border-top: 2px solid var(--g100); padding-top: 14px; }
+    .manual-inp {
+      flex: 1; padding: 11px 12px; border: 2px solid var(--g200); border-radius: var(--r-sm);
+      font-family: 'Nunito', sans-serif; font-size: 15px; font-weight: 600; outline: none;
+    }
+    .manual-inp:focus { border-color: var(--accent); }
+    .manual-btn {
+      padding: 11px 14px; background: var(--accent); color: white; border: none;
+      border-radius: var(--r-sm); font-family: 'Nunito', sans-serif;
+      font-size: 14px; font-weight: 800; cursor: pointer; white-space: nowrap;
+    }
+
+    /* ── TRIAL GOALS ── */
+    .trials-wrap { padding: 14px 16px; }
+    .goal-card { background: white; border-radius: var(--r); padding: 16px; margin-bottom: 11px; box-shadow: var(--shadow); }
+    .goal-hdr  { display: flex; align-items: center; margin-bottom: 12px; gap: 8px; }
+    .goal-code { font-size: 12px; font-weight: 800; color: var(--primary); background: rgba(0,167,199,.1); padding: 4px 10px; border-radius: 100px; flex-shrink: 0; }
+    .goal-name { font-size: 13px; font-weight: 700; color: var(--g600); flex: 1; min-width: 0; }
+    .goal-pct  { font-size: 20px; font-weight: 900; min-width: 44px; text-align: right; flex-shrink: 0; }
+    .trial-btns { display: flex; gap: 8px; justify-content: center; }
+    .trial-slot { display: flex; flex-direction: column; gap: 4px; align-items: center; }
+    .trial-slot-num { font-size: 10px; font-weight: 800; color: var(--g400); margin-bottom: 1px; }
+    .trial-btn {
+      width: 48px; height: 40px; border-radius: 10px; border: 2.5px solid var(--g200);
+      background: white; font-size: 18px; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: all .13s; font-weight: 700; color: var(--g400);
+    }
+    .trial-btn:active { transform: scale(0.87); }
+    .trial-btn.correct   { background: var(--success); border-color: var(--success); color: white; }
+    .trial-btn.incorrect { background: var(--danger);  border-color: var(--danger);  color: white; }
+
+    /* ── ABC ── */
+    .abc-wrap    { padding: 14px 16px; }
+    .abc-card    { background: white; border-radius: var(--r); padding: 16px; margin-bottom: 11px; box-shadow: var(--shadow); }
+    .abc-card-hdr { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+    .abc-num     { font-size: 12px; font-weight: 700; color: var(--g400); text-transform: uppercase; letter-spacing: 0.6px; }
+    .abc-del     { width: 32px; height: 32px; border-radius: 50%; background: #FEE2E2; border: none; color: var(--danger); font-size: 15px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+    .add-abc-btn {
+      width: 100%; padding: 16px; border: 2.5px dashed var(--primary);
+      border-radius: var(--r); background: rgba(0,167,199,.05);
+      color: var(--primary); font-family: 'Nunito', sans-serif;
+      font-size: 15px; font-weight: 700; cursor: pointer;
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+    }
+    .add-abc-btn:active { transform: scale(0.98); }
+
+    /* ── SUMMARY (end screen) ── */
+    .sum-card { background: white; border-radius: var(--r); padding: 18px; margin-bottom: 14px; box-shadow: var(--shadow); }
+    .sum-ttl  { font-size: 14px; font-weight: 800; color: var(--g800); margin-bottom: 12px; padding-bottom: 10px; border-bottom: 2px solid var(--g100); }
+    .sum-row  { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--g100); font-size: 14px; }
+    .sum-row:last-child { border-bottom: none; }
+    .sum-lbl  { color: var(--g600); font-weight: 600; }
+    .sum-val  { font-weight: 800; color: var(--g800); }
+    .sum-val.zero { color: var(--g400); }
+    .sum-empty { color: var(--g400); font-size: 13px; font-weight: 600; padding: 8px 0; }
+
+    /* ── SUPERVISION TOGGLE ── */
+    .toggle-row { display: flex; align-items: center; justify-content: space-between; }
+    .toggle-lbl { font-size: 15px; font-weight: 700; color: var(--g800); }
+    .toggle-sw  {
+      width: 52px; height: 30px; background: var(--g200); border-radius: 100px;
+      position: relative; cursor: pointer; transition: background .2s; border: none;
+      flex-shrink: 0;
+    }
+    .toggle-sw::after {
+      content: ''; position: absolute; top: 3px; left: 3px;
+      width: 24px; height: 24px; border-radius: 50%; background: white;
+      box-shadow: 0 1px 4px rgba(0,0,0,.2); transition: transform .2s;
+    }
+    .toggle-sw.on { background: var(--primary); }
+    .toggle-sw.on::after { transform: translateX(22px); }
+
+    /* ── LOADING OVERLAY ── */
+    .loading-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,.52);
+      display: none; align-items: center; justify-content: center;
+      z-index: 1000; flex-direction: column; gap: 16px;
+    }
+    .loading-overlay.active { display: flex; }
+    .spinner { width: 48px; height: 48px; border: 4px solid rgba(255,255,255,.3); border-top-color: white; border-radius: 50%; animation: spin .8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner-lbl { color: white; font-size: 15px; font-weight: 700; }
+
+    /* ── TOAST ── */
+    .toast {
+      position: fixed; bottom: calc(20px + env(safe-area-inset-bottom)); left: 50%;
+      transform: translateX(-50%) translateY(100px); background: var(--g800);
+      color: white; padding: 13px 22px; border-radius: 100px;
+      font-size: 14px; font-weight: 700; z-index: 2000; transition: transform .28s ease;
+      white-space: nowrap; max-width: 90vw; text-align: center;
+    }
+    .toast.show  { transform: translateX(-50%) translateY(0); }
+    .toast.ok    { background: var(--success); }
+    .toast.err   { background: var(--danger); }
+
+    /* ── SUCCESS SCREEN ── */
+    .success-screen {
+      display: none; position: fixed; inset: 0; background: white;
+      flex-direction: column; align-items: center; justify-content: center;
+      z-index: 999; padding: 40px;
+    }
+    .success-screen.active { display: flex; }
+    .success-icon { font-size: 80px; margin-bottom: 16px; }
+    .success-ttl  { font-size: 28px; font-weight: 900; color: var(--g800); margin-bottom: 8px; text-align: center; }
+    .success-sub  { font-size: 15px; color: var(--g400); font-weight: 600; text-align: center; margin-bottom: 32px; }
+
+    /* ── BILLING CODE CHIP ── */
+    .billing-chip {
+      background: rgba(0,167,199,.1); border-radius: var(--r-sm);
+      padding: 10px 14px; margin-top: 10px;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .billing-lbl { font-size: 12px; color: var(--g400); font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+    .billing-val { font-size: 15px; font-weight: 800; color: var(--primary); }
+
+    /* ── EMPTY STATE ── */
+    .empty-msg { text-align: center; padding: 30px 20px; color: var(--g400); font-size: 14px; font-weight: 600; }
+  
+    /* ── GEAR BUTTON ── */
+    .gear-btn {
+      position: absolute; top: 14px; right: 14px;
+      padding-top: calc(14px + env(safe-area-inset-top));
+      top: 0; right: 0;
+      width: 52px; height: calc(52px + env(safe-area-inset-top));
+      padding-top: env(safe-area-inset-top);
+      display: flex; align-items: flex-end; justify-content: center;
+      padding-bottom: 10px;
+      background: none; border: none; color: rgba(255,255,255,0.75);
+      font-size: 22px; cursor: pointer; z-index: 2;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .gear-btn:active { color: white; }
+
+    /* ── LOADING SCREEN ── */
+    #screen-loading .brand-splash {
+      flex: 1; display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+    }
+    .init-spinner {
+      width: 36px; height: 36px; border: 3px solid rgba(255,255,255,0.3);
+      border-top-color: white; border-radius: 50%;
+      animation: spin 0.8s linear infinite; margin-top: 36px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── ADMIN TABS ── */
+    .admin-tabs {
+      display: flex; background: white; border-bottom: 2px solid var(--g100);
+      flex-shrink: 0; overflow-x: auto; -webkit-overflow-scrolling: touch;
+    }
+    .admin-tab-btn {
+      flex: 1; min-width: 80px; padding: 13px 8px; border: none; background: none;
+      font-family: 'Nunito', sans-serif; font-size: 12px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.5px; color: var(--g400);
+      cursor: pointer; border-bottom: 3px solid transparent;
+      transition: color .13s, border-color .13s; white-space: nowrap;
+    }
+    .admin-tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); }
+
+    /* ── ADMIN LIST ITEMS ── */
+    .admin-item {
+      background: white; border-radius: var(--r); padding: 14px 16px;
+      margin-bottom: 10px; box-shadow: var(--shadow);
+      display: flex; align-items: center; gap: 12px;
+    }
+    .admin-item.inactive { opacity: 0.5; }
+    .admin-item-left { flex-shrink: 0; }
+    .admin-item-body { flex: 1; min-width: 0; }
+    .admin-item-name { font-size: 15px; font-weight: 800; color: var(--g800); }
+    .admin-item-sub  { font-size: 12px; color: var(--g400); font-weight: 600; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .admin-item-actions { display: flex; flex-direction: column; gap: 5px; flex-shrink: 0; }
+    .admin-act-btn {
+      padding: 6px 10px; border-radius: 8px; border: none; cursor: pointer;
+      font-family: 'Nunito', sans-serif; font-size: 12px; font-weight: 700;
+      background: var(--g100); color: var(--g600); white-space: nowrap;
+    }
+    .admin-act-btn:active { transform: scale(0.95); }
+    .act-activate   { background: rgba(34,197,94,0.12); color: var(--success); }
+    .act-deactivate { background: rgba(239,68,68,0.12); color: var(--danger); }
+    .admin-av {
+      width: 42px; height: 42px; border-radius: 50%;
+      color: white; font-size: 15px; font-weight: 800;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .admin-color-dot {
+      width: 28px; height: 28px; border-radius: 50%;
+    }
+    .admin-add-bar {
+      padding: 12px 20px; padding-bottom: calc(12px + env(safe-area-inset-bottom));
+      background: white; border-top: 2px solid var(--g100); flex-shrink: 0;
+    }
+
+    /* ── MODAL OVERLAY ── */
+    .modal-overlay {
+      display: none; position: fixed; inset: 0; z-index: 200;
+      background: rgba(0,0,0,0.45); align-items: flex-end; justify-content: center;
+    }
+    .modal-overlay.active { display: flex; }
+    .modal-sheet {
+      background: white; border-radius: 24px 24px 0 0;
+      padding: 20px 20px calc(20px + env(safe-area-inset-bottom));
+      width: 100%; max-width: 600px; max-height: 80vh;
+      overflow-y: auto; -webkit-overflow-scrolling: touch;
+    }
+    .modal-hdr {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 20px;
+    }
+    .modal-title { font-size: 18px; font-weight: 900; color: var(--g800); }
+    .modal-close {
+      width: 36px; height: 36px; border-radius: 50%; border: none;
+      background: var(--g100); color: var(--g600); font-size: 16px;
+      cursor: pointer; display: flex; align-items: center; justify-content: center;
+    }
+    .pin-error { min-height: 20px; color: var(--danger); font-size: 13px; font-weight: 700; text-align: center; margin: 8px 0 12px; }
+    .pin-hint { font-size: 13px; color: var(--g400); font-weight: 600; text-align: center; margin-bottom: 20px; }
+
+    /* ── IPAD / TABLET ── */
+    @media (min-width: 768px) {
+      body { display: flex; align-items: center; justify-content: center; background: var(--g200); min-height: 100dvh; }
+      .screen { width: 420px; min-height: 100dvh; max-height: 100dvh; overflow: hidden; box-shadow: 0 0 40px rgba(0,0,0,.15); position: relative; }
+      .behavior-grid { grid-template-columns: 1fr 1fr 1fr; }
+      .modal-sheet { border-radius: 24px; margin-bottom: 20px; }
+    }
+  
+    /* ── GEAR BUTTON ── */
+    .gear-btn {
+      position: absolute; top: 0; right: 0;
+      width: 52px; height: calc(52px + env(safe-area-inset-top));
+      padding-top: env(safe-area-inset-top);
+      display: flex; align-items: flex-end; justify-content: center;
+      padding-bottom: 10px;
+      background: none; border: none; color: rgba(255,255,255,0.75);
+      font-size: 22px; cursor: pointer; z-index: 2;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .gear-btn:active { color: white; }
+
+    /* ── LOADING SCREEN ── */
+    #screen-loading .brand-splash {
+      flex: 1; display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+    }
+    .init-spinner {
+      width: 36px; height: 36px; border: 3px solid rgba(255,255,255,0.3);
+      border-top-color: white; border-radius: 50%;
+      animation: spin 0.8s linear infinite; margin-top: 36px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── ADMIN TABS ── */
+    .admin-tabs {
+      display: flex; background: white; border-bottom: 2px solid var(--g100);
+      flex-shrink: 0; overflow-x: auto; -webkit-overflow-scrolling: touch;
+    }
+    .admin-tab-btn {
+      flex: 1; min-width: 72px; padding: 13px 6px; border: none; background: none;
+      font-family: 'Nunito', sans-serif; font-size: 11px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.5px; color: var(--g400);
+      cursor: pointer; border-bottom: 3px solid transparent;
+      transition: color .13s, border-color .13s; white-space: nowrap;
+    }
+    .admin-tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); }
+
+    /* ── ADMIN LIST ITEMS ── */
+    .admin-item {
+      background: white; border-radius: var(--r); padding: 14px 16px;
+      margin-bottom: 10px; box-shadow: var(--shadow);
+      display: flex; align-items: center; gap: 12px;
+    }
+    .admin-item.inactive { opacity: 0.5; }
+    .admin-item-left { flex-shrink: 0; }
+    .admin-item-body { flex: 1; min-width: 0; }
+    .admin-item-name { font-size: 15px; font-weight: 800; color: var(--g800); }
+    .admin-item-sub  { font-size: 12px; color: var(--g400); font-weight: 600; margin-top: 2px;
+                       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .admin-item-actions { display: flex; flex-direction: column; gap: 5px; flex-shrink: 0; }
+    .admin-act-btn {
+      padding: 6px 10px; border-radius: 8px; border: none; cursor: pointer;
+      font-family: 'Nunito', sans-serif; font-size: 12px; font-weight: 700;
+      background: var(--g100); color: var(--g600); white-space: nowrap;
+    }
+    .admin-act-btn:active { transform: scale(0.95); }
+    .act-activate   { background: rgba(34,197,94,0.12);  color: var(--success); }
+    .act-deactivate { background: rgba(239,68,68,0.12);  color: var(--danger);  }
+    .admin-av {
+      width: 42px; height: 42px; border-radius: 50%;
+      color: white; font-size: 15px; font-weight: 800;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .admin-color-dot { width: 28px; height: 28px; border-radius: 50%; }
+    .admin-add-bar {
+      padding: 12px 20px; padding-bottom: calc(12px + env(safe-area-inset-bottom));
+      background: white; border-top: 2px solid var(--g100); flex-shrink: 0;
+    }
+
+    /* ── CLIENT CHECKBOX GRID ── */
+    .client-cb-grid { display: flex; flex-direction: column; gap: 8px; }
+    .client-cb-row  { display: flex; align-items: center; gap: 10px; cursor: pointer;
+                      font-size: 14px; font-weight: 600; color: var(--g800); }
+    .client-cb-row input { width: 18px; height: 18px; cursor: pointer; accent-color: var(--primary); }
+
+    /* ── BILLING MATRIX TABLE ── */
+    .billing-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .billing-table th { text-align: left; padding: 8px 10px; background: var(--g100);
+                        font-size: 11px; font-weight: 700; text-transform: uppercase;
+                        letter-spacing: 0.5px; color: var(--g400); }
+    .billing-table td { padding: 8px 10px; border-bottom: 1px solid var(--g100); }
+    .billing-table input {
+      width: 70px; padding: 6px 8px; border: 2px solid var(--g200); border-radius: 8px;
+      font-family: 'Nunito', sans-serif; font-size: 13px; font-weight: 700;
+      text-align: center; outline: none;
+    }
+    .billing-table input:focus { border-color: var(--primary); }
+
+    /* ── SETTINGS SECTION ── */
+    .settings-section { margin-bottom: 22px; }
+    .settings-hdr { font-size: 13px; font-weight: 800; text-transform: uppercase;
+                    letter-spacing: 0.7px; color: var(--g400); margin-bottom: 12px;
+                    padding-bottom: 6px; border-bottom: 2px solid var(--g100); }
+
+    /* ── MODAL OVERLAY ── */
+    .modal-overlay {
+      display: none; position: fixed; inset: 0; z-index: 200;
+      background: rgba(0,0,0,0.45); align-items: flex-end; justify-content: center;
+    }
+    .modal-overlay.active { display: flex; }
+    .modal-sheet {
+      background: white; border-radius: 24px 24px 0 0;
+      padding: 20px 20px calc(20px + env(safe-area-inset-bottom));
+      width: 100%; max-width: 600px; max-height: 85vh;
+      overflow-y: auto; -webkit-overflow-scrolling: touch;
+    }
+    .modal-hdr {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 20px;
+    }
+    .modal-title { font-size: 18px; font-weight: 900; color: var(--g800); }
+    .modal-close {
+      width: 36px; height: 36px; border-radius: 50%; border: none;
+      background: var(--g100); color: var(--g600); font-size: 16px;
+      cursor: pointer; display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    .pin-error { min-height: 20px; color: var(--danger); font-size: 13px; font-weight: 700;
+                 text-align: center; margin: 8px 0 12px; }
+    .pin-hint  { font-size: 13px; color: var(--g400); font-weight: 600;
+                 text-align: center; margin-bottom: 20px; }
+
+    /* ── WORD COUNT ── */
+    .word-count {
+      font-size: 12px; font-weight: 700; text-align: right; margin-top: 6px;
+      color: var(--danger); transition: color .2s;
+    }
+    .word-count.met { color: var(--success); }
+    .notes-hint { font-size: 12px; color: var(--g400); font-weight: 600;
+                  line-height: 1.5; margin-bottom: 10px; }
+
+    /* ── LATE START MODAL ── */
+    .late-modal-body { text-align: center; }
+    .late-modal-q    { font-size: 16px; font-weight: 700; color: var(--g800);
+                       margin-bottom: 20px; line-height: 1.5; }
+    .late-modal-btns { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; }
+    #late-start-form { margin-top: 20px; border-top: 2px solid var(--g100); padding-top: 20px;
+                       text-align: left; }
+
+    /* ── DISABLED BUTTON ── */
+    .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; transform: none !important;
+                            box-shadow: none; }
+
+    /* ── IPAD / TABLET ── */
+    @media (min-width: 768px) {
+      body { display: flex; align-items: center; justify-content: center;
+             background: var(--g200); min-height: 100dvh; }
+      .screen { width: 420px; min-height: 100dvh; max-height: 100dvh;
+                overflow: hidden; box-shadow: 0 0 40px rgba(0,0,0,.15); position: relative; }
+      .behavior-grid { grid-template-columns: 1fr 1fr 1fr; }
+      .modal-sheet { border-radius: 24px; margin-bottom: 20px; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- SCREEN 0 — LOADING -->
+<div class="screen active" id="screen-loading">
+  <div class="brand-splash" style="flex:1;flex-direction:column;align-items:center;justify-content:center;display:flex">
+    <div class="brand-icon"><img src="data:image/png;base64,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" style="width:64px;height:64px;border-radius:16px;display:block" alt="Raising Together"></div>
+    <div class="brand-name">Raising Together</div>
+    <div class="brand-tagline">ABA Tracker</div>
+    <div class="init-spinner"></div>
+  </div>
+</div>
+
+<!-- SCREEN 1 — SELECT THERAPIST -->
+<div class="screen" id="screen-therapist">
+  <div class="brand-splash" style="position:relative">
+    <button class="gear-btn" onclick="openAdmin()" title="Admin Panel">&#9881;</button>
+    <div class="brand-icon"><img src="data:image/png;base64,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" style="width:64px;height:64px;border-radius:16px;display:block" alt="Raising Together"></div>
+    <div class="brand-name">Raising Together</div>
+    <div class="brand-tagline">ABA Therapy Tracker</div>
+  </div>
+  <div class="section-lbl">Select Therapist</div>
+  <div class="therapist-grid" id="therapist-grid"></div>
+</div>
+
+<!-- SCREEN 2 — SELECT CLIENT -->
+<div class="screen" id="screen-client">
+  <div class="header">
+    <button class="hdr-back" onclick="goTo('therapist')">&#8249;</button>
+    <div>
+      <div class="hdr-title">Select Client</div>
+      <div class="hdr-sub" id="hdr-therapist-name">&#8212;</div>
+    </div>
+  </div>
+  <div class="section-lbl">Active Clients</div>
+  <div class="client-list" id="client-list"></div>
+</div>
+
+<!-- SCREEN 3 — START SESSION -->
+<div class="screen" id="screen-start">
+  <div class="header">
+    <button class="hdr-back" onclick="goTo('client')">&#8249;</button>
+    <div style="flex:1">
+      <div class="hdr-title" id="start-client-name">Client</div>
+      <div class="hdr-sub" id="start-therapist-name">&#8212;</div>
+    </div>
+    <div><div class="live-clock" id="clock-start">&#8212;</div></div>
+  </div>
+  <div class="content">
+    <div class="card">
+      <div class="card-ttl">Session Details</div>
+      <div class="info-row" style="margin-bottom:18px">
+        <div class="info-chip"><div class="chip-lbl">Date</div><div class="chip-val" id="start-date">&#8212;</div></div>
+        <div class="info-chip"><div class="chip-lbl">Time</div><div class="chip-val" id="start-time">&#8212;</div></div>
+      </div>
+      <div class="form-group">
+        <div class="form-lbl">Session Type</div>
+        <div class="opt-pills" id="sess-type-pills">
+          <button class="opt-pill" data-val="1:1 with client" onclick="selOpt(this,'sessType')">1:1 Session</button>
+          <button class="opt-pill" data-val="Supervision"     onclick="selOpt(this,'sessType')">Supervision</button>
+          <button class="opt-pill" data-val="Parent Training" onclick="selOpt(this,'sessType')">Parent Training</button>
+        </div>
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <div class="form-lbl">Location</div>
+        <div class="opt-pills" id="location-pills">
+          <button class="opt-pill" data-val="Home"      onclick="selOpt(this,'location')">&#127968; Home</button>
+          <button class="opt-pill" data-val="School"    onclick="selOpt(this,'location')">&#127979; School</button>
+          <button class="opt-pill" data-val="Community" onclick="selOpt(this,'location')">&#127795; Community</button>
+        </div>
+      </div>
+    </div>
+    <button class="btn btn-primary" onclick="promptLateStart()">Begin Session &#8594;</button>
+  </div>
+</div>
+
+<!-- SCREEN 4 — ACTIVE SESSION -->
+<div class="screen" id="screen-session">
+  <div class="header">
+    <div style="flex:1">
+      <div class="hdr-title" id="sess-client-name">Session</div>
+      <div class="hdr-sub" id="sess-subtitle">&#8212;</div>
+    </div>
+    <div>
+      <div class="live-clock" id="sess-elapsed">00:00</div>
+      <div class="live-elapsed">elapsed</div>
+    </div>
+  </div>
+  <div class="session-bar">
+    <div class="sbar-item"><span class="sbar-lbl">Type: </span><span class="sbar-val" id="bar-type">&#8212;</span></div>
+    <div class="sbar-item"><span class="sbar-lbl">Location: </span><span class="sbar-val" id="bar-loc">&#8212;</span></div>
+    <div class="sbar-item"><span class="sbar-lbl">Therapist: </span><span class="sbar-val" id="bar-therapist">&#8212;</span></div>
+  </div>
+  <div class="session-body">
+    <div class="tab-content active" id="tab-behaviors">
+      <div class="behavior-grid" id="behavior-grid"></div>
+      <div class="tantrum-wrap">
+        <div class="tantrum-card">
+          <div class="tantrum-hdr">
+            <div class="tantrum-ttl">&#128308; Tantrum</div>
+            <div><span style="font-size:12px;color:var(--g400);font-weight:600">Count: </span><span class="tantrum-badge" id="tantrum-count">0</span></div>
+          </div>
+          <div class="timer-display" id="timer-display">0:00</div>
+          <div class="timer-btns">
+            <button class="timer-btn tbtn-start" id="tbtn-start" onclick="timerStart()">&#9654; Start</button>
+            <button class="timer-btn tbtn-stop"  id="tbtn-stop"  onclick="timerStop()" style="display:none">&#9632; Stop</button>
+            <button class="timer-btn tbtn-reset"                  onclick="timerReset()">&#8635; Reset</button>
+          </div>
+          <div class="tantrum-total-lbl">Total tantrum time: <span id="tantrum-total">0</span> min</div>
+          <div style="margin-top:2px;padding-top:2px;">
+            <div class="form-lbl" style="margin-bottom:8px">+ Add past tantrum (minutes)</div>
+            <div class="manual-row">
+              <input class="manual-inp" type="number" id="manual-min" placeholder="Duration in minutes" min="0" max="180">
+              <button class="manual-btn" onclick="addManualTantrum()">Add</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="tab-content" id="tab-trials">
+      <div class="trials-wrap" id="trials-wrap"></div>
+    </div>
+    <div class="tab-content" id="tab-abc">
+      <div class="abc-wrap">
+        <div id="abc-list"></div>
+        <button class="add-abc-btn" onclick="addABC()">&#xFF0B; Add ABC Incident</button>
+      </div>
+    </div>
+  </div>
+  <div class="tab-nav">
+    <button class="tab-btn active" id="tnav-behaviors" onclick="switchTab('behaviors')"><span class="tab-icon">&#128202;</span>Behaviors</button>
+    <button class="tab-btn" id="tnav-trials" onclick="switchTab('trials')"><span class="tab-icon">&#127919;</span>Trials</button>
+    <button class="tab-btn" id="tnav-abc" onclick="switchTab('abc')"><span class="tab-icon">&#128221;</span>ABC</button>
+    <button class="tab-btn end-btn" onclick="goTo('end')"><span class="tab-icon">&#127937;</span>End</button>
+  </div>
+</div>
+
+<!-- SCREEN 5 — END SESSION -->
+<div class="screen" id="screen-end">
+  <div class="header">
+    <button class="hdr-back" onclick="goTo('session')">&#8249;</button>
+    <div><div class="hdr-title">End Session</div><div class="hdr-sub" id="end-hdr-sub">&#8212;</div></div>
+  </div>
+  <div class="content">
+    <div class="sum-card">
+      <div class="sum-ttl">&#9201; Session Time</div>
+      <div class="info-row">
+        <div class="info-chip"><div class="chip-lbl">Time In</div><div class="chip-val" id="end-time-in">&#8212;</div></div>
+        <div class="info-chip"><div class="chip-lbl">Time Out</div><div class="chip-val" id="end-time-out">&#8212;</div></div>
+        <div class="info-chip"><div class="chip-lbl">Duration</div><div class="chip-val" id="end-duration">&#8212;</div></div>
+      </div>
+      <div class="billing-chip">
+        <span class="billing-lbl">Billing Code</span>
+        <span class="billing-val" id="end-billing">&#8212;</span>
+      </div>
+    </div>
+    <div class="card">
+      <div class="toggle-row">
+        <span class="toggle-lbl">Supervision occurred?</span>
+        <button class="toggle-sw" id="supervision-toggle" onclick="toggleSupervision(this)"></button>
+      </div>
+    </div>
+    <div class="sum-card">
+      <div class="sum-ttl">&#128202; Behavior Summary</div>
+      <div id="beh-summary"></div>
+    </div>
+    <div class="sum-card">
+      <div class="sum-ttl">&#127919; Trials Summary</div>
+      <div id="trials-summary"></div>
+    </div>
+    <div class="sum-card">
+      <div class="sum-ttl">&#128221; ABC Incidents</div>
+      <div id="abc-summary"></div>
+    </div>
+    <div class="card">
+      <div class="card-ttl">Session Notes</div>
+      <div class="notes-hint">Please write thorough, detailed notes about this session including activities, client responses, progress toward goals, and any notable events.</div>
+      <textarea class="form-ctrl" id="session-notes" rows="6"
+        placeholder="Add session notes here&#8230;"
+        oninput="updateWordCount()"></textarea>
+      <div class="word-count" id="notes-word-count">0 / 150 words</div>
+    </div>
+    <button class="btn btn-primary" id="submit-btn" onclick="submitSession()" style="margin-bottom:11px" disabled>Submit Session &#10003;</button>
+    <button class="btn btn-ghost" onclick="goTo('session')">&#8592; Back to Session</button>
+  </div>
+</div>
+
+<!-- SUCCESS SCREEN -->
+<div class="success-screen" id="success-screen">
+  <div class="success-icon">&#9989;</div>
+  <div class="success-ttl">Session Submitted!</div>
+  <div class="success-sub" id="success-sub">Data saved to Google Sheets</div>
+  <button class="btn btn-primary" style="max-width:300px" onclick="newSession()">Start New Session</button>
+</div>
+
+<!-- LOADING OVERLAY -->
+<div class="loading-overlay" id="loading">
+  <div class="spinner"></div>
+  <div class="spinner-lbl" id="loading-lbl">Submitting session&#8230;</div>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<!-- SCREEN: ADMIN PANEL -->
+<div class="screen" id="screen-admin">
+  <div class="header">
+    <button class="hdr-back" onclick="goTo('therapist')">&#8249;</button>
+    <div><div class="hdr-title">Admin Panel</div><div class="hdr-sub">Config management</div></div>
+    <button class="hdr-back" onclick="reloadConfigFromServer()" title="Reload config" style="margin-left:auto">&#8635;</button>
+  </div>
+  <div class="admin-tabs">
+    <button class="admin-tab-btn active" id="atab-therapists" onclick="showAdminTab('therapists')">Therapists</button>
+    <button class="admin-tab-btn" id="atab-clients"    onclick="showAdminTab('clients')">Clients</button>
+    <button class="admin-tab-btn" id="atab-behaviors"  onclick="showAdminTab('behaviors')">Behaviors</button>
+    <button class="admin-tab-btn" id="atab-goals"      onclick="showAdminTab('goals')">Goals</button>
+    <button class="admin-tab-btn" id="atab-settings"   onclick="showAdminTab('settings')">Settings</button>
+  </div>
+  <div class="content" style="padding-bottom:0" id="admin-list"></div>
+  <div class="admin-add-bar" id="admin-add-bar">
+    <button class="btn btn-primary" onclick="openEditModal(adminTab, null)">+ Add</button>
+  </div>
+</div>
+
+<!-- PIN MODAL -->
+<div class="modal-overlay" id="modal-pin">
+  <div class="modal-sheet" style="text-align:center">
+    <div class="modal-title" style="justify-content:center;display:flex;margin-bottom:10px">&#128274; Admin Access</div>
+    <div class="pin-hint">Enter your 4-digit PIN</div>
+    <input class="form-ctrl" id="pin-input" type="password" inputmode="numeric" maxlength="4"
+      placeholder="&#8226;&#8226;&#8226;&#8226;"
+      style="text-align:center;font-size:28px;letter-spacing:0.5em"
+      onkeydown="if(event.key==='Enter')checkPin()">
+    <div class="pin-error" id="pin-error"></div>
+    <button class="btn btn-primary" onclick="checkPin()" style="margin-bottom:10px">Unlock</button>
+    <button class="btn btn-ghost" onclick="document.getElementById('modal-pin').classList.remove('active')">Cancel</button>
+  </div>
+</div>
+
+<!-- EDIT / ADD MODAL -->
+<div class="modal-overlay" id="modal-edit">
+  <div class="modal-sheet">
+    <div class="modal-hdr">
+      <div class="modal-title" id="modal-edit-title">Edit</div>
+      <button class="modal-close" onclick="closeEditModal()">&#x2715;</button>
+    </div>
+    <div id="edit-form-body"></div>
+    <button class="btn btn-primary" onclick="saveEntity()" style="margin-bottom:10px">Save</button>
+    <button class="btn btn-ghost" onclick="closeEditModal()">Cancel</button>
+  </div>
+</div>
+
+<!-- LATE START MODAL -->
+<div class="modal-overlay" id="modal-late-start">
+  <div class="modal-sheet">
+    <div class="late-modal-body">
+      <div class="modal-title" style="margin-bottom:16px">&#128337; Session Start</div>
+      <div class="late-modal-q">Did you start data collection on time?</div>
+      <div class="late-modal-btns">
+        <button class="btn btn-primary" onclick="confirmOnTime()">&#10003; Yes, on time</button>
+        <button class="btn btn-ghost"   onclick="showLateStartForm()">No, started late</button>
+      </div>
+      <div id="late-start-form" style="display:none">
+        <div class="form-group">
+          <label class="form-lbl" for="late-time">What time did the session actually start?</label>
+          <input class="form-ctrl" id="late-time" type="time">
+        </div>
+        <div class="form-group">
+          <label class="form-lbl" for="late-reason">Reason for late start</label>
+          <textarea class="form-ctrl" id="late-reason" rows="3" placeholder="Briefly describe why data collection started late&#8230;"></textarea>
+        </div>
+        <button class="btn btn-primary" onclick="confirmLateStart()">Continue &#8594;</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- CHANGE PIN MODAL -->
+<div class="modal-overlay" id="modal-change-pin">
+  <div class="modal-sheet">
+    <div class="modal-hdr">
+      <div class="modal-title">Change PIN</div>
+      <button class="modal-close" onclick="closeChangePinModal()">&#x2715;</button>
+    </div>
+    <div class="form-group">
+      <label class="form-lbl" for="cp-current">Current PIN</label>
+      <input class="form-ctrl" id="cp-current" type="password" inputmode="numeric" maxlength="4" placeholder="&#8226;&#8226;&#8226;&#8226;">
+    </div>
+    <div class="form-group">
+      <label class="form-lbl" for="cp-new">New PIN (4 digits)</label>
+      <input class="form-ctrl" id="cp-new" type="password" inputmode="numeric" maxlength="4" placeholder="&#8226;&#8226;&#8226;&#8226;">
+    </div>
+    <div class="form-group">
+      <label class="form-lbl" for="cp-confirm">Confirm New PIN</label>
+      <input class="form-ctrl" id="cp-confirm" type="password" inputmode="numeric" maxlength="4" placeholder="&#8226;&#8226;&#8226;&#8226;">
+    </div>
+    <div class="pin-error" id="cp-error"></div>
+    <button class="btn btn-primary" onclick="saveNewPin()" style="margin-bottom:10px">Save PIN</button>
+    <button class="btn btn-ghost"   onclick="closeChangePinModal()">Cancel</button>
+  </div>
+</div>
+
+<script>
+
+// ═════════════════════════════════════════════════════════════════════
+// RAISING TOGETHER ABA TRACKER — Frontend v3
+// ═════════════════════════════════════════════════════════════════════
+//
+// EVENT BUS ARCHITECTURE
+// ──────────────────────
+// All significant session events are emitted on the global EventBus.
+// Future integrations (voice commands, push notifications, external
+// APIs, offline queues) subscribe to these events WITHOUT modifying
+// core session logic.
+//
+// Available events:
+//   session:start   { therapist, client, sessType, location, timeIn, appStartTime, actualStartTime, lateStartReason }
+//   session:end     { durationMin, timeOut }
+//   behavior:inc    { key, label, value }
+//   behavior:dec    { key, label, value }
+//   trial:recorded  { goalCode, trialIndex, value }  // value: true | false | null
+//   abc:added       { id }
+//   timer:start     { count }
+//   timer:stop      { totalSec }
+//   config:loaded   { source }  // 'server' | 'default'
+//   config:saved    {}
+//
+// Example — subscribing from a future plugin:
+//   EventBus.on('behavior:inc', ({ key, value }) => {
+//     SomeExternalService.logBehavior(key, value);
+//   });
+//
+// The 'plugins' array in the config (DEFAULT_CONFIG.plugins) lists
+// which integrations are enabled. Each plugin entry:
+//   { id: 'voice-commands', enabled: false, config: {} }
+// Future code checks: CFG.PLUGINS.find(p => p.id === 'voice-commands')?.enabled
+//
+// ═════════════════════════════════════════════════════════════════════
+
+// ─── EVENT BUS ───────────────────────────────────────────────────────
+const EventBus = (() => {
+  const listeners = {};
+  return {
+    on(event, fn)  { (listeners[event] = listeners[event] || []).push(fn); },
+    off(event, fn) { listeners[event] = (listeners[event] || []).filter(f => f !== fn); },
+    emit(event, data) {
+      (listeners[event] || []).forEach(fn => { try { fn(data); } catch(e) { console.warn('EventBus error:', event, e); } });
+    },
+  };
+})();
+
+// ─── CONSTANTS ───────────────────────────────────────────────────────
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbyjkR3Xva88OQCvHfC-DP75HWDZl8xtwj9WQE2kctC8ou1F8_cKj5Awir-RR2bIK8Q/exec';
+
+// PIN is stored in localStorage; ADMIN_PIN_DEFAULT is the fallback.
+const ADMIN_PIN_DEFAULT = '1234';
+function getAdminPin() { return localStorage.getItem('adminPin') || ADMIN_PIN_DEFAULT; }
+
+// ─── DEFAULT CONFIG ───────────────────────────────────────────────────
+const DEFAULT_BILLING = [
+  { profile:'RBT',  sessionType:'1:1 with client', code:'97153' },
+  { profile:'RBT',  sessionType:'Parent Training',  code:'97156' },
+  { profile:'BCBA', sessionType:'1:1 with client',  code:'97155' },
+  { profile:'BCBA', sessionType:'Supervision',       code:'97155' },
+  { profile:'BCBA', sessionType:'Parent Training',   code:'97156' },
+];
+
+const ALL_CLIENT_IDS = 'C1,C2,C3,C4,C5';
+
+const DEFAULT_CONFIG = {
+  therapists: [
+    { id:'T1', name:'Sandra',  initials:'SA', color:'#00A7C7', profile:'RBT',  status:'active' },
+    { id:'T2', name:'Janine',  initials:'JA', color:'#FF9701', profile:'RBT',  status:'active' },
+    { id:'T3', name:'Arlena',  initials:'AR', color:'#F1196E', profile:'RBT',  status:'active' },
+    { id:'T4', name:'Tatiana', initials:'TA', color:'#5D4337', profile:'BCBA', status:'active' },
+  ],
+  clients: [
+    { id:'C1', name:'Camila Correa',   initials:'CC', sheetId:'1RUPqT-seB-69ynPJw612YNUyuoYwA0fbIkSC-c7DFY8',   status:'active' },
+    { id:'C2', name:'Briela Vernon',   initials:'BV', sheetId:'1ThYz2Y7mo3i_UTzlryynfQE98aIH0R0tYBcjmBI83xM',   status:'active' },
+    { id:'C3', name:'Dylan Reyes',     initials:'DR', sheetId:'1YlptamKkt0YPC0lbxlW5680QS5JfBNU7a1KQohdqLus',    status:'active' },
+    { id:'C4', name:'Dana Reyes',      initials:'DA', sheetId:'1UebyFNWVjoAmD2iVy5pi65Utc6j_L_aXIwDOgzvde1E',     status:'active' },
+    { id:'C5', name:'Antonio Ristick', initials:'AR', sheetId:'1MzPYYYcIylCs4chVKEk92p8BR9sqmugHgqw87wkcR2A',  status:'active' },
+  ],
+  behaviors: [
+    { key:'aggression',         label:'Aggression',          color:'#EF4444', clientIds:ALL_CLIENT_IDS, status:'active' },
+    { key:'whining',            label:'Whining',             color:'#FF9701', clientIds:ALL_CLIENT_IDS, status:'active' },
+    { key:'ingestingInedibles', label:'Ingesting Inedibles', color:'#9333EA', clientIds:ALL_CLIENT_IDS, status:'active' },
+    { key:'elopement',          label:'Elopement',           color:'#F1196E', clientIds:ALL_CLIENT_IDS, status:'active' },
+    { key:'taskRefusal',        label:'Task Refusal',        color:'#F97316', clientIds:ALL_CLIENT_IDS, status:'active' },
+    { key:'outOfArea',          label:'Out of Area',         color:'#3B82F6', clientIds:ALL_CLIENT_IDS, status:'active' },
+    { key:'sib',                label:'SIB',                 color:'#DB2777', clientIds:ALL_CLIENT_IDS, status:'active' },
+  ],
+  goals: [
+    { clientId:'C1', code:'B1', description:'Matching identical objects',    numTrials:'5', status:'active' },
+    { clientId:'C1', code:'B2', description:'Match pictures to objects',     numTrials:'5', status:'active' },
+    { clientId:'C1', code:'C1', description:'Visual performance \u2014 puzzles', numTrials:'5', status:'active' },
+    { clientId:'C1', code:'R1', description:'Attending to speaker',          numTrials:'5', status:'active' },
+    { clientId:'C1', code:'R2', description:'Follows 1-step instructions',   numTrials:'5', status:'active' },
+    { clientId:'C1', code:'L1', description:'Labels common objects',         numTrials:'5', status:'active' },
+    { clientId:'C1', code:'V1', description:'Mands for preferred items',     numTrials:'5', status:'active' },
+    { clientId:'C2', code:'A1', description:'Cooperative play skills',       numTrials:'5', status:'active' },
+    { clientId:'C2', code:'B3', description:'Sequence 3-part picture cards', numTrials:'5', status:'active' },
+    { clientId:'C2', code:'G1', description:'Tolerates transitions',         numTrials:'5', status:'active' },
+    { clientId:'C2', code:'R3', description:'Follows 2-step instructions',   numTrials:'5', status:'active' },
+    { clientId:'C2', code:'L3', description:'Labels actions in pictures',    numTrials:'5', status:'active' },
+    { clientId:'C2', code:'V2', description:'Mands with carrier phrases',    numTrials:'5', status:'active' },
+    { clientId:'C3', code:'M1', description:'Gross motor imitation',         numTrials:'5', status:'active' },
+    { clientId:'C3', code:'M2', description:'Vocal imitation',               numTrials:'5', status:'active' },
+    { clientId:'C3', code:'N1', description:'Functional play with toys',     numTrials:'5', status:'active' },
+    { clientId:'C3', code:'R4', description:'Responds to name',              numTrials:'5', status:'active' },
+    { clientId:'C3', code:'L2', description:'Labels body parts',             numTrials:'5', status:'active' },
+    { clientId:'C3', code:'G2', description:'Independent work system',       numTrials:'5', status:'active' },
+    { clientId:'C4', code:'D1', description:'Gross motor imitation',         numTrials:'5', status:'active' },
+    { clientId:'C4', code:'D2', description:'Object imitation',              numTrials:'5', status:'active' },
+    { clientId:'C4', code:'F1', description:'Sits in chair independently',   numTrials:'5', status:'active' },
+    { clientId:'C4', code:'R5', description:'Follows visual schedules',      numTrials:'5', status:'active' },
+    { clientId:'C4', code:'V3', description:'Spontaneous mands',             numTrials:'5', status:'active' },
+    { clientId:'C4', code:'S1', description:'Interactive play with peers',   numTrials:'5', status:'active' },
+    { clientId:'C5', code:'H1', description:'Independent toileting',         numTrials:'5', status:'active' },
+    { clientId:'C5', code:'K1', description:'Writing first name',            numTrials:'5', status:'active' },
+    { clientId:'C5', code:'L4', description:'Labels emotions',               numTrials:'5', status:'active' },
+    { clientId:'C5', code:'R6', description:'Follows group instructions',    numTrials:'5', status:'active' },
+    { clientId:'C5', code:'V4', description:'Requests help appropriately',   numTrials:'5', status:'active' },
+    { clientId:'C5', code:'W1', description:'Initiates conversation',        numTrials:'5', status:'active' },
+  ],
+  billing: DEFAULT_BILLING,
+  plugins: [
+    { id:'voice-commands',    enabled:false, config:{} },
+    { id:'push-notifications', enabled:false, config:{} },
+    { id:'external-api',       enabled:false, config:{} },
+  ],
+};
+
+
+// ─── WORKING CONFIG ───────────────────────────────────────────────────
+let CFG = {
+  THERAPISTS: [],
+  CLIENTS: [],
+  BEHAVIORS: [],       // all active behaviors (used in admin display)
+  BILLING_MATRIX: {},  // { 'RBT|1:1 with client': '97153', ... }
+  PLUGINS: [],
+  ABC_BEHAVIORS: ['Aggression','Whining','Tantrum','Elopement','Task Refusal','SIB','Ingesting Inedibles','Other'],
+  ABC_SETTINGS:  ['Home','School','Community','Clinic','Other'],
+  ABC_FUNCTIONS: ['Attention','Escape','Access to Tangible','Automatic'],
+};
+
+let RAW_CONFIG = null;
+
+
+// ─── STATE ────────────────────────────────────────────────────────────
+let S = {
+  therapist: null, client: null,
+  sessType: null, location: null,
+  dateStr: null,
+  timeIn: null,       // display time for session start
+  timeInDate: null,   // Date object
+  timeOut: null, durationMin: 0, notes: '',
+  supervisionOccurred: false,
+  behaviors: {},
+  tantrum: { count:0, totalSec:0, curSec:0, running:false, interval:null, startTs:null },
+  trials: {},
+  abc: [],
+  clockInterval: null, sessInterval: null, sessStartTs: null,
+  // Late-start adherence tracking
+  appStartTime:    null,  // fmtTime() when "Begin Session" was tapped
+  actualStartTime: null,  // overridden if therapist says "started late"
+  lateStartReason: '',
+};
+
+let abcIdSeq = 0;
+
+
+// ─── INIT ─────────────────────────────────────────────────────────────
+async function init() {
+  goTo('loading');
+  if (GAS_URL === 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') {
+    await delay(500);
+    applyConfig(DEFAULT_CONFIG);
+    EventBus.emit('config:loaded', { source: 'default' });
+    return;
+  }
+  try {
+    const resp = await fetch(GAS_URL, { method:'POST', headers:{'Content-Type':'text/plain'}, redirect:'follow', body:JSON.stringify({ action: 'getConfig' }) });
+    const data = await resp.json();
+    if (data.success && data.config) {
+      const cfg = data.config;
+      const isEmpty = !cfg.therapists || cfg.therapists.length === 0;
+      if (isEmpty) {
+        // RT Admin sheet is blank — seed it with defaults
+        applyConfig(DEFAULT_CONFIG);
+        EventBus.emit('config:loaded', { source: 'default' });
+        toast('Seeding RT Admin sheet with defaults\u2026', 'ok');
+        await fetch(GAS_URL, { method:'POST', headers:{'Content-Type':'text/plain'}, redirect:'follow', body:JSON.stringify({ action:'saveConfig', config:DEFAULT_CONFIG }) });
+        toast('RT Admin sheet populated \u2713', 'ok');
+      } else {
+        applyConfig(cfg);
+        EventBus.emit('config:loaded', { source: 'server' });
+      }
+    } else {
+      toast('Config load failed \u2014 using defaults', 'err');
+      applyConfig(DEFAULT_CONFIG);
+      EventBus.emit('config:loaded', { source: 'default' });
+    }
+  } catch (e) {
+    toast('Offline \u2014 using default config', 'err');
+    applyConfig(DEFAULT_CONFIG);
+    EventBus.emit('config:loaded', { source: 'default' });
+  }
+}
+
+function applyConfig(raw, opts = {}) {
+  RAW_CONFIG = JSON.parse(JSON.stringify(raw));
+
+  CFG.THERAPISTS = (raw.therapists || [])
+    .filter(t => (t.status || 'active') !== 'inactive')
+    .map(t => ({ id:t.id, name:t.name, initials:t.initials, color:t.color||'#00A7C7', profile:t.profile||'RBT' }));
+
+  // Billing matrix
+  const billingRows = (raw.billing && raw.billing.length) ? raw.billing : DEFAULT_BILLING;
+  CFG.BILLING_MATRIX = {};
+  billingRows.forEach(b => { CFG.BILLING_MATRIX[`${b.profile}|${b.sessionType}`] = b.code; });
+
+  // All active behaviors (global list for admin + fallback)
+  const activeBehaviors = (raw.behaviors || []).filter(b => (b.status || 'active') !== 'inactive');
+  CFG.BEHAVIORS = activeBehaviors.map(b => ({ key:b.key, label:b.label, color:b.color||'#00A7C7', clientIds:b.clientIds||'' }));
+
+  // Active goals
+  const activeGoals = (raw.goals || []).filter(g => (g.status || 'active') !== 'inactive');
+
+  // Clients with per-client behaviors attached
+  CFG.CLIENTS = (raw.clients || [])
+    .filter(c => (c.status || 'active') !== 'inactive')
+    .map(c => ({
+      id: c.id,
+      name: c.name,
+      initials: c.initials || c.name.split(' ').map(w => w[0]).join(''),
+      sheetId: c.sheetId,
+      goals: activeGoals
+        .filter(g => g.clientId === c.id)
+        .map(g => ({ code:g.code, name:g.description, numTrials:parseInt(g.numTrials)||5 })),
+      // Behaviors assigned to this client (empty clientIds = all clients)
+      behaviors: activeBehaviors.filter(b => {
+        if (!b.clientIds || !b.clientIds.trim()) return true;
+        return b.clientIds.split(',').map(s => s.trim()).includes(c.id);
+      }).map(b => ({ key:b.key, label:b.label, color:b.color||'#00A7C7' })),
+    }));
+
+  CFG.PLUGINS = (raw.plugins || []);
+
+  // Reset behavior state
+  S.behaviors = {};
+  CFG.BEHAVIORS.forEach(b => { S.behaviors[b.key] = 0; });
+
+  buildTherapistScreen();
+  if (opts.navigate !== false) goTo('therapist');
+}
+
+async function reloadConfigFromServer() {
+  if (GAS_URL === 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') {
+    toast('Demo mode \u2014 no server to reload from', 'err'); return;
+  }
+  document.getElementById('loading-lbl').textContent = 'Loading config\u2026';
+  document.getElementById('loading').classList.add('active');
+  try {
+    const resp = await fetch(GAS_URL, { method:'POST', headers:{'Content-Type':'text/plain'}, redirect:'follow', body:JSON.stringify({ action:'getConfig' }) });
+    const data = await resp.json();
+    document.getElementById('loading').classList.remove('active');
+    if (data.success && data.config) {
+      applyConfig(data.config, { navigate: false });
+      showAdminTab(adminTab);
+      toast('Config reloaded', 'ok');
+    } else { toast('Reload failed', 'err'); }
+  } catch(e) {
+    document.getElementById('loading').classList.remove('active');
+    toast('Reload failed \u2014 check connection', 'err');
+  }
+}
+
+
+// ─── SCREEN NAVIGATION ────────────────────────────────────────────────
+function goTo(name) {
+  if (name === 'end') buildEndScreen();
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById('screen-' + name).classList.add('active');
+}
+
+
+// ─── THERAPIST SELECTION ──────────────────────────────────────────────
+function buildTherapistScreen() {
+  const grid = document.getElementById('therapist-grid');
+  grid.innerHTML = '';
+  CFG.THERAPISTS.forEach(t => {
+    const btn = document.createElement('button');
+    btn.className = 'therapist-btn';
+    btn.innerHTML = `
+      <div class="av" style="background:${t.color}">${t.initials}</div>
+      <div class="t-name">${t.name}</div>
+      <div class="t-init">${t.profile} \u2022 ${t.initials}</div>
+    `;
+    btn.onclick = () => selectTherapist(t);
+    grid.appendChild(btn);
+  });
+}
+
+function selectTherapist(t) {
+  S.therapist = t;
+  document.getElementById('hdr-therapist-name').textContent = 'Therapist: ' + t.name;
+  buildClientScreen();
+  goTo('client');
+}
+
+
+// ─── CLIENT SELECTION ─────────────────────────────────────────────────
+function buildClientScreen() {
+  const list = document.getElementById('client-list');
+  list.innerHTML = '';
+  CFG.CLIENTS.forEach(c => {
+    const btn = document.createElement('button');
+    btn.className = 'client-btn';
+    btn.innerHTML = `
+      <div class="av">${c.initials}</div>
+      <div class="info">
+        <div class="c-name">${c.name}</div>
+        <div class="c-goals">${c.goals.length} goal${c.goals.length!==1?'s':''} \u2022 ${c.behaviors.length} behavior${c.behaviors.length!==1?'s':''}</div>
+      </div>
+      <div class="c-arr">&#8250;</div>
+    `;
+    btn.onclick = () => selectClient(c);
+    list.appendChild(btn);
+  });
+}
+
+function selectClient(c) {
+  S.client = c;
+  const now = new Date();
+  S.dateStr    = fmtDate(now);
+  S.timeIn     = fmtTime(now);
+  S.timeInDate = now;
+  document.getElementById('start-client-name').textContent    = c.name;
+  document.getElementById('start-therapist-name').textContent = S.therapist.name;
+  document.getElementById('start-date').textContent = S.dateStr;
+  startClock('clock-start', 'start-time');
+  goTo('start');
+}
+
+
+// ─── START SESSION ────────────────────────────────────────────────────
+function startClock(clockId, timeId) {
+  if (S.clockInterval) clearInterval(S.clockInterval);
+  const tick = () => {
+    const t = fmtTime(new Date());
+    const el = document.getElementById(clockId);
+    if (el) el.textContent = t;
+    if (timeId) { const e2 = document.getElementById(timeId); if (e2) e2.textContent = t; }
+  };
+  tick();
+  S.clockInterval = setInterval(tick, 1000);
+}
+
+function selOpt(btn, key) {
+  btn.parentElement.querySelectorAll('.opt-pill').forEach(p => p.classList.remove('sel'));
+  btn.classList.add('sel');
+  S[key] = btn.dataset.val;
+}
+
+// Called when "Begin Session" is tapped — show late-start modal first
+function promptLateStart() {
+  if (!S.sessType) { toast('Please select a session type', 'err'); return; }
+  if (!S.location) { toast('Please select a location', 'err'); return; }
+  // Record the app start time now
+  const now = new Date();
+  S.appStartTime = fmtTime(now);
+  S.timeIn     = fmtTime(now);
+  S.timeInDate = now;
+  // Reset late-start fields
+  S.actualStartTime = null;
+  S.lateStartReason = '';
+  // Reset late-start form UI
+  document.getElementById('late-start-form').style.display = 'none';
+  document.getElementById('late-time').value = '';
+  document.getElementById('late-reason').value = '';
+  document.getElementById('modal-late-start').classList.add('active');
+}
+
+function confirmOnTime() {
+  document.getElementById('modal-late-start').classList.remove('active');
+  S.actualStartTime = S.appStartTime;  // same — started on time
+  beginSession();
+}
+
+function showLateStartForm() {
+  document.getElementById('late-start-form').style.display = 'block';
+}
+
+function confirmLateStart() {
+  const timeVal   = document.getElementById('late-time').value;
+  const reasonVal = document.getElementById('late-reason').value.trim();
+  if (!timeVal) { toast('Please enter the actual start time', 'err'); return; }
+  // Convert HH:MM to 12-hour display
+  const [hh, mm] = timeVal.split(':').map(Number);
+  const ap = hh >= 12 ? 'PM' : 'AM';
+  const h12 = hh % 12 || 12;
+  S.actualStartTime = `${h12}:${pad(mm)} ${ap}`;
+  S.lateStartReason = reasonVal;
+  document.getElementById('modal-late-start').classList.remove('active');
+  beginSession();
+}
+
+function beginSession() {
+  // Reset session data
+  S.behaviors = {};
+  S.client.behaviors.forEach(b => { S.behaviors[b.key] = 0; });
+  S.tantrum = { count:0, totalSec:0, curSec:0, running:false, interval:null, startTs:null };
+  S.trials = {}; S.abc = []; S.notes = ''; S.supervisionOccurred = false; abcIdSeq = 0;
+
+  document.getElementById('sess-client-name').textContent = S.client.name;
+  document.getElementById('sess-subtitle').textContent    = S.therapist.name + ' \u2022 ' + S.sessType;
+  document.getElementById('bar-type').textContent      = S.sessType;
+  document.getElementById('bar-loc').textContent       = S.location;
+  document.getElementById('bar-therapist').textContent = S.therapist.name;
+
+  buildBehaviorGrid();
+  buildTrials();
+  renderABCList();
+  switchTab('behaviors');
+
+  S.sessStartTs = Date.now();
+  if (S.sessInterval) clearInterval(S.sessInterval);
+  S.sessInterval = setInterval(updateElapsed, 1000);
+
+  goTo('session');
+
+  EventBus.emit('session:start', {
+    therapist: S.therapist.name,
+    client:    S.client.name,
+    sessType:  S.sessType,
+    location:  S.location,
+    timeIn:    S.timeIn,
+    appStartTime:    S.appStartTime,
+    actualStartTime: S.actualStartTime,
+    lateStartReason: S.lateStartReason,
+  });
+}
+
+function updateElapsed() {
+  const sec = Math.floor((Date.now() - S.sessStartTs) / 1000);
+  const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60), s = sec%60;
+  const str = h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+  const el = document.getElementById('sess-elapsed');
+  if (el) el.textContent = str;
+}
+
+
+// ─── TAB SWITCHING ────────────────────────────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-btn:not(.end-btn)').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  document.getElementById('tnav-' + name).classList.add('active');
+}
+
+
+// ─── BEHAVIOR COUNTERS — uses S.client.behaviors for this session ─────
+function buildBehaviorGrid() {
+  const grid = document.getElementById('behavior-grid');
+  grid.innerHTML = '';
+  (S.client.behaviors || []).forEach(b => {
+    const d = document.createElement('div');
+    d.className = 'beh-card';
+    d.innerHTML = `
+      <div class="beh-name" style="color:${b.color}">${b.label}</div>
+      <div class="beh-count" id="cnt-${b.key}" style="color:${b.color}">0</div>
+      <div class="ctr-btns">
+        <button class="ctr-btn minus" onclick="changeCnt('${b.key}',-1)">\u2212</button>
+        <button class="ctr-btn plus"  style="background:${b.color}" onclick="changeCnt('${b.key}',1)">+</button>
+      </div>
+    `;
+    grid.appendChild(d);
+  });
+}
+
+function changeCnt(key, delta) {
+  const prev = S.behaviors[key] || 0;
+  S.behaviors[key] = Math.max(0, prev + delta);
+  document.getElementById('cnt-' + key).textContent = S.behaviors[key];
+  EventBus.emit(delta > 0 ? 'behavior:inc' : 'behavior:dec', { key, value: S.behaviors[key] });
+}
+
+
+// ─── TANTRUM TIMER ────────────────────────────────────────────────────
+function timerStart() {
+  if (S.tantrum.running) return;
+  S.tantrum.running = true;
+  S.tantrum.count++;
+  S.tantrum.startTs = Date.now() - S.tantrum.curSec * 1000;
+  S.tantrum.interval = setInterval(tickTantrum, 1000);
+  document.getElementById('tantrum-count').textContent = S.tantrum.count;
+  document.getElementById('tbtn-start').style.display = 'none';
+  document.getElementById('tbtn-stop').style.display  = '';
+  document.getElementById('timer-display').classList.add('running');
+  EventBus.emit('timer:start', { count: S.tantrum.count });
+}
+
+function timerStop() {
+  if (!S.tantrum.running) return;
+  S.tantrum.running = false;
+  clearInterval(S.tantrum.interval);
+  S.tantrum.totalSec += S.tantrum.curSec;
+  S.tantrum.curSec = 0;
+  document.getElementById('tbtn-start').style.display = '';
+  document.getElementById('tbtn-stop').style.display  = 'none';
+  document.getElementById('timer-display').classList.remove('running');
+  document.getElementById('timer-display').textContent = '0:00';
+  document.getElementById('tantrum-total').textContent = (S.tantrum.totalSec / 60).toFixed(1);
+  EventBus.emit('timer:stop', { totalSec: S.tantrum.totalSec });
+}
+
+function timerReset() {
+  if (S.tantrum.running) timerStop();
+  S.tantrum.curSec = 0;
+  document.getElementById('timer-display').textContent = '0:00';
+}
+
+function tickTantrum() {
+  S.tantrum.curSec = Math.floor((Date.now() - S.tantrum.startTs) / 1000);
+  const m = Math.floor(S.tantrum.curSec / 60), s = S.tantrum.curSec % 60;
+  document.getElementById('timer-display').textContent = `${m}:${pad(s)}`;
+}
+
+function addManualTantrum() {
+  const inp  = document.getElementById('manual-min');
+  const mins = parseFloat(inp.value);
+  if (!mins || mins <= 0) { toast('Enter a valid duration', 'err'); return; }
+  S.tantrum.totalSec += Math.round(mins * 60);
+  S.tantrum.count++;
+  inp.value = '';
+  document.getElementById('tantrum-count').textContent = S.tantrum.count;
+  document.getElementById('tantrum-total').textContent = (S.tantrum.totalSec / 60).toFixed(1);
+  toast('Tantrum added', 'ok');
+}
+
+
+// ─── TRIAL GOALS ──────────────────────────────────────────────────────
+function buildTrials() {
+  const wrap = document.getElementById('trials-wrap');
+  wrap.innerHTML = '';
+  if (!S.client.goals || !S.client.goals.length) {
+    wrap.innerHTML = '<div class="empty-msg">No goals configured for this client.</div>';
+    return;
+  }
+  S.client.goals.forEach(g => {
+    const n = g.numTrials || 5;
+    S.trials[g.code] = Array(n).fill(null);
+    const card = document.createElement('div');
+    card.className = 'goal-card';
+    const slots = Array.from({length: n}, (_, i) => `
+      <div class="trial-slot">
+        <div class="trial-slot-num">T${i+1}</div>
+        <button class="trial-btn" id="tr-${g.code}-${i}-c" onclick="setTrial('${g.code}',${i},true)">\u2713</button>
+        <button class="trial-btn" id="tr-${g.code}-${i}-x" onclick="setTrial('${g.code}',${i},false)">\u2717</button>
+      </div>
+    `).join('');
+    card.innerHTML = `
+      <div class="goal-hdr">
+        <span class="goal-code">${g.code}</span>
+        <span class="goal-name">${g.name}</span>
+        <span class="goal-pct" id="pct-${g.code}">\u2014</span>
+      </div>
+      <div class="trial-btns">${slots}</div>
+    `;
+    wrap.appendChild(card);
+  });
+}
+
+function setTrial(code, i, value) {
+  const cur  = S.trials[code][i];
+  const next = cur === value ? null : value;
+  S.trials[code][i] = next;
+  document.getElementById(`tr-${code}-${i}-c`).classList.toggle('correct',   next === true);
+  document.getElementById(`tr-${code}-${i}-x`).classList.toggle('incorrect', next === false);
+  calcPct(code);
+  EventBus.emit('trial:recorded', { goalCode: code, trialIndex: i, value: next });
+}
+
+function calcPct(code) {
+  const t  = S.trials[code].filter(x => x !== null);
+  const el = document.getElementById('pct-' + code);
+  if (!t.length) { el.textContent = '\u2014'; el.style.color = 'var(--g400)'; return; }
+  const pct = Math.round(t.filter(x => x).length / t.length * 100);
+  el.textContent = pct + '%';
+  el.style.color = pct >= 80 ? 'var(--success)' : pct >= 50 ? 'var(--secondary)' : 'var(--danger)';
+}
+
+
+// ─── ABC INCIDENTS ────────────────────────────────────────────────────
+function addABC() {
+  S.abc.push({ id: ++abcIdSeq, behavior:null, setting:S.location||null, antecedent:'', consequence:'', fn:null });
+  renderABCList();
+  setTimeout(() => { const c = document.getElementById('tab-abc'); c.scrollTop = c.scrollHeight; }, 80);
+  EventBus.emit('abc:added', { id: abcIdSeq });
+}
+
+function deleteABC(id) {
+  S.abc = S.abc.filter(i => i.id !== id);
+  renderABCList();
+}
+
+function renderABCList() {
+  const list = document.getElementById('abc-list');
+  list.innerHTML = '';
+  S.abc.forEach((inc, idx) => {
+    const card = document.createElement('div');
+    card.className = 'abc-card';
+    const bPills = CFG.ABC_BEHAVIORS.map(b =>
+      `<button class="pill${inc.behavior===b?' sel':''}" onclick="setABCField(${inc.id},'behavior','${esc(b)}',this)">${b}</button>`).join('');
+    const sPills = CFG.ABC_SETTINGS.map(s =>
+      `<button class="pill${inc.setting===s?' sel':''}" onclick="setABCField(${inc.id},'setting','${esc(s)}',this)">${s}</button>`).join('');
+    const fPills = CFG.ABC_FUNCTIONS.map(f =>
+      `<button class="pill${inc.fn===f?' sel':''}" onclick="setABCField(${inc.id},'fn','${esc(f)}',this)">${f}</button>`).join('');
+    card.innerHTML = `
+      <div class="abc-card-hdr"><div class="abc-num">Incident ${idx+1}</div><button class="abc-del" onclick="deleteABC(${inc.id})">\u2715</button></div>
+      <div class="form-group" style="margin-bottom:13px"><div class="form-lbl">Behavior</div><div class="pill-group">${bPills}</div></div>
+      <div class="form-group" style="margin-bottom:13px"><div class="form-lbl">Setting</div><div class="pill-group">${sPills}</div></div>
+      <div class="form-group" style="margin-bottom:13px">
+        <div class="form-lbl">Antecedent</div>
+        <textarea class="form-ctrl" rows="2" placeholder="What happened before?" oninput="setABCText(${inc.id},'antecedent',this.value)">${inc.antecedent}</textarea>
+      </div>
+      <div class="form-group" style="margin-bottom:13px">
+        <div class="form-lbl">Consequence</div>
+        <textarea class="form-ctrl" rows="2" placeholder="What happened after?" oninput="setABCText(${inc.id},'consequence',this.value)">${inc.consequence}</textarea>
+      </div>
+      <div class="form-group" style="margin-bottom:0"><div class="form-lbl">Hypothesized Function</div><div class="pill-group">${fPills}</div></div>
+    `;
+    list.appendChild(card);
+  });
+}
+
+function setABCField(id, field, value, btn) {
+  const inc = S.abc.find(i => i.id === id);
+  if (!inc) return;
+  inc[field] = value;
+  btn.parentElement.querySelectorAll('.pill').forEach(p => p.classList.remove('sel'));
+  btn.classList.add('sel');
+}
+
+function setABCText(id, field, value) {
+  const inc = S.abc.find(i => i.id === id);
+  if (inc) inc[field] = value;
+}
+
+
+// ─── END SESSION SCREEN ───────────────────────────────────────────────
+function buildEndScreen() {
+  const now = new Date();
+  S.timeOut     = fmtTime(now);
+  S.durationMin = Math.round((now - S.timeInDate) / 60000);
+  const dh = Math.floor(S.durationMin / 60), dm = S.durationMin % 60;
+  const durStr  = dh > 0 ? `${dh}h ${dm}m` : `${dm}m`;
+  const units   = Math.floor(S.durationMin / 15);
+
+  // Billing: derived from therapist profile + session type
+  const profile    = S.therapist.profile || 'RBT';
+  const billingKey = `${profile}|${S.sessType}`;
+  const billing    = CFG.BILLING_MATRIX[billingKey] || '\u2014';
+
+  document.getElementById('end-hdr-sub').textContent  = `${S.client.name} \u2022 ${S.therapist.name}`;
+  document.getElementById('end-time-in').textContent  = S.actualStartTime || S.timeIn;
+  document.getElementById('end-time-out').textContent = S.timeOut;
+  document.getElementById('end-duration').textContent = durStr;
+  document.getElementById('end-billing').textContent  = `${billing} (${units} unit${units!==1?'s':''})`;
+
+  const tog = document.getElementById('supervision-toggle');
+  tog.classList.remove('on');
+  S.supervisionOccurred = false;
+
+  const behDiv = document.getElementById('beh-summary');
+  behDiv.innerHTML = '';
+  (S.client.behaviors || []).forEach(b => {
+    behDiv.appendChild(sumRow(b.label, S.behaviors[b.key]||0, !S.behaviors[b.key]));
+  });
+  behDiv.appendChild(sumRow('Tantrum (count)', S.tantrum.count, S.tantrum.count===0));
+  const tanMin = +(S.tantrum.totalSec/60).toFixed(1);
+  behDiv.appendChild(sumRow('Tantrum total (min)', tanMin, S.tantrum.totalSec===0));
+
+  const triDiv = document.getElementById('trials-summary');
+  triDiv.innerHTML = '';
+  let hasTrials = false;
+  S.client.goals.forEach(g => {
+    const t = (S.trials[g.code]||[]).filter(x => x !== null);
+    if (!t.length) return;
+    hasTrials = true;
+    const pct = Math.round(t.filter(x=>x).length / t.length * 100);
+    const row = document.createElement('div');
+    row.className = 'sum-row';
+    row.innerHTML = `<span class="sum-lbl">${g.code}: ${g.name}</span><span class="sum-val" style="color:${pct>=80?'var(--success)':pct>=50?'var(--secondary)':'var(--danger)'}">${pct}%</span>`;
+    triDiv.appendChild(row);
+  });
+  if (!hasTrials) triDiv.innerHTML = '<div class="sum-empty">No trials recorded</div>';
+
+  const abcDiv = document.getElementById('abc-summary');
+  if (!S.abc.length) {
+    abcDiv.innerHTML = '<div class="sum-empty">No incidents recorded</div>';
+  } else {
+    abcDiv.innerHTML = '';
+    S.abc.forEach((inc, i) => abcDiv.appendChild(sumRow(`#${i+1}: ${inc.behavior||'Unknown'}`, inc.fn||'\u2014', false)));
+  }
+
+  // Reset notes & word count
+  document.getElementById('session-notes').value = '';
+  document.getElementById('notes-word-count').textContent = '0 / 150 words';
+  document.getElementById('notes-word-count').classList.remove('met');
+  document.getElementById('submit-btn').disabled = true;
+
+  EventBus.emit('session:end', { durationMin: S.durationMin, timeOut: S.timeOut });
+}
+
+function sumRow(lbl, val, isZero) {
+  const d = document.createElement('div');
+  d.className = 'sum-row';
+  d.innerHTML = `<span class="sum-lbl">${lbl}</span><span class="sum-val${isZero?' zero':''}">${val}</span>`;
+  return d;
+}
+
+function toggleSupervision(btn) {
+  S.supervisionOccurred = !S.supervisionOccurred;
+  btn.classList.toggle('on', S.supervisionOccurred);
+}
+
+
+// ─── WORD COUNT ───────────────────────────────────────────────────────
+const NOTES_MIN_WORDS = 150;
+
+function countWords(text) {
+  return text.trim() === '' ? 0 : text.trim().split(/\s+/).length;
+}
+
+function updateWordCount() {
+  const text  = document.getElementById('session-notes').value;
+  const count = countWords(text);
+  const el    = document.getElementById('notes-word-count');
+  const btn   = document.getElementById('submit-btn');
+  el.textContent = `${count} / ${NOTES_MIN_WORDS} words`;
+  const met = count >= NOTES_MIN_WORDS;
+  el.classList.toggle('met', met);
+  btn.disabled = !met;
+}
+
+
+// ─── SUBMIT SESSION ───────────────────────────────────────────────────
+async function submitSession() {
+  S.notes = document.getElementById('session-notes').value;
+  if (countWords(S.notes) < NOTES_MIN_WORDS) {
+    toast(`Please write at least ${NOTES_MIN_WORDS} words in your notes`, 'err'); return;
+  }
+  if (S.tantrum.running) timerStop();
+  if (S.sessInterval) { clearInterval(S.sessInterval); S.sessInterval = null; }
+
+  const payload = buildPayload();
+
+  if (GAS_URL === 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') {
+    console.log('\uD83D\uDCCB Demo payload:', JSON.stringify(payload, null, 2));
+    toast('Demo mode \u2014 data logged to console', 'ok');
+    setTimeout(() => showSuccess(), 1200);
+    return;
+  }
+
+  document.getElementById('loading-lbl').textContent = 'Submitting session\u2026';
+  document.getElementById('loading').classList.add('active');
+  try {
+    const resp = await fetch(GAS_URL, { method:'POST', headers:{'Content-Type':'text/plain'}, redirect:'follow', body:JSON.stringify(payload) });
+    const data = await resp.json();
+    document.getElementById('loading').classList.remove('active');
+    if (data.success) {
+      showSuccess();
+    } else {
+      toast('Submit failed: ' + (data.error||'Unknown error'), 'err');
+    }
+  } catch(e) {
+    document.getElementById('loading').classList.remove('active');
+    toast('Network error \u2014 check connection', 'err');
+  }
+}
+
+function buildPayload() {
+  const tanMin = +(S.tantrum.totalSec / 60).toFixed(1);
+
+  // Per-client behaviors for this session
+  const clientBehaviors = S.client.behaviors || [];
+  const behaviorKeys    = clientBehaviors.map(b => b.key);
+  const behaviorLabels  = clientBehaviors.map(b => b.label);
+  const behaviorData    = {};
+  clientBehaviors.forEach(b => { behaviorData[b.key] = S.behaviors[b.key] || 0; });
+  behaviorData.tantrumFrequency = S.tantrum.count;
+  behaviorData.tantrumTotalMin  = tanMin;
+
+  // Billing: therapist profile + session type
+  const profile    = S.therapist.profile || 'RBT';
+  const billingKey = `${profile}|${S.sessType}`;
+  const billingCode = CFG.BILLING_MATRIX[billingKey] || '';
+
+  const trialData = S.client.goals.map(g => {
+    const t = S.trials[g.code] || [];
+    const answered = t.filter(x => x !== null);
+    const pct = answered.length ? Math.round(t.filter(x=>x===true).length/answered.length*100) : null;
+    return { goalCode:g.code, goalName:g.name, trials:t.map(v=>v===true?'\u2713':v===false?'\u2717':''), percentage:pct };
+  });
+
+  return {
+    action:       'saveSession',
+    sheetId:      S.client.sheetId,
+    clientName:   S.client.name,
+    therapist:    S.therapist.name,
+    therapistInitials: S.therapist.initials,
+    therapistProfile:  profile,
+    date:         S.dateStr,
+    sessionType:  S.sessType,
+    location:     S.location,
+    timeIn:       S.actualStartTime || S.timeIn,
+    timeOut:      S.timeOut,
+    durationMin:  S.durationMin,
+    billingCode,
+    supervisionOccurred: S.supervisionOccurred,
+    notes:        S.notes,
+    appStartTime:    S.appStartTime,
+    actualStartTime: S.actualStartTime,
+    lateStartReason: S.lateStartReason,
+    behaviorKeys, behaviorLabels, behaviorData, trialData,
+    abcData: S.abc.map(inc => ({
+      behavior:inc.behavior, setting:inc.setting, antecedent:inc.antecedent,
+      consequence:inc.consequence, hypothesizedFunction:inc.fn,
+    })),
+  };
+}
+
+function showSuccess() {
+  document.getElementById('success-sub').textContent = `${S.client.name} \u2014 ${S.dateStr}`;
+  document.getElementById('success-screen').classList.add('active');
+}
+
+function newSession() {
+  document.getElementById('success-screen').classList.remove('active');
+  resetState();
+  buildTherapistScreen();
+  goTo('therapist');
+}
+
+function resetState() {
+  S.therapist = null; S.client = null;
+  S.sessType = null; S.location = null;
+  S.dateStr = null; S.timeIn = null; S.timeInDate = null;
+  S.timeOut = null; S.durationMin = 0; S.notes = '';
+  S.supervisionOccurred = false;
+  S.behaviors = {};
+  CFG.BEHAVIORS.forEach(b => { S.behaviors[b.key] = 0; });
+  S.tantrum = { count:0, totalSec:0, curSec:0, running:false, interval:null, startTs:null };
+  S.trials = {}; S.abc = []; abcIdSeq = 0;
+  S.appStartTime = null; S.actualStartTime = null; S.lateStartReason = '';
+  if (S.clockInterval) { clearInterval(S.clockInterval); S.clockInterval = null; }
+  if (S.sessInterval)  { clearInterval(S.sessInterval);  S.sessInterval  = null; }
+  document.querySelectorAll('.opt-pill').forEach(p => p.classList.remove('sel'));
+}
+
+
+// ─── ADMIN PANEL ──────────────────────────────────────────────────────
+let adminTab   = 'therapists';
+let adminItems = [];
+let editModalType = null;
+let editModalItem = null;
+
+function openAdmin() {
+  document.getElementById('pin-input').value = '';
+  document.getElementById('pin-error').textContent = '';
+  document.getElementById('modal-pin').classList.add('active');
+  setTimeout(() => document.getElementById('pin-input').focus(), 200);
+}
+
+function checkPin() {
+  const pin = document.getElementById('pin-input').value;
+  if (pin === getAdminPin()) {
+    document.getElementById('modal-pin').classList.remove('active');
+    showAdminTab('therapists');
+    goTo('admin');
+  } else {
+    document.getElementById('pin-error').textContent = 'Incorrect PIN';
+    document.getElementById('pin-input').value = '';
+  }
+}
+
+function showAdminTab(tab) {
+  adminTab = tab;
+  document.querySelectorAll('.admin-tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('atab-' + tab).classList.add('active');
+  // Show/hide the + Add bar (not shown for settings tab)
+  document.getElementById('admin-add-bar').style.display = tab === 'settings' ? 'none' : '';
+  renderAdminList(tab);
+}
+
+function renderAdminList(type) {
+  const container = document.getElementById('admin-list');
+  container.innerHTML = '';
+  adminItems = [];
+
+  if (type === 'settings') {
+    renderSettingsTab(container);
+    return;
+  }
+
+  const raw   = RAW_CONFIG || DEFAULT_CONFIG;
+  const items = raw[type] || [];
+
+  if (!items.length) {
+    container.innerHTML = '<div class="empty-msg">No ' + type + ' yet. Tap + Add to create one.</div>';
+    return;
+  }
+
+  items.forEach((item, idx) => {
+    adminItems.push(item);
+    const inactive = (item.status || 'active') === 'inactive';
+    const div = document.createElement('div');
+    div.className = 'admin-item' + (inactive ? ' inactive' : '');
+
+    let preview = '', name = '', sub = '';
+
+    if (type === 'therapists') {
+      preview = `<div class="admin-av" style="background:${item.color||'#ccc'}">${item.initials||'?'}</div>`;
+      name    = item.name;
+      sub     = `${item.profile||'RBT'} \u2022 ${item.initials}`;
+    } else if (type === 'clients') {
+      const ini = item.initials || item.name.split(' ').map(w=>w[0]).join('');
+      preview = `<div class="admin-av" style="background:var(--secondary)">${ini}</div>`;
+      name    = item.name;
+      sub     = item.sheetId ? '\u2713 Sheet ID set' : '\u26a0\ufe0f No Sheet ID';
+    } else if (type === 'behaviors') {
+      preview = `<div class="admin-color-dot" style="background:${item.color||'#ccc'}"></div>`;
+      name    = item.label;
+      // Show which clients are assigned
+      const cids = (item.clientIds||'').split(',').map(s=>s.trim()).filter(Boolean);
+      const allClientIds = (raw.clients||[]).map(c=>c.id);
+      const isAll = !cids.length || allClientIds.every(id => cids.includes(id));
+      if (isAll) {
+        sub = item.key + ' \u2022 All clients';
+      } else {
+        const names = cids.map(id => (raw.clients||[]).find(c=>c.id===id)?.name?.split(' ')[0]||id).join(', ');
+        sub = `${item.key} \u2022 ${names}`;
+      }
+    } else if (type === 'goals') {
+      const clientName = (raw.clients||[]).find(c=>c.id===item.clientId)?.name || item.clientId;
+      preview = `<span class="goal-code" style="font-size:11px">${item.code}</span>`;
+      name    = item.description;
+      sub     = `${clientName} \u2022 ${item.numTrials||5} trials`;
+    }
+
+    div.innerHTML = `
+      <div class="admin-item-left">${preview}</div>
+      <div class="admin-item-body">
+        <div class="admin-item-name">${name}</div>
+        ${sub ? `<div class="admin-item-sub">${sub}</div>` : ''}
+      </div>
+      <div class="admin-item-actions">
+        <button class="admin-act-btn" onclick="openEditModal('${type}',${idx})">Edit</button>
+        <button class="admin-act-btn ${inactive?'act-activate':'act-deactivate'}" onclick="toggleEntityStatus('${type}',${idx})">${inactive?'Activate':'Disable'}</button>
+      </div>
+    `;
+    container.appendChild(div);
+  });
+}
+
+// ─── SETTINGS TAB ─────────────────────────────────────────────────────
+function renderSettingsTab(container) {
+  const raw = RAW_CONFIG || DEFAULT_CONFIG;
+  const billing = (raw.billing && raw.billing.length) ? raw.billing : DEFAULT_BILLING;
+
+  // Build billing table rows
+  const rows = billing.map((b, i) => `
+    <tr>
+      <td>${escAttr(b.profile)}</td>
+      <td>${escAttr(b.sessionType)}</td>
+      <td><input data-idx="${i}" value="${escAttr(b.code)}" onchange="updateBillingCode(${i},this.value)"></td>
+    </tr>
+  `).join('');
+
+  container.innerHTML = `
+    <div class="settings-section">
+      <div class="settings-hdr">Billing Codes</div>
+      <table class="billing-table">
+        <thead><tr><th>Profile</th><th>Session Type</th><th>Code</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div style="margin-top:12px">
+        <button class="btn btn-primary" onclick="saveBillingMatrix()" style="padding:13px">Save Billing Codes</button>
+      </div>
+    </div>
+    <div class="settings-section" style="margin-top:8px">
+      <div class="settings-hdr">Security</div>
+      <button class="btn btn-ghost" onclick="openChangePinModal()" style="padding:13px;text-align:left">
+        &#128274; Change Admin PIN
+      </button>
+    </div>
+  `;
+}
+
+function updateBillingCode(idx, value) {
+  const raw = JSON.parse(JSON.stringify(RAW_CONFIG || DEFAULT_CONFIG));
+  const billing = (raw.billing && raw.billing.length) ? raw.billing : JSON.parse(JSON.stringify(DEFAULT_BILLING));
+  if (billing[idx]) billing[idx].code = value.trim();
+  raw.billing = billing;
+  RAW_CONFIG = raw;
+  // Update working config immediately
+  CFG.BILLING_MATRIX = {};
+  billing.forEach(b => { CFG.BILLING_MATRIX[`${b.profile}|${b.sessionType}`] = b.code; });
+}
+
+function saveBillingMatrix() {
+  const raw = JSON.parse(JSON.stringify(RAW_CONFIG || DEFAULT_CONFIG));
+  persistConfig(raw);
+}
+
+
+// ─── EDIT MODAL ───────────────────────────────────────────────────────
+function openEditModal(type, idx) {
+  editModalType = type;
+  editModalItem = (idx !== null && idx !== undefined) ? JSON.parse(JSON.stringify(adminItems[idx])) : null;
+  const isNew   = !editModalItem;
+  document.getElementById('modal-edit-title').textContent = (isNew ? 'Add ' : 'Edit ') + typeLabel(type);
+  buildEditForm(type, editModalItem || newItemTemplate(type));
+  document.getElementById('modal-edit').classList.add('active');
+}
+
+function typeLabel(t) {
+  return {therapists:'Therapist', clients:'Client', behaviors:'Behavior', goals:'Goal'}[t] || t;
+}
+
+function newItemTemplate(type) {
+  const id = type[0].toUpperCase() + Date.now();
+  if (type === 'therapists') return { id, name:'', initials:'', color:'#00A7C7', profile:'RBT', status:'active' };
+  if (type === 'clients')    return { id, name:'', initials:'', sheetId:'', status:'active' };
+  if (type === 'behaviors')  return { key:'', label:'', color:'#00A7C7', clientIds:'', status:'active' };
+  if (type === 'goals')      return { clientId:'', code:'', description:'', numTrials:'5', status:'active' };
+  return {};
+}
+
+function buildEditForm(type, item) {
+  const form = document.getElementById('edit-form-body');
+  form.innerHTML = '';
+
+  const fld = (lbl, id, val, t='text', extra='') => `
+    <div class="form-group">
+      <label class="form-lbl" for="ef-${id}">${lbl}</label>
+      <input class="form-ctrl" id="ef-${id}" type="${t}" value="${escAttr(String(val||''))}" ${extra}>
+    </div>`;
+
+  const colorFld = (lbl, id, val) => `
+    <div class="form-group">
+      <label class="form-lbl">${lbl}</label>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input type="color" id="ef-${id}" value="${val||'#00A7C7'}"
+          style="width:52px;height:44px;padding:4px;border:2px solid var(--g200);border-radius:var(--r-sm);cursor:pointer"
+          oninput="document.getElementById('ef-${id}-hex').value=this.value">
+        <input class="form-ctrl" id="ef-${id}-hex" type="text" value="${val||'#00A7C7'}"
+          placeholder="#RRGGBB" maxlength="7" style="flex:1"
+          oninput="if(/^#[0-9A-Fa-f]{6}$/.test(this.value))document.getElementById('ef-${id}').value=this.value">
+      </div>
+    </div>`;
+
+  if (type === 'therapists') {
+    const profileOpts = ['RBT','BCBA'].map(p =>
+      `<option value="${p}" ${(item.profile||'RBT')===p?'selected':''}>${p}</option>`).join('');
+    form.innerHTML =
+      fld('Name', 'name', item.name) +
+      fld('Initials (2-3 letters)', 'initials', item.initials, 'text', 'maxlength="3"') +
+      colorFld('Color', 'color', item.color) +
+      `<div class="form-group">
+        <label class="form-lbl" for="ef-profile">Profile</label>
+        <select class="form-ctrl" id="ef-profile">${profileOpts}</select>
+      </div>`;
+
+  } else if (type === 'clients') {
+    form.innerHTML =
+      fld('Name', 'name', item.name) +
+      fld('Initials (2-3 letters)', 'initials', item.initials, 'text', 'maxlength="3"') +
+      fld('Google Sheet ID', 'sheetId', item.sheetId, 'text', 'placeholder="1BxiM..."');
+
+  } else if (type === 'behaviors') {
+    // Build client checkboxes
+    const raw = RAW_CONFIG || DEFAULT_CONFIG;
+    const assignedIds = (item.clientIds||'').split(',').map(s=>s.trim()).filter(Boolean);
+    const allIds = (raw.clients||[]).map(c=>c.id);
+    const allChecked = !assignedIds.length || allIds.every(id => assignedIds.includes(id));
+    const cbRows = (raw.clients||[]).map(c => {
+      const checked = allChecked || assignedIds.includes(c.id) ? 'checked' : '';
+      return `<label class="client-cb-row"><input type="checkbox" class="ef-client-cb" value="${escAttr(c.id)}" ${checked}> ${c.name}</label>`;
+    }).join('');
+    form.innerHTML =
+      fld('Key (camelCase, no spaces)', 'key', item.key) +
+      fld('Label (display name)', 'label', item.label) +
+      colorFld('Color', 'color', item.color) +
+      `<div class="form-group">
+        <label class="form-lbl">Assign to Clients</label>
+        <div class="client-cb-grid" id="ef-client-checkboxes">${cbRows}</div>
+      </div>`;
+
+  } else if (type === 'goals') {
+    const raw = RAW_CONFIG || DEFAULT_CONFIG;
+    const opts = (raw.clients||[]).map(c =>
+      `<option value="${escAttr(c.id)}" ${c.id===item.clientId?'selected':''}>${c.name}</option>`).join('');
+    form.innerHTML = `
+      <div class="form-group">
+        <label class="form-lbl" for="ef-clientId">Client</label>
+        <select class="form-ctrl" id="ef-clientId">${opts}</select>
+      </div>` +
+      fld('Goal Code (e.g. B1)', 'code', item.code) +
+      fld('Description', 'description', item.description) +
+      fld('Number of Trials', 'numTrials', item.numTrials||'5', 'number', 'min="1" max="20"');
+  }
+}
+
+function closeEditModal() {
+  document.getElementById('modal-edit').classList.remove('active');
+  editModalType = null; editModalItem = null;
+}
+
+function saveEntity() {
+  const type = editModalType;
+  const raw  = JSON.parse(JSON.stringify(RAW_CONFIG || DEFAULT_CONFIG));
+  let updated;
+
+  if (type === 'therapists') {
+    const name     = document.getElementById('ef-name').value.trim();
+    const initials = document.getElementById('ef-initials').value.trim().toUpperCase();
+    const color    = document.getElementById('ef-color').value;
+    const profile  = document.getElementById('ef-profile').value;
+    if (!name || !initials) { toast('Name and initials required', 'err'); return; }
+    updated = { ...(editModalItem||{}), name, initials, color, profile,
+      status: editModalItem ? (editModalItem.status||'active') : 'active' };
+    if (!updated.id) updated.id = 'T' + Date.now();
+
+  } else if (type === 'clients') {
+    const name     = document.getElementById('ef-name').value.trim();
+    const initials = document.getElementById('ef-initials').value.trim().toUpperCase() ||
+                     name.split(' ').map(w=>w[0]).join('');
+    const sheetId  = document.getElementById('ef-sheetId').value.trim();
+    if (!name) { toast('Name required', 'err'); return; }
+    updated = { ...(editModalItem||{}), name, initials, sheetId,
+      status: editModalItem ? (editModalItem.status||'active') : 'active' };
+    if (!updated.id) updated.id = 'C' + Date.now();
+
+  } else if (type === 'behaviors') {
+    const key   = document.getElementById('ef-key').value.trim().replace(/\s+/g,'');
+    const label = document.getElementById('ef-label').value.trim();
+    const color = document.getElementById('ef-color').value;
+    const clientIds = Array.from(
+      document.querySelectorAll('.ef-client-cb:checked')
+    ).map(cb => cb.value).join(',');
+    if (!key || !label) { toast('Key and label required', 'err'); return; }
+    updated = { ...(editModalItem||{}), key, label, color, clientIds,
+      status: editModalItem ? (editModalItem.status||'active') : 'active' };
+
+  } else if (type === 'goals') {
+    const clientId    = document.getElementById('ef-clientId').value;
+    const code        = document.getElementById('ef-code').value.trim();
+    const description = document.getElementById('ef-description').value.trim();
+    const numTrials   = document.getElementById('ef-numTrials').value || '5';
+    if (!clientId || !code || !description) { toast('All fields required', 'err'); return; }
+    updated = { ...(editModalItem||{}), clientId, code, description, numTrials,
+      status: editModalItem ? (editModalItem.status||'active') : 'active' };
+  }
+
+  const list = raw[type] || [];
+  let idx = -1;
+  if (editModalItem) {
+    if (type === 'goals')      idx = list.findIndex(x => x.clientId===editModalItem.clientId && x.code===editModalItem.code);
+    else if (type==='behaviors') idx = list.findIndex(x => x.key===editModalItem.key);
+    else                       idx = list.findIndex(x => x.id===editModalItem.id);
+  }
+
+  if (idx >= 0) list[idx] = updated;
+  else          list.push(updated);
+  raw[type] = list;
+
+  closeEditModal();
+  persistConfig(raw);  // admin panel stays open — applyConfig called with navigate:false
+}
+
+function toggleEntityStatus(type, idx) {
+  const raw  = JSON.parse(JSON.stringify(RAW_CONFIG || DEFAULT_CONFIG));
+  const list = raw[type] || [];
+  if (list[idx]) {
+    list[idx].status = (list[idx].status === 'inactive') ? 'active' : 'inactive';
+    persistConfig(raw);
+  }
+}
+
+async function persistConfig(raw) {
+  RAW_CONFIG = raw;
+  applyConfig(raw, { navigate: false });   // ← stay on admin screen
+  renderAdminList(adminTab);
+
+  if (GAS_URL === 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') {
+    toast('Changes saved \u2713', 'ok');
+    EventBus.emit('config:saved', {});
+    return;
+  }
+  try {
+    document.getElementById('loading-lbl').textContent = 'Saving config\u2026';
+    document.getElementById('loading').classList.add('active');
+    const resp = await fetch(GAS_URL, { method:'POST', headers:{'Content-Type':'text/plain'}, redirect:'follow', body:JSON.stringify({ action:'saveConfig', config:raw }) });
+    const data = await resp.json();
+    document.getElementById('loading').classList.remove('active');
+    document.getElementById('loading-lbl').textContent = 'Submitting session\u2026';
+    toast(data.success ? 'Changes saved \u2713' : 'Save failed: '+(data.error||'error'),
+          data.success ? 'ok' : 'err');
+    if (data.success) EventBus.emit('config:saved', {});
+  } catch(e) {
+    document.getElementById('loading').classList.remove('active');
+    document.getElementById('loading-lbl').textContent = 'Submitting session\u2026';
+    toast('Save failed \u2014 check connection', 'err');
+  }
+}
+
+
+// ─── PIN MANAGEMENT ───────────────────────────────────────────────────
+function openChangePinModal() {
+  document.getElementById('cp-current').value = '';
+  document.getElementById('cp-new').value     = '';
+  document.getElementById('cp-confirm').value = '';
+  document.getElementById('cp-error').textContent = '';
+  document.getElementById('modal-change-pin').classList.add('active');
+}
+
+function closeChangePinModal() {
+  document.getElementById('modal-change-pin').classList.remove('active');
+}
+
+function saveNewPin() {
+  const current = document.getElementById('cp-current').value;
+  const newPin  = document.getElementById('cp-new').value;
+  const confirm = document.getElementById('cp-confirm').value;
+  const errEl   = document.getElementById('cp-error');
+  errEl.textContent = '';
+
+  if (current !== getAdminPin()) { errEl.textContent = 'Current PIN is incorrect'; return; }
+  if (!/^\d{4}$/.test(newPin))   { errEl.textContent = 'New PIN must be exactly 4 digits'; return; }
+  if (newPin !== confirm)         { errEl.textContent = 'PINs do not match'; return; }
+
+  localStorage.setItem('adminPin', newPin);
+  closeChangePinModal();
+  toast('PIN updated successfully \u2713', 'ok');
+}
+
+
+// ─── UTILITIES ────────────────────────────────────────────────────────
+function fmtDate(d) { return `${d.getMonth()+1}/${d.getDate()}/${d.getFullYear()}`; }
+function fmtTime(d) {
+  let h = d.getHours(); const m = pad(d.getMinutes());
+  const ap = h>=12?'PM':'AM'; h = h%12||12;
+  return `${h}:${m} ${ap}`;
+}
+function pad(n)      { return String(n).padStart(2,'0'); }
+function esc(s)      { return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'"); }
+function escAttr(s)  { return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
+function delay(ms)   { return new Promise(r => setTimeout(r, ms)); }
+
+function toast(msg, type) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = `toast ${type||''} show`;
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.classList.remove('show'), 3000);
+}
+
+
+// ─── SERVICE WORKER ───────────────────────────────────────────────────
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js').catch(()=>{}); });
+}
+
+
+// ─── START ────────────────────────────────────────────────────────────
+init();
+
+</script>
+</body>
+</html>
