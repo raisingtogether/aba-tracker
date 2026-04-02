@@ -112,6 +112,12 @@ function verifyLogin(email, pin, totp) {
     }
   }
 
+  // PIN login is for Collector role only
+  var role = String(therapist.role || 'collector').toLowerCase();
+  if (role !== 'collector') {
+    return { valid: false, reason: 'Use Google Sign-In for your account type' };
+  }
+
   return {
     valid: true,
     therapist: {
@@ -123,7 +129,8 @@ function verifyLogin(email, pin, totp) {
       email:            therapist.email,
       clientIds:        therapist.clientIds || '',
       weeklyHourLimit:  therapist.weeklyHourLimit || '30',
-      payRate:          therapist.payRate || ''
+      payRate:          therapist.payRate || '',
+      role:             role
     }
   };
 }
@@ -379,7 +386,7 @@ function saveConfig(cfg) {
   if (cfg.therapists !== undefined)
     objectsToSheet(ss, 'Therapists',
       ['id', 'name', 'initials', 'color', 'profile', 'email', 'pin',
-       'totpSecret', 'clientIds', 'weeklyHourLimit', 'payRate', 'status'],
+       'totpSecret', 'clientIds', 'weeklyHourLimit', 'payRate', 'status', 'role'],
       cfg.therapists);
 
   if (cfg.clients !== undefined)
