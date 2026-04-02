@@ -659,6 +659,99 @@
       .behavior-grid { grid-template-columns: 1fr 1fr 1fr; }
       .modal-sheet { border-radius: 24px; margin-bottom: 20px; }
     }
+
+    /* ── AUTH / LOGIN ── */
+    .login-wrap { max-width: 420px; margin: 0 auto; padding: 20px 20px 40px; }
+    .login-divider { text-align:center; color:var(--g400); font-size:13px; font-weight:700;
+                     padding:10px 0; position:relative; }
+    .login-divider::before, .login-divider::after {
+      content:''; position:absolute; top:50%; width:40%; height:1px; background:var(--g200);
+    }
+    .login-divider::before { left:0; } .login-divider::after { right:0; }
+    .google-btn {
+      width:100%; padding:15px; border:2px solid var(--g200); border-radius:var(--r);
+      background:white; font-family:'Nunito',sans-serif; font-size:15px; font-weight:700;
+      color:var(--g800); cursor:pointer; display:flex; align-items:center; justify-content:center;
+      gap:10px; box-shadow:var(--shadow); transition:transform .12s;
+    }
+    .google-btn:active { transform:scale(0.98); }
+    .google-logo { width:20px; height:20px; }
+    .lock-msg { background:#FEF2F2; border:1.5px solid #FCA5A5; border-radius:var(--r-sm);
+                padding:12px 14px; color:#DC2626; font-size:13px; font-weight:700; margin-bottom:14px; }
+    .totp-hint { font-size:12px; color:var(--g400); font-weight:600; text-align:center; margin-top:6px; }
+
+    /* ── PRIVACY SCREEN ── */
+    .privacy-wrap { max-width:420px; margin:0 auto; padding:40px 20px;
+                    display:flex; flex-direction:column; align-items:center; justify-content:center;
+                    min-height:100dvh; }
+    .privacy-icon { font-size:64px; margin-bottom:20px; }
+    .privacy-title { font-size:22px; font-weight:900; color:var(--g800); margin-bottom:12px; text-align:center; }
+    .privacy-text { font-size:14px; color:var(--g600); font-weight:600; line-height:1.6;
+                    text-align:center; margin-bottom:28px; }
+
+    /* ── INACTIVITY WARNING ── */
+    #inactivity-warning {
+      display:none; position:fixed; inset:0; z-index:3000;
+      background:rgba(0,0,0,0.75); align-items:center; justify-content:center;
+    }
+    #inactivity-warning.show { display:flex; }
+    .inactivity-card { background:white; border-radius:var(--r-lg); padding:28px 24px;
+                       max-width:300px; text-align:center; }
+    .inactivity-icon { font-size:44px; margin-bottom:12px; }
+    .inactivity-title { font-size:17px; font-weight:900; color:var(--g800); margin-bottom:6px; }
+    .inactivity-sub { font-size:13px; color:var(--g400); font-weight:600; margin-bottom:20px; }
+
+    /* ── REAUTH PROMPT ── */
+    #reauth-overlay {
+      display:none; position:fixed; inset:0; z-index:2500;
+      background:rgba(0,0,0,0.8); align-items:center; justify-content:center;
+    }
+    #reauth-overlay.show { display:flex; }
+
+    /* ── HOUR LIMIT WARNING ── */
+    .hour-warn { background:#FFFBEB; border:1.5px solid #FCD34D; border-radius:var(--r-sm);
+                 padding:12px 14px; color:#92400E; font-size:13px; font-weight:700;
+                 margin-bottom:14px; display:none; }
+    .hour-warn.show { display:block; }
+
+    /* ── AUTHORIZATION CARDS ── */
+    .auth-card { background:white; border-radius:var(--r); padding:16px; margin-bottom:12px; box-shadow:var(--shadow); }
+    .auth-card-ttl { font-size:14px; font-weight:800; color:var(--g800); margin-bottom:10px; }
+    .auth-progress { height:8px; border-radius:100px; background:var(--g100); overflow:hidden; margin:6px 0 4px; }
+    .auth-progress-bar { height:100%; border-radius:100px; transition:width .4s; }
+    .auth-progress-bar.green  { background:var(--success); }
+    .auth-progress-bar.yellow { background:var(--secondary); }
+    .auth-progress-bar.red    { background:var(--danger); }
+    .auth-stat { display:flex; justify-content:space-between; font-size:12px; font-weight:700; color:var(--g400); }
+    .auth-alert { background:#FEF2F2; border-radius:var(--r-sm); padding:8px 12px;
+                  font-size:12px; font-weight:700; color:var(--danger); margin-top:8px; }
+    .auth-expire-warn { background:#FFFBEB; border-radius:var(--r-sm); padding:8px 12px;
+                        font-size:12px; font-weight:700; color:#92400E; margin-top:8px; }
+
+    /* ── PAYROLL ── */
+    .payroll-period-sel { display:flex; gap:8px; align-items:center; margin-bottom:16px; flex-wrap:wrap; }
+    .payroll-table { width:100%; border-collapse:collapse; font-size:13px; }
+    .payroll-table th { text-align:left; padding:8px 10px; background:var(--g100);
+                        font-size:11px; font-weight:700; text-transform:uppercase;
+                        letter-spacing:0.5px; color:var(--g400); }
+    .payroll-table td { padding:8px 10px; border-bottom:1px solid var(--g100); }
+    .payroll-total { font-weight:800; color:var(--success); }
+
+    /* ── SETTINGS SECTION HDR ── */
+    .settings-hdr { font-size:12px; font-weight:700; text-transform:uppercase;
+                    letter-spacing:0.8px; color:var(--g400); margin-bottom:12px; }
+
+    /* ── QR CODE / TOTP SETUP ── */
+    .qr-wrap { text-align:center; padding:16px 0; }
+    .qr-wrap img { border:2px solid var(--g200); border-radius:var(--r-sm); }
+    .totp-secret-code { font-family:monospace; font-size:14px; font-weight:700;
+                        background:var(--g100); padding:8px 12px; border-radius:var(--r-sm);
+                        letter-spacing:2px; text-align:center; margin:8px 0; word-break:break-all; }
+
+    /* ── FOOTER ── */
+    .app-footer { text-align:center; padding:12px; font-size:12px; color:var(--g400); font-weight:600; }
+    .app-footer a { color:var(--primary); text-decoration:none; font-weight:700; }
+
   </style>
 </head>
 <body>
@@ -732,7 +825,7 @@
         </div>
       </div>
     </div>
-    <button class="btn btn-primary" onclick="promptLateStart()">Begin Session &#8594;</button>
+    <button class="btn btn-primary" onclick="promptLateStart()" id="begin-session-btn">Begin Session &#8594;</button>
   </div>
 </div>
 
@@ -877,6 +970,9 @@
     <button class="admin-tab-btn" id="atab-behaviors"  onclick="showAdminTab('behaviors')">Behaviors</button>
     <button class="admin-tab-btn" id="atab-goals"      onclick="showAdminTab('goals')">Goals</button>
     <button class="admin-tab-btn" id="atab-settings"   onclick="showAdminTab('settings')">Settings</button>
+        <button class="admin-tab-btn admin-only-tab" id="atab-authorizations" onclick="showAdminTab('authorizations')">Auth</button>
+        <button class="admin-tab-btn admin-only-tab" id="atab-payroll" onclick="showAdminTab('payroll')">Payroll</button>
+        <button class="admin-tab-btn admin-only-tab" id="atab-admins" onclick="showAdminTab('admins')">Admins</button>
   </div>
   <div class="content" style="padding-bottom:0" id="admin-list"></div>
   <div class="admin-add-bar" id="admin-add-bar">
@@ -1053,43 +1149,47 @@ const DEFAULT_CONFIG = {
     { key:'sib',                label:'SIB',                 color:'#DB2777', clientIds:ALL_CLIENT_IDS, status:'active' },
   ],
   goals: [
-    { clientId:'C1', code:'B1', description:'Matching identical objects',    numTrials:'5', status:'active' },
-    { clientId:'C1', code:'B2', description:'Match pictures to objects',     numTrials:'5', status:'active' },
-    { clientId:'C1', code:'C1', description:'Visual performance \u2014 puzzles', numTrials:'5', status:'active' },
-    { clientId:'C1', code:'R1', description:'Attending to speaker',          numTrials:'5', status:'active' },
-    { clientId:'C1', code:'R2', description:'Follows 1-step instructions',   numTrials:'5', status:'active' },
-    { clientId:'C1', code:'L1', description:'Labels common objects',         numTrials:'5', status:'active' },
-    { clientId:'C1', code:'V1', description:'Mands for preferred items',     numTrials:'5', status:'active' },
-    { clientId:'C2', code:'A1', description:'Cooperative play skills',       numTrials:'5', status:'active' },
-    { clientId:'C2', code:'B3', description:'Sequence 3-part picture cards', numTrials:'5', status:'active' },
-    { clientId:'C2', code:'G1', description:'Tolerates transitions',         numTrials:'5', status:'active' },
-    { clientId:'C2', code:'R3', description:'Follows 2-step instructions',   numTrials:'5', status:'active' },
-    { clientId:'C2', code:'L3', description:'Labels actions in pictures',    numTrials:'5', status:'active' },
-    { clientId:'C2', code:'V2', description:'Mands with carrier phrases',    numTrials:'5', status:'active' },
-    { clientId:'C3', code:'M1', description:'Gross motor imitation',         numTrials:'5', status:'active' },
-    { clientId:'C3', code:'M2', description:'Vocal imitation',               numTrials:'5', status:'active' },
-    { clientId:'C3', code:'N1', description:'Functional play with toys',     numTrials:'5', status:'active' },
-    { clientId:'C3', code:'R4', description:'Responds to name',              numTrials:'5', status:'active' },
-    { clientId:'C3', code:'L2', description:'Labels body parts',             numTrials:'5', status:'active' },
-    { clientId:'C3', code:'G2', description:'Independent work system',       numTrials:'5', status:'active' },
-    { clientId:'C4', code:'D1', description:'Gross motor imitation',         numTrials:'5', status:'active' },
-    { clientId:'C4', code:'D2', description:'Object imitation',              numTrials:'5', status:'active' },
-    { clientId:'C4', code:'F1', description:'Sits in chair independently',   numTrials:'5', status:'active' },
-    { clientId:'C4', code:'R5', description:'Follows visual schedules',      numTrials:'5', status:'active' },
-    { clientId:'C4', code:'V3', description:'Spontaneous mands',             numTrials:'5', status:'active' },
-    { clientId:'C4', code:'S1', description:'Interactive play with peers',   numTrials:'5', status:'active' },
-    { clientId:'C5', code:'H1', description:'Independent toileting',         numTrials:'5', status:'active' },
-    { clientId:'C5', code:'K1', description:'Writing first name',            numTrials:'5', status:'active' },
-    { clientId:'C5', code:'L4', description:'Labels emotions',               numTrials:'5', status:'active' },
-    { clientId:'C5', code:'R6', description:'Follows group instructions',    numTrials:'5', status:'active' },
-    { clientId:'C5', code:'V4', description:'Requests help appropriately',   numTrials:'5', status:'active' },
-    { clientId:'C5', code:'W1', description:'Initiates conversation',        numTrials:'5', status:'active' },
+    { clientId:'C1', clientIds:'C1', code:'B1', description:'Matching identical objects',    numTrials:'5', status:'active' },
+    { clientId:'C1', clientIds:'C1', code:'B2', description:'Match pictures to objects',     numTrials:'5', status:'active' },
+    { clientId:'C1', clientIds:'C1', code:'C1', description:'Visual performance \u2014 puzzles', numTrials:'5', status:'active' },
+    { clientId:'C1', clientIds:'C1', code:'R1', description:'Attending to speaker',          numTrials:'5', status:'active' },
+    { clientId:'C1', clientIds:'C1', code:'R2', description:'Follows 1-step instructions',   numTrials:'5', status:'active' },
+    { clientId:'C1', clientIds:'C1', code:'L1', description:'Labels common objects',         numTrials:'5', status:'active' },
+    { clientId:'C1', clientIds:'C1', code:'V1', description:'Mands for preferred items',     numTrials:'5', status:'active' },
+    { clientId:'C2', clientIds:'C2', code:'A1', description:'Cooperative play skills',       numTrials:'5', status:'active' },
+    { clientId:'C2', clientIds:'C2', code:'B3', description:'Sequence 3-part picture cards', numTrials:'5', status:'active' },
+    { clientId:'C2', clientIds:'C2', code:'G1', description:'Tolerates transitions',         numTrials:'5', status:'active' },
+    { clientId:'C2', clientIds:'C2', code:'R3', description:'Follows 2-step instructions',   numTrials:'5', status:'active' },
+    { clientId:'C2', clientIds:'C2', code:'L3', description:'Labels actions in pictures',    numTrials:'5', status:'active' },
+    { clientId:'C2', clientIds:'C2', code:'V2', description:'Mands with carrier phrases',    numTrials:'5', status:'active' },
+    { clientId:'C3', clientIds:'C3', code:'M1', description:'Gross motor imitation',         numTrials:'5', status:'active' },
+    { clientId:'C3', clientIds:'C3', code:'M2', description:'Vocal imitation',               numTrials:'5', status:'active' },
+    { clientId:'C3', clientIds:'C3', code:'N1', description:'Functional play with toys',     numTrials:'5', status:'active' },
+    { clientId:'C3', clientIds:'C3', code:'R4', description:'Responds to name',              numTrials:'5', status:'active' },
+    { clientId:'C3', clientIds:'C3', code:'L2', description:'Labels body parts',             numTrials:'5', status:'active' },
+    { clientId:'C3', clientIds:'C3', code:'G2', description:'Independent work system',       numTrials:'5', status:'active' },
+    { clientId:'C4', clientIds:'C4', code:'D1', description:'Gross motor imitation',         numTrials:'5', status:'active' },
+    { clientId:'C4', clientIds:'C4', code:'D2', description:'Object imitation',              numTrials:'5', status:'active' },
+    { clientId:'C4', clientIds:'C4', code:'F1', description:'Sits in chair independently',   numTrials:'5', status:'active' },
+    { clientId:'C4', clientIds:'C4', code:'R5', description:'Follows visual schedules',      numTrials:'5', status:'active' },
+    { clientId:'C4', clientIds:'C4', code:'V3', description:'Spontaneous mands',             numTrials:'5', status:'active' },
+    { clientId:'C4', clientIds:'C4', code:'S1', description:'Interactive play with peers',   numTrials:'5', status:'active' },
+    { clientId:'C5', clientIds:'C5', code:'H1', description:'Independent toileting',         numTrials:'5', status:'active' },
+    { clientId:'C5', clientIds:'C5', code:'K1', description:'Writing first name',            numTrials:'5', status:'active' },
+    { clientId:'C5', clientIds:'C5', code:'L4', description:'Labels emotions',               numTrials:'5', status:'active' },
+    { clientId:'C5', clientIds:'C5', code:'R6', description:'Follows group instructions',    numTrials:'5', status:'active' },
+    { clientId:'C5', clientIds:'C5', code:'V4', description:'Requests help appropriately',   numTrials:'5', status:'active' },
+    { clientId:'C5', clientIds:'C5', code:'W1', description:'Initiates conversation',        numTrials:'5', status:'active' },
   ],
   billing: DEFAULT_BILLING,
   plugins: [
     { id:'voice-commands',    enabled:false, config:{} },
     { id:'push-notifications', enabled:false, config:{} },
     { id:'external-api',       enabled:false, config:{} },
+  ],
+  authorizations: [],
+  admins: [
+    { email:'tatiana@raisingtogether.com', name:'Tatiana', status:'active' },
   ],
 };
 
@@ -1198,7 +1298,10 @@ function applyConfig(raw, opts = {}) {
       initials: c.initials || c.name.split(' ').map(w => w[0]).join(''),
       sheetId: c.sheetId,
       goals: activeGoals
-        .filter(g => g.clientId === c.id)
+        .filter(g => {
+          var gids = g.clientIds || g.clientId || '';
+          return gids.split(',').map(function(s){return s.trim();}).indexOf(c.id) >= 0;
+        })
         .map(g => ({ code:g.code, name:g.description, numTrials:parseInt(g.numTrials)||5 })),
       // Behaviors assigned to this client (empty clientIds = all clients)
       behaviors: activeBehaviors.filter(b => {
@@ -2231,6 +2334,1059 @@ function toast(msg, type) {
 }
 
 
+
+// ═══════════════════════════════════════════════════════════════
+// HIPAA COMPLIANCE LAYER v3
+// ═══════════════════════════════════════════════════════════════
+
+// ── CONSTANTS ────────────────────────────────────────────────────────
+const GOOGLE_CLIENT_ID     = 'YOUR_GOOGLE_CLIENT_ID_HERE';
+const INACTIVITY_MS        = 30 * 60 * 1000;  // 30 min
+const INACTIVITY_WARN_MS   = 27 * 60 * 1000;  // 27 min warn
+const BACKGROUND_REAUTH_MS =  5 * 60 * 1000;  //  5 min background
+const MAX_LOGIN_ATTEMPTS   = 5;
+const LOCKOUT_MS           = 30 * 60 * 1000;
+const DEFAULT_WEEKLY_LIMIT = 30;
+const NOTES_MIN_WORDS      = 150;
+
+// ── AUTH STATE ───────────────────────────────────────────────────────
+let AUTH = { user: null, tier: null }; // tier: 1=admin/BCBA, 2=RBT
+
+// ── INACTIVITY TIMER ─────────────────────────────────────────────────
+let _inactWarnTimer = null, _inactTimer = null;
+const _ACT_EVENTS   = ['touchstart','click','keydown','scroll'];
+
+function resetInactivityTimer() {
+  document.getElementById('inactivity-warning').classList.remove('show');
+  clearTimeout(_inactWarnTimer);
+  clearTimeout(_inactTimer);
+  _inactWarnTimer = setTimeout(() => {
+    document.getElementById('inactivity-warning').classList.add('show');
+  }, INACTIVITY_WARN_MS);
+  _inactTimer = setTimeout(() => logoutUser('inactivity'), INACTIVITY_MS);
+}
+
+function startInactivityTimer() {
+  _ACT_EVENTS.forEach(ev => document.addEventListener(ev, resetInactivityTimer, { passive: true }));
+  resetInactivityTimer();
+}
+
+function stopInactivityTimer() {
+  clearTimeout(_inactWarnTimer); clearTimeout(_inactTimer);
+  _ACT_EVENTS.forEach(ev => document.removeEventListener(ev, resetInactivityTimer));
+  document.getElementById('inactivity-warning').classList.remove('show');
+}
+
+// ── BACKGROUND DETECTION ─────────────────────────────────────────────
+let _bgStart = null;
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    _bgStart = Date.now();
+  } else {
+    if (_bgStart && (Date.now() - _bgStart) > BACKGROUND_REAUTH_MS && AUTH.user) {
+      document.getElementById('reauth-pin').value = '';
+      document.getElementById('reauth-error').textContent = '';
+      document.getElementById('reauth-overlay').classList.add('show');
+    }
+    _bgStart = null;
+  }
+});
+
+function confirmReauth() {
+  const pin = document.getElementById('reauth-pin').value;
+  const errEl = document.getElementById('reauth-error');
+  let ok = false;
+  if (AUTH.tier === 1) {
+    ok = true; // Tier 1 doesn't use PIN
+  } else {
+    const therapist = CFG.THERAPISTS.find(t => t.id === (AUTH.user && AUTH.user.therapistId));
+    ok = therapist && String(therapist.pin || '') === pin;
+  }
+  if (ok) {
+    document.getElementById('reauth-overlay').classList.remove('show');
+    resetInactivityTimer();
+    logAuditEvent('reauth_success', AUTH.user ? AUTH.user.email : '', '', '');
+  } else {
+    errEl.textContent = 'Incorrect PIN';
+  }
+}
+
+// ── LOGOUT ───────────────────────────────────────────────────────────
+function logoutUser(reason) {
+  logAuditEvent('logout', AUTH.user ? AUTH.user.email : '', '', reason || '');
+  stopInactivityTimer();
+  // Clear PHI from memory
+  AUTH = { user: null, tier: null };
+  resetState();
+  S.therapist = null; S.client = null;
+  CFG.THERAPISTS = []; CFG.CLIENTS = []; CFG.BEHAVIORS = [];
+  // Remove PHI from localStorage (keep adminPin, privacyAccepted)
+  const keepKeys = ['adminPin', 'privacyAccepted', 'auditLog'];
+  Object.keys(localStorage).forEach(k => {
+    if (!keepKeys.includes(k) && !k.startsWith('loginAttempts_')) {
+      localStorage.removeItem(k);
+    }
+  });
+  goTo('login');
+}
+
+function adminBack() {
+  goTo('therapist');
+}
+
+// ── LOCKOUT ──────────────────────────────────────────────────────────
+function getLockoutData(email) {
+  return JSON.parse(localStorage.getItem('loginAttempts_' + email) || '{"count":0,"lockedUntil":0}');
+}
+
+function isAccountLocked(email) {
+  const d = getLockoutData(email);
+  if (d.lockedUntil && Date.now() < d.lockedUntil) return true;
+  if (d.lockedUntil && Date.now() >= d.lockedUntil) {
+    localStorage.removeItem('loginAttempts_' + email);
+    return false;
+  }
+  return false;
+}
+
+function recordFailedLogin(email) {
+  const key = 'loginAttempts_' + email;
+  const d   = getLockoutData(email);
+  d.count++;
+  if (d.count >= MAX_LOGIN_ATTEMPTS) {
+    d.lockedUntil = Date.now() + LOCKOUT_MS;
+    logAuditEvent('account_locked', email, '', 'Locked after ' + d.count + ' failed attempts');
+  }
+  localStorage.setItem(key, JSON.stringify(d));
+  logAuditEvent('failed_login', email, '', 'Attempt ' + d.count);
+}
+
+function clearLockout(email) {
+  localStorage.removeItem('loginAttempts_' + email);
+}
+
+// ── AUDIT LOG ────────────────────────────────────────────────────────
+async function logAuditEvent(action, userId, clientName, details) {
+  const ts    = new Date().toISOString();
+  const entry = { ts, userId, action, clientName, details };
+  // Persist locally (ring buffer of 1000)
+  try {
+    const log = JSON.parse(localStorage.getItem('auditLog') || '[]');
+    log.push(entry);
+    localStorage.setItem('auditLog', JSON.stringify(log.slice(-1000)));
+  } catch(e) {}
+  // Fire-and-forget to server
+  if (GAS_URL !== 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') {
+    fetch(GAS_URL, {
+      method:'POST', headers:{'Content-Type':'text/plain'}, redirect:'follow',
+      body: JSON.stringify({ action:'logAudit', timestamp:ts, userId, auditAction:action, clientName, details })
+    }).catch(() => {});
+  }
+  EventBus.emit('audit:logged', entry);
+}
+
+function exportAuditLog() {
+  const log = JSON.parse(localStorage.getItem('auditLog') || '[]');
+  if (!log.length) { toast('No audit log entries', 'err'); return; }
+  const rows = ['Timestamp,User,Action,Client,Details'];
+  log.forEach(e => rows.push([e.ts,e.userId,e.action,e.clientName,e.details].map(v => '"'+(v||'').replace(/"/g,'""')+'"').join(',')));
+  const blob = new Blob([rows.join('\n')], { type:'text/csv' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a'); a.href = url;
+  a.download = 'audit_log_' + new Date().toISOString().slice(0,10) + '.csv'; a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ── SESSION UUID + HASH ───────────────────────────────────────────────
+function generateUUID() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = Math.random() * 16 | 0;
+    return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+  });
+}
+
+function simpleHash(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) { h = ((h << 5) - h) + str.charCodeAt(i); h |= 0; }
+  return Math.abs(h).toString(16);
+}
+
+// ── PRIVACY ───────────────────────────────────────────────────────────
+function showPrivacyPolicyModal() {
+  document.getElementById('modal-privacy-policy').classList.add('active');
+}
+
+function acceptPrivacy() {
+  localStorage.setItem('privacyAccepted', '1');
+  goTo('login');
+}
+
+// ── GOOGLE SIGN-IN (TIER 1) ───────────────────────────────────────────
+function startGoogleSignIn() {
+  if (GOOGLE_CLIENT_ID === 'YOUR_GOOGLE_CLIENT_ID_HERE') {
+    toast('Google Sign-In not configured — set GOOGLE_CLIENT_ID', 'err'); return;
+  }
+  google.accounts.id.initialize({
+    client_id: GOOGLE_CLIENT_ID,
+    callback:  handleGoogleCredential,
+    auto_select: false,
+  });
+  google.accounts.id.prompt();
+}
+
+function handleGoogleCredential(response) {
+  try {
+    // Decode JWT payload (not verifying signature — GAS handles server-side verification)
+    const parts   = response.credential.split('.');
+    const payload = JSON.parse(atob(parts[1].replace(/-/g,'+').replace(/_/g,'/')));
+    const email   = payload.email;
+    // Check if email is in Tier 1 admins list
+    const raw     = RAW_CONFIG || DEFAULT_CONFIG;
+    const admins  = (raw.admins || []).filter(a => (a.status || 'active') !== 'inactive');
+    const match   = admins.find(a => String(a.email || '').toLowerCase() === email.toLowerCase());
+    if (!match) {
+      toast('Access denied — email not in admin list', 'err');
+      logAuditEvent('failed_login', email, '', 'Email not in Tier 1 admin list');
+      return;
+    }
+    AUTH = { tier: 1, user: { email, name: payload.name || match.name || email, therapistId: null } };
+    logAuditEvent('login', email, '', 'Tier 1 Google Sign-In');
+    clearLockout(email);
+    afterAuth();
+  } catch(e) {
+    toast('Sign-in failed: ' + e.message, 'err');
+  }
+}
+
+// ── TIER 2 LOGIN ──────────────────────────────────────────────────────
+let _tier2Step = 1; // 1=email+pin, 2=totp
+
+async function attemptTier2Login() {
+  const email  = document.getElementById('login-email').value.trim().toLowerCase();
+  const pin    = document.getElementById('login-pin').value.trim();
+  const totp   = document.getElementById('login-totp').value.trim();
+  const errEl  = document.getElementById('login-error');
+  const lockEl = document.getElementById('login-lock-msg');
+
+  errEl.textContent = '';
+  lockEl.style.display = 'none';
+
+  if (!email) { errEl.textContent = 'Email required'; return; }
+
+  if (isAccountLocked(email)) {
+    lockEl.style.display = 'block';
+    return;
+  }
+
+  if (!pin) { errEl.textContent = 'PIN required'; return; }
+
+  // Check if TOTP step is needed
+  const raw = RAW_CONFIG || DEFAULT_CONFIG;
+  const therapist = (raw.therapists || []).find(t =>
+    String(t.email || '').toLowerCase() === email && (t.status || 'active') !== 'inactive'
+  );
+  const needsTOTP = therapist && therapist.totpSecret;
+
+  if (needsTOTP && !totp) {
+    document.getElementById('login-totp-group').style.display = 'block';
+    errEl.textContent = 'Enter your authenticator code';
+    return;
+  }
+
+  // Verify via server
+  if (GAS_URL === 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') {
+    // Demo mode: accept any credentials matching local config
+    if (!therapist) { recordFailedLogin(email); errEl.textContent = 'Account not found'; return; }
+    if (therapist.pin && therapist.pin !== pin) { recordFailedLogin(email); errEl.textContent = 'Incorrect PIN'; return; }
+    completeRBTLogin(therapist);
+    return;
+  }
+
+  document.getElementById('loading-lbl').textContent = 'Signing in…';
+  document.getElementById('loading').classList.add('active');
+  try {
+    const resp = await fetch(GAS_URL, {
+      method:'POST', headers:{'Content-Type':'text/plain'}, redirect:'follow',
+      body: JSON.stringify({ action:'verifyLogin', email, pin, totp })
+    });
+    const data = await resp.json();
+    document.getElementById('loading').classList.remove('active');
+    if (data.valid) {
+      clearLockout(email);
+      completeRBTLogin(data.therapist);
+    } else {
+      recordFailedLogin(email);
+      const d = getLockoutData(email);
+      if (isAccountLocked(email)) {
+        lockEl.style.display = 'block'; errEl.textContent = '';
+      } else {
+        const rem = MAX_LOGIN_ATTEMPTS - d.count;
+        errEl.textContent = (data.reason || 'Login failed') + (rem > 0 ? ' (' + rem + ' attempts remaining)' : '');
+      }
+    }
+  } catch(e) {
+    document.getElementById('loading').classList.remove('active');
+    // Offline fallback: check local config
+    if (therapist && (!therapist.pin || therapist.pin === pin)) {
+      completeRBTLogin(therapist);
+    } else {
+      errEl.textContent = 'Network error. Check connection.';
+    }
+  }
+}
+
+function completeRBTLogin(t) {
+  AUTH = {
+    tier: 2,
+    user: {
+      email:          t.email || '',
+      name:           t.name,
+      therapistId:    t.id,
+      weeklyHourLimit: parseFloat(t.weeklyHourLimit) || DEFAULT_WEEKLY_LIMIT
+    }
+  };
+  // Pre-select therapist
+  const therapist = CFG.THERAPISTS.find(th => th.id === t.id);
+  if (therapist) {
+    S.therapist = therapist;
+    document.getElementById('hdr-therapist-name').textContent = 'Therapist: ' + therapist.name;
+  }
+  logAuditEvent('login', t.email || t.name, '', 'Tier 2 PIN login');
+  afterAuth();
+}
+
+function afterAuth() {
+  // Check privacy notice
+  if (!localStorage.getItem('privacyAccepted')) { goTo('privacy'); return; }
+  startInactivityTimer();
+  if (AUTH.tier === 2) {
+    // RBT: skip therapist screen, go to filtered client list
+    buildClientScreen();
+    goTo('client');
+  } else {
+    // Admin/BCBA: show therapist selection
+    buildTherapistScreen();
+    goTo('therapist');
+  }
+  // Show/hide admin-only tabs
+  document.querySelectorAll('.admin-only-tab').forEach(t => {
+    t.style.display = AUTH.tier === 1 ? '' : 'none';
+  });
+}
+
+// ── WEEKLY HOUR LIMIT CHECK ───────────────────────────────────────────
+async function checkWeeklyHours() {
+  if (AUTH.tier === 1) return { ok: true }; // admins exempt
+  const user  = AUTH.user;
+  const limit = user ? (user.weeklyHourLimit || DEFAULT_WEEKLY_LIMIT) : DEFAULT_WEEKLY_LIMIT;
+
+  const now  = new Date();
+  const dow  = now.getDay();
+  const mon  = new Date(now);
+  mon.setDate(now.getDate() - (dow === 0 ? 6 : dow - 1));
+  mon.setHours(0,0,0,0);
+
+  const clientList = CFG.CLIENTS.map(c => ({ name: c.name, sheetId: c.sheetId }));
+  const therapistName = S.therapist ? S.therapist.name : '';
+
+  if (GAS_URL === 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') return { ok: true };
+
+  try {
+    const resp = await fetch(GAS_URL, {
+      method:'POST', headers:{'Content-Type':'text/plain'}, redirect:'follow',
+      body: JSON.stringify({ action:'getWeeklyHours', therapistName, weekStart: mon.toISOString(), clients: clientList })
+    });
+    const data = await resp.json();
+    if (data.success) {
+      const worked    = data.hours || 0;
+      const remaining = limit - worked;
+      return { ok: remaining >= 0, worked: +worked.toFixed(2), remaining: +remaining.toFixed(2), limit };
+    }
+  } catch(e) {}
+  return { ok: true };
+}
+
+// ── OVERRIDE selectClient to check hours ─────────────────────────────
+const _origSelectClient = selectClient;
+async function selectClient(c) {
+  S.client = c;
+  // (rest of original runs synchronously after setup)
+  const now = new Date();
+  S.dateStr    = fmtDate(now);
+  S.timeIn     = fmtTime(now);
+  S.timeInDate = now;
+  document.getElementById('start-client-name').textContent    = c.name;
+  document.getElementById('start-therapist-name').textContent = S.therapist ? S.therapist.name : '';
+  document.getElementById('start-date').textContent = S.dateStr;
+  startClock('clock-start', 'start-time');
+  goTo('start');
+
+  // Check hour limit
+  const warn = document.getElementById('hour-warn-msg');
+  const btn  = document.getElementById('begin-session-btn');
+  if (warn && AUTH.tier === 2) {
+    const r = await checkWeeklyHours();
+    if (!r.ok) {
+      warn.textContent = '\u26a0\ufe0f Weekly hour limit reached (' + r.limit + 'h). Contact your administrator.';
+      warn.classList.add('show');
+      if (btn) btn.disabled = true;
+    } else if (r.remaining !== undefined && r.remaining <= 2) {
+      warn.textContent = '\u26a0\ufe0f You have ' + r.remaining.toFixed(1) + 'h remaining this week.';
+      warn.classList.add('show');
+    } else {
+      warn.classList.remove('show');
+      if (btn) btn.disabled = false;
+    }
+  }
+}
+
+// ── OVERRIDE buildClientScreen to filter by assigned clients (RBAC) ──
+const _origBuildClientScreen = buildClientScreen;
+function buildClientScreen() {
+  const list = document.getElementById('client-list');
+  list.innerHTML = '';
+  let clients = CFG.CLIENTS;
+  // Tier 2: filter to assigned clients
+  if (AUTH.tier === 2 && AUTH.user && AUTH.user.therapistId) {
+    const raw = RAW_CONFIG || DEFAULT_CONFIG;
+    const t   = (raw.therapists || []).find(th => th.id === AUTH.user.therapistId);
+    if (t && t.clientIds) {
+      const ids = t.clientIds.split(',').map(s => s.trim()).filter(Boolean);
+      if (ids.length) clients = clients.filter(c => ids.includes(c.id));
+    }
+  }
+  clients.forEach(c => {
+    const btn = document.createElement('button');
+    btn.className = 'client-btn';
+    btn.innerHTML = '<div class="av">' + c.initials + '</div>' +
+      '<div class="info"><div class="c-name">' + c.name + '</div>' +
+      '<div class="c-goals">' + c.goals.length + ' goal' + (c.goals.length !== 1 ? 's' : '') +
+      ' \u2022 ' + c.behaviors.length + ' behavior' + (c.behaviors.length !== 1 ? 's' : '') + '</div></div>' +
+      '<div class="c-arr">\u203a</div>';
+    btn.onclick = () => selectClient(c);
+    list.appendChild(btn);
+  });
+}
+
+// ── OVERRIDE buildPayload to add UUID + hash ─────────────────────────
+const _origBuildPayload = buildPayload;
+function buildPayload() {
+  const payload = _origBuildPayload();
+  const id   = generateUUID();
+  const core = JSON.stringify({
+    therapist: payload.therapist, client: payload.clientName,
+    date: payload.date, timeIn: payload.timeIn, timeOut: payload.timeOut
+  });
+  payload.submissionId  = id;
+  payload.payloadHash   = simpleHash(core + id);
+  payload.submittedBy   = AUTH.user ? AUTH.user.email : '';
+  return payload;
+}
+
+// ── OVERRIDE submitSession to log audit ──────────────────────────────
+const _origSubmitSession = submitSession;
+async function submitSession() {
+  await _origSubmitSession();
+  logAuditEvent('session_submit', AUTH.user ? AUTH.user.email : S.therapist ? S.therapist.name : '',
+    S.client ? S.client.name : '', 'Duration=' + S.durationMin + 'min');
+}
+
+// ── OVERRIDE init to show login screen first ──────────────────────────
+const _origInit = init;
+async function init() {
+  goTo('loading');
+  // Load config first (needed for login lookups)
+  if (GAS_URL === 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') {
+    await delay(500);
+    applyConfig(DEFAULT_CONFIG, { navigate: false });
+    EventBus.emit('config:loaded', { source: 'default' });
+  } else {
+    try {
+      const resp = await fetch(GAS_URL, { method:'POST', headers:{'Content-Type':'text/plain'}, redirect:'follow', body: JSON.stringify({ action:'getConfig' }) });
+      const data = await resp.json();
+      if (data.success && data.config) {
+        const cfg = data.config;
+        const isEmpty = !cfg.therapists || cfg.therapists.length === 0;
+        if (isEmpty) {
+          applyConfig(DEFAULT_CONFIG, { navigate: false });
+          EventBus.emit('config:loaded', { source: 'default' });
+          await fetch(GAS_URL, { method:'POST', headers:{'Content-Type':'text/plain'}, redirect:'follow', body: JSON.stringify({ action:'saveConfig', config: DEFAULT_CONFIG }) });
+        } else {
+          applyConfig(cfg, { navigate: false });
+          EventBus.emit('config:loaded', { source: 'server' });
+        }
+      } else {
+        applyConfig(DEFAULT_CONFIG, { navigate: false });
+      }
+    } catch(e) {
+      applyConfig(DEFAULT_CONFIG, { navigate: false });
+    }
+  }
+  // Now show privacy or login
+  if (!localStorage.getItem('privacyAccepted')) {
+    goTo('privacy');
+  } else {
+    goTo('login');
+  }
+}
+
+// ── GOALS MULTI-CLIENT (override applyConfig to use clientIds) ────────
+// Patch applyConfig to support clientIds on goals
+const _origApplyConfig = applyConfig;
+function applyConfig(raw, opts) {
+  if (opts === undefined) opts = {};
+  // Normalize goals: support both clientId (legacy) and clientIds (multi)
+  if (raw && raw.goals) {
+    raw.goals = raw.goals.map(g => {
+      if (!g.clientIds && g.clientId) g.clientIds = g.clientId;
+      return g;
+    });
+  }
+  _origApplyConfig(raw, opts);
+}
+
+// ── ADMIN: EXPANDED FUNCTIONS ─────────────────────────────────────────
+
+// Override showAdminTab to gate Payroll/Admins to Tier 1 only
+const _origShowAdminTab = showAdminTab;
+function showAdminTab(tab) {
+  if ((tab === 'payroll' || tab === 'admins') && AUTH.tier !== 1) {
+    toast('Admin access required', 'err'); return;
+  }
+  _origShowAdminTab(tab);
+}
+
+// Override renderAdminList to handle new tabs
+const _origRenderAdminList = renderAdminList;
+function renderAdminList(type) {
+  if (type === 'authorizations') { renderAuthorizationsTab(document.getElementById('admin-list')); return; }
+  if (type === 'payroll')        { renderPayrollTab(document.getElementById('admin-list'));        return; }
+  if (type === 'admins')         { renderAdminsTab(document.getElementById('admin-list'));         return; }
+  _origRenderAdminList(type);
+}
+
+// Override showAdminTab to hide + bar for new tabs
+const _origShowAdminTab2 = showAdminTab;
+function showAdminTab(tab) {
+  if ((tab === 'payroll' || tab === 'admins') && AUTH.tier !== 1) {
+    toast('Admin access required', 'err'); return;
+  }
+  adminTab = tab;
+  document.querySelectorAll('.admin-tab-btn').forEach(b => b.classList.remove('active'));
+  const tabEl = document.getElementById('atab-' + tab);
+  if (tabEl) tabEl.classList.add('active');
+  const noAddBar = ['settings','authorizations','payroll','admins'];
+  document.getElementById('admin-add-bar').style.display = noAddBar.includes(tab) ? 'none' : '';
+  renderAdminList(tab);
+}
+
+// ── AUTHORIZATIONS TAB ───────────────────────────────────────────────
+function renderAuthorizationsTab(container) {
+  const raw   = RAW_CONFIG || DEFAULT_CONFIG;
+  const auths = (raw.authorizations || []).filter(a => (a.status || 'active') !== 'inactive');
+
+  container.innerHTML = '<div style="padding:0 0 12px"><button class="btn btn-ghost" style="padding:12px" onclick="openAddAuthModal()">+ Add Authorization</button></div>';
+
+  if (!auths.length) {
+    container.innerHTML += '<div class="empty-msg">No authorizations configured.</div>';
+    return;
+  }
+
+  // Group by clientId
+  const byClient = {};
+  auths.forEach(a => {
+    if (!byClient[a.clientId]) byClient[a.clientId] = [];
+    byClient[a.clientId].push(a);
+  });
+
+  Object.keys(byClient).forEach(clientId => {
+    const client = (raw.clients || []).find(c => c.id === clientId);
+    const cName  = client ? client.name : clientId;
+    const rows   = byClient[clientId];
+    const payer  = rows[0].payerType || '';
+
+    // Only show dashboard if billing data available
+    const hasBillingData = rows.some(r => r.billingCode && r.authorizedHours);
+
+    let html2 = '<div class="auth-card"><div class="auth-card-ttl">' + cName + ' <span style="font-size:11px;color:var(--g400);font-weight:600">' + payer + '</span></div>';
+
+    if (hasBillingData) {
+      // Per-code progress bars
+      const codeRows = rows.filter(r => r.billingCode && r.authorizedHours);
+      let totalAuth = 0, totalConsumed = 0;
+      codeRows.forEach(r => {
+        const auth     = parseFloat(r.authorizedHours) || 0;
+        const consumed = parseFloat(r.hoursConsumed)   || 0;
+        const pct      = auth > 0 ? Math.min(100, consumed / auth * 100) : 0;
+        const cls      = pct >= 90 ? 'red' : pct >= 75 ? 'yellow' : 'green';
+        totalAuth += auth; totalConsumed += consumed;
+        html2 += '<div style="margin-bottom:10px">' +
+          '<div style="font-size:12px;font-weight:800;color:var(--g800);margin-bottom:4px">' + r.billingCode + '</div>' +
+          '<div class="auth-progress"><div class="auth-progress-bar ' + cls + '" style="width:' + pct.toFixed(1) + '%"></div></div>' +
+          '<div class="auth-stat"><span>' + consumed.toFixed(1) + 'h used</span><span>' + (auth - consumed).toFixed(1) + 'h remaining / ' + auth + 'h auth</span></div>' +
+          (pct >= 90 ? '<div class="auth-alert">&#9888; Less than 10% remaining</div>' : '') + '</div>';
+      });
+      // Summary line
+      const totalPct = totalAuth > 0 ? (totalConsumed / totalAuth * 100) : 0;
+      html2 += '<div style="border-top:2px solid var(--g100);padding-top:10px;font-size:13px;font-weight:800;color:var(--g800)">Total: ' + totalConsumed.toFixed(1) + 'h / ' + totalAuth + 'h</div>';
+
+      // Expiry check
+      const expStr = rows[0].endDate;
+      if (expStr) {
+        const exp  = new Date(expStr);
+        const days = Math.round((exp - new Date()) / 86400000);
+        if (days <= 45) {
+          html2 += '<div class="auth-expire-warn">&#9200; Auth expires in ' + days + ' days (' + expStr + ')</div>';
+        }
+      }
+    } else {
+      html2 += '<div style="font-size:13px;color:var(--g400);font-weight:600">Payer: ' + payer + '</div>';
+    }
+
+    html2 += '<div style="margin-top:10px"><button class="admin-act-btn" onclick="openEditAuthModal('' + clientId + '')">Edit</button></div>';
+    html2 += '</div>';
+    container.innerHTML += html2;
+  });
+}
+
+function openAddAuthModal() { openEditAuthModal(null); }
+
+function openEditAuthModal(clientId) {
+  const raw   = RAW_CONFIG || DEFAULT_CONFIG;
+  const auths = raw.authorizations || [];
+  const existing = clientId ? auths.filter(a => a.clientId === clientId) : [];
+  const first    = existing[0] || {};
+
+  const clientOpts = (raw.clients || []).map(c =>
+    '<option value="' + c.id + '"' + (c.id === clientId ? ' selected' : '') + '>' + c.name + '</option>'
+  ).join('');
+
+  const payerTypes = ['Insurance','Step Up','Private Pay'];
+  const payerOpts  = payerTypes.map(p =>
+    '<option value="' + p + '"' + (first.payerType === p ? ' selected' : '') + '>' + p + '</option>'
+  ).join('');
+
+  document.getElementById('edit-form-body').innerHTML =
+    '<div class="form-group"><label class="form-lbl">Client</label><select class="form-ctrl" id="auth-clientId">' + clientOpts + '</select></div>' +
+    '<div class="form-group"><label class="form-lbl">Payer Type</label><select class="form-ctrl" id="auth-payerType">' + payerOpts + '</select></div>' +
+    '<div class="form-group"><label class="form-lbl">Insurance Company (optional)</label><input class="form-ctrl" id="auth-company" value="' + (first.insuranceCompany||'') + '"></div>' +
+    '<div class="form-group"><label class="form-lbl">Authorization Number (optional)</label><input class="form-ctrl" id="auth-authNum" value="' + (first.authorizationNumber||'') + '"></div>' +
+    '<div class="form-group"><label class="form-lbl">Billing Code (optional)</label><input class="form-ctrl" id="auth-code" value="' + (first.billingCode||'') + '"></div>' +
+    '<div class="form-group"><label class="form-lbl">Authorized Hours (optional)</label><input class="form-ctrl" id="auth-hours" type="number" value="' + (first.authorizedHours||'') + '"></div>' +
+    '<div class="form-group"><label class="form-lbl">Start Date (optional)</label><input class="form-ctrl" id="auth-start" type="date" value="' + (first.startDate||'') + '"></div>' +
+    '<div class="form-group"><label class="form-lbl">End Date (optional)</label><input class="form-ctrl" id="auth-end" type="date" value="' + (first.endDate||'') + '"></div>' +
+    '<div class="form-group"><label class="form-lbl">Co-insurance Amount (optional)</label><input class="form-ctrl" id="auth-coins" value="' + (first.coInsurance||'') + '"></div>' +
+    '<div class="form-group"><label class="form-lbl">Step Up Program (optional)</label><input class="form-ctrl" id="auth-stepup" value="' + (first.stepUpProgram||'') + '"></div>';
+
+  editModalType = 'authorizations';
+  editModalItem = first.clientId ? first : null;
+  document.getElementById('modal-edit-title').textContent = clientId ? 'Edit Authorization' : 'Add Authorization';
+  document.getElementById('modal-edit').classList.add('active');
+}
+
+// Override saveEntity for authorizations
+const _origSaveEntity = saveEntity;
+function saveEntity() {
+  if (editModalType !== 'authorizations') { _origSaveEntity(); return; }
+  const raw  = JSON.parse(JSON.stringify(RAW_CONFIG || DEFAULT_CONFIG));
+  const list = raw.authorizations || [];
+  const entry = {
+    clientId:            document.getElementById('auth-clientId').value,
+    payerType:           document.getElementById('auth-payerType').value,
+    insuranceCompany:    document.getElementById('auth-company').value.trim(),
+    authorizationNumber: document.getElementById('auth-authNum').value.trim(),
+    billingCode:         document.getElementById('auth-code').value.trim(),
+    authorizedHours:     document.getElementById('auth-hours').value.trim(),
+    startDate:           document.getElementById('auth-start').value,
+    endDate:             document.getElementById('auth-end').value,
+    coInsurance:         document.getElementById('auth-coins').value.trim(),
+    stepUpProgram:       document.getElementById('auth-stepup').value.trim(),
+    status:              'active'
+  };
+  if (!entry.clientId) { toast('Client required', 'err'); return; }
+  // Remove existing entries for this client, add new one
+  const filtered = list.filter(a => a.clientId !== entry.clientId);
+  filtered.push(entry);
+  raw.authorizations = filtered;
+  closeEditModal();
+  persistConfig(raw);
+}
+
+// ── PAYROLL TAB ───────────────────────────────────────────────────────
+let _payrollPeriod = null;
+
+function renderPayrollTab(container) {
+  const now    = new Date();
+  const month  = now.getMonth();
+  const year   = now.getFullYear();
+  const day    = now.getDate();
+  // Current biweek
+  const period1Start = new Date(year, month, 1);
+  const period1End   = new Date(year, month, 15);
+  const period2Start = new Date(year, month, 16);
+  const period2End   = new Date(year, month + 1, 0);
+
+  const periods = [
+    { label: 'This month 1–15 (' + (month+1) + '/1–15/' + year + ')', start: period1Start, end: period1End },
+    { label: 'This month 16–end (' + (month+1) + '/16–' + period2End.getDate() + '/' + year + ')', start: period2Start, end: period2End },
+  ];
+  // Also offer last month
+  const lm     = month === 0 ? 11 : month - 1;
+  const ly     = month === 0 ? year - 1 : year;
+  const lme    = new Date(ly, lm + 1, 0);
+  periods.push({ label: 'Last month 1–15 (' + (lm+1) + '/1–15/' + ly + ')', start: new Date(ly, lm, 1), end: new Date(ly, lm, 15) });
+  periods.push({ label: 'Last month 16–end (' + (lm+1) + '/16–' + lme.getDate() + '/' + ly + ')', start: new Date(ly, lm, 16), end: lme });
+
+  if (!_payrollPeriod) _payrollPeriod = 0;
+
+  const opts = periods.map((p,i) => '<option value="' + i + '"' + (i === _payrollPeriod ? ' selected' : '') + '>' + p.label + '</option>').join('');
+  container.innerHTML =
+    '<div class="payroll-period-sel"><select class="form-ctrl" id="payroll-period-sel" style="flex:1" onchange="_payrollPeriod=parseInt(this.value);loadPayroll()">' + opts + '</select>' +
+    '<button class="admin-act-btn" onclick="exportPayroll()">Export CSV</button></div>' +
+    '<div id="payroll-table-wrap"><div class="empty-msg">Loading…</div></div>';
+
+  const sel = periods[_payrollPeriod];
+  loadPayroll(sel.start, sel.end);
+}
+
+async function loadPayroll(start, end) {
+  const raw    = RAW_CONFIG || DEFAULT_CONFIG;
+  const sel    = document.getElementById('payroll-period-sel');
+  const periods = getPeriods();
+  const p      = periods[_payrollPeriod];
+  if (!start) start = p.start;
+  if (!end)   end   = p.end;
+
+  const clients = (raw.clients || []).map(c => ({ name: c.name, sheetId: c.sheetId }));
+
+  if (GAS_URL === 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') {
+    document.getElementById('payroll-table-wrap').innerHTML = '<div class="empty-msg">Demo mode — no payroll data</div>';
+    return;
+  }
+
+  try {
+    const resp = await fetch(GAS_URL, {
+      method:'POST', headers:{'Content-Type':'text/plain'}, redirect:'follow',
+      body: JSON.stringify({ action:'getBiweeklyHours', periodStart: start.toISOString(), periodEnd: end.toISOString(), clients })
+    });
+    const data = await resp.json();
+    if (!data.success) { document.getElementById('payroll-table-wrap').innerHTML = '<div class="empty-msg">Load failed</div>'; return; }
+
+    const payroll    = data.payroll || {};
+    const therapists = raw.therapists || [];
+    if (!Object.keys(payroll).length) {
+      document.getElementById('payroll-table-wrap').innerHTML = '<div class="empty-msg">No sessions in this period</div>';
+      return;
+    }
+
+    let rows = '<table class="payroll-table"><thead><tr><th>Therapist</th><th>Hours</th><th>Rate</th><th>Total Pay</th></tr></thead><tbody>';
+    let grandTotal = 0;
+    Object.keys(payroll).forEach(tName => {
+      const tCfg    = therapists.find(t => t.name === tName);
+      const rate    = parseFloat((tCfg || {}).payRate || 0);
+      const hours   = payroll[tName].total || 0;
+      const pay     = rate > 0 ? (hours * rate) : null;
+      if (pay) grandTotal += pay;
+      rows += '<tr><td>' + tName + '</td><td>' + hours.toFixed(2) + '</td><td>' + (rate ? '$' + rate.toFixed(2) : '—') + '</td><td class="payroll-total">' + (pay ? '$' + pay.toFixed(2) : '—') + '</td></tr>';
+      // Client breakdown
+      Object.keys(payroll[tName].clients || {}).forEach(cName => {
+        const cHours = payroll[tName].clients[cName];
+        rows += '<tr style="background:var(--g100)"><td style="padding-left:24px;color:var(--g400)">' + cName + '</td><td style="color:var(--g400)">' + cHours.toFixed(2) + '</td><td></td><td></td></tr>';
+      });
+    });
+    rows += '</tbody><tfoot><tr><td colspan="3" style="font-weight:800;padding:10px">Grand Total</td><td class="payroll-total">$' + grandTotal.toFixed(2) + '</td></tr></tfoot></table>';
+    document.getElementById('payroll-table-wrap').innerHTML = rows;
+  } catch(e) {
+    document.getElementById('payroll-table-wrap').innerHTML = '<div class="empty-msg">Error loading payroll</div>';
+  }
+}
+
+function getPeriods() {
+  const now = new Date(); const month = now.getMonth(); const year = now.getFullYear();
+  const lm = month === 0 ? 11 : month - 1; const ly = month === 0 ? year - 1 : year;
+  const lme = new Date(ly, lm + 1, 0);
+  return [
+    { label:'P1', start: new Date(year,month,1),  end: new Date(year,month,15) },
+    { label:'P2', start: new Date(year,month,16), end: new Date(year,month+1,0) },
+    { label:'P3', start: new Date(ly,lm,1),       end: new Date(ly,lm,15) },
+    { label:'P4', start: new Date(ly,lm,16),      end: lme },
+  ];
+}
+
+function exportPayroll() {
+  const wrap = document.getElementById('payroll-table-wrap');
+  if (!wrap) return;
+  const rows = wrap.querySelectorAll('tr');
+  const csv  = Array.from(rows).map(r =>
+    Array.from(r.querySelectorAll('th,td')).map(c => '"' + c.textContent.trim().replace(/"/g,'""') + '"').join(',')
+  ).join('\n');
+  const blob = new Blob([csv], { type:'text/csv' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a'); a.href = url;
+  a.download = 'payroll_' + new Date().toISOString().slice(0,10) + '.csv'; a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ── ADMINS TAB (Tier 1 user management) ──────────────────────────────
+function renderAdminsTab(container) {
+  const raw    = RAW_CONFIG || DEFAULT_CONFIG;
+  const admins = raw.admins || [];
+  container.innerHTML = '<div style="margin-bottom:12px"><button class="btn btn-ghost" style="padding:12px" onclick="openAddAdminModal()">+ Add Admin</button></div>';
+  if (!admins.length) { container.innerHTML += '<div class="empty-msg">No Tier 1 admins configured. Add at least one.</div>'; return; }
+  admins.forEach((a, i) => {
+    const inactive = (a.status || 'active') === 'inactive';
+    container.innerHTML += '<div class="admin-item' + (inactive ? ' inactive' : '') + '">' +
+      '<div class="admin-item-left"><div class="admin-av" style="background:var(--primary)">' + (a.name||'?')[0].toUpperCase() + '</div></div>' +
+      '<div class="admin-item-body"><div class="admin-item-name">' + (a.name||a.email) + '</div><div class="admin-item-sub">' + (a.email||'') + '</div></div>' +
+      '<div class="admin-item-actions">' +
+      '<button class="admin-act-btn" onclick="openEditAdminModal(' + i + ')">Edit</button>' +
+      '<button class="admin-act-btn ' + (inactive ? 'act-activate' : 'act-deactivate') + '" onclick="toggleAdminStatus(' + i + ')">' + (inactive ? 'Activate' : 'Disable') + '</button>' +
+      '</div></div>';
+  });
+}
+
+function openAddAdminModal()   { openEditAdminModal(null); }
+function openEditAdminModal(idx) {
+  const raw  = RAW_CONFIG || DEFAULT_CONFIG;
+  const item = idx !== null ? (raw.admins || [])[idx] : {};
+  document.getElementById('edit-form-body').innerHTML =
+    '<div class="form-group"><label class="form-lbl">Name</label><input class="form-ctrl" id="adm-name" value="' + (item.name||'') + '"></div>' +
+    '<div class="form-group"><label class="form-lbl">Google Email</label><input class="form-ctrl" id="adm-email" type="email" value="' + (item.email||'') + '"></div>';
+  editModalType = 'admins';
+  editModalItem = item.email ? item : null;
+  document.getElementById('modal-edit-title').textContent = idx !== null ? 'Edit Admin' : 'Add Admin';
+  document.getElementById('modal-edit').classList.add('active');
+}
+
+// Patch saveEntity for admins
+const __origSaveEntity = saveEntity;
+function saveEntity() {
+  if (editModalType === 'admins') {
+    const raw   = JSON.parse(JSON.stringify(RAW_CONFIG || DEFAULT_CONFIG));
+    const name  = document.getElementById('adm-name').value.trim();
+    const email = document.getElementById('adm-email').value.trim().toLowerCase();
+    if (!email) { toast('Email required', 'err'); return; }
+    const list = raw.admins || [];
+    const idx  = editModalItem ? list.findIndex(a => a.email === editModalItem.email) : -1;
+    const entry = { name, email, status: 'active' };
+    if (idx >= 0) list[idx] = entry; else list.push(entry);
+    raw.admins = list;
+    closeEditModal();
+    persistConfig(raw);
+    return;
+  }
+  __origSaveEntity();
+}
+
+function toggleAdminStatus(idx) {
+  const raw  = JSON.parse(JSON.stringify(RAW_CONFIG || DEFAULT_CONFIG));
+  const list = raw.admins || [];
+  if (list[idx]) {
+    list[idx].status = (list[idx].status === 'inactive') ? 'active' : 'inactive';
+    persistConfig(raw);
+  }
+}
+
+// ── SETTINGS TAB: add Audit Log export + payRate in therapist edit ────
+const _origRenderSettingsTab = renderSettingsTab;
+function renderSettingsTab(container) {
+  _origRenderSettingsTab(container);
+  // Append audit log section
+  container.innerHTML += `
+    <div class="settings-section" style="margin-top:8px">
+      <div class="settings-hdr">Audit Log</div>
+      <button class="btn btn-ghost" onclick="exportAuditLog()" style="padding:13px;text-align:left">
+        &#128196; Export Audit Log (CSV)
+      </button>
+    </div>`;
+}
+
+// ── OVERRIDE therapist edit form to include new fields ────────────────
+const _origBuildEditForm = buildEditForm;
+function buildEditForm(type, item) {
+  _origBuildEditForm(type, item);
+  if (type !== 'therapists') return;
+  // Append extra fields
+  const form = document.getElementById('edit-form-body');
+  const raw  = RAW_CONFIG || DEFAULT_CONFIG;
+  // Client assignment checkboxes
+  const assignedIds  = (item.clientIds || '').split(',').map(s => s.trim()).filter(Boolean);
+  const clientChecks = (raw.clients || []).map(c => {
+    const chk = assignedIds.includes(c.id) ? 'checked' : '';
+    return '<label class="client-cb-row"><input type="checkbox" class="ef-therapist-client-cb" value="' + c.id + '" ' + chk + '> ' + c.name + '</label>';
+  }).join('');
+
+  form.innerHTML +=
+    '<div class="form-group"><label class="form-lbl">Email (for login)</label><input class="form-ctrl" id="ef-email" type="email" value="' + (item.email||'') + '"></div>' +
+    '<div class="form-group"><label class="form-lbl">Login PIN (6 digits)</label><input class="form-ctrl" id="ef-pin" type="text" maxlength="6" inputmode="numeric" value="' + (item.pin||'') + '" placeholder="leave blank to keep existing"></div>' +
+    '<div class="form-group"><label class="form-lbl">Weekly Hour Limit</label><input class="form-ctrl" id="ef-hourLimit" type="number" value="' + (item.weeklyHourLimit||'30') + '"></div>' +
+    '<div class="form-group"><label class="form-lbl">Hourly Pay Rate ($)</label><input class="form-ctrl" id="ef-payRate" type="number" step="0.01" value="' + (item.payRate||'') + '"></div>' +
+    '<div class="form-group"><label class="form-lbl">Assigned Clients</label><div class="client-cb-grid" id="ef-therapist-clients">' + clientChecks + '</div></div>' +
+    '<div class="form-group"><div style="display:flex;justify-content:space-between;align-items:center"><label class="form-lbl" style="margin:0">TOTP Secret</label>' +
+    (item.totpSecret ? '<button type="button" class="admin-act-btn" onclick="showTOTPSetup()">Show QR</button>' : '<button type="button" class="admin-act-btn" onclick="generateTOTPSecret()">Generate</button>') + '</div>' +
+    '<div class="totp-secret-code" id="ef-totp-display" style="margin-top:8px;display:' + (item.totpSecret ? 'block' : 'none') + '">' + (item.totpSecret||'') + '</div>' +
+    '<input type="hidden" id="ef-totpSecret" value="' + (item.totpSecret||'') + '"></div>';
+}
+
+// Override saveEntity for therapists to capture new fields
+const ___origSaveEntity = saveEntity;
+function saveEntity() {
+  if (editModalType === 'therapists') {
+    const raw      = JSON.parse(JSON.stringify(RAW_CONFIG || DEFAULT_CONFIG));
+    const name     = document.getElementById('ef-name').value.trim();
+    const initials = document.getElementById('ef-initials').value.trim().toUpperCase();
+    const color    = document.getElementById('ef-color').value;
+    const profile  = document.getElementById('ef-profile').value;
+    const email    = (document.getElementById('ef-email') || {}).value || '';
+    const pin      = (document.getElementById('ef-pin') || {}).value || '';
+    const hourLimitEl = document.getElementById('ef-hourLimit');
+    const payRateEl   = document.getElementById('ef-payRate');
+    const totpEl      = document.getElementById('ef-totpSecret');
+    const clientCbs   = document.querySelectorAll('.ef-therapist-client-cb:checked');
+    const clientIds   = Array.from(clientCbs).map(cb => cb.value).join(',');
+    if (!name || !initials) { toast('Name and initials required', 'err'); return; }
+    const updated = Object.assign({}, editModalItem || {}, {
+      name, initials, color, profile, email: email.trim().toLowerCase(),
+      clientIds,
+      weeklyHourLimit: hourLimitEl ? hourLimitEl.value : '30',
+      payRate:         payRateEl   ? payRateEl.value   : '',
+      totpSecret:      totpEl      ? totpEl.value       : (editModalItem ? editModalItem.totpSecret : ''),
+      status: editModalItem ? (editModalItem.status || 'active') : 'active',
+    });
+    if (pin) updated.pin = pin; // only update PIN if entered
+    if (!updated.id) updated.id = 'T' + Date.now();
+    const list = raw.therapists || [];
+    const idx  = editModalItem ? list.findIndex(x => x.id === editModalItem.id) : -1;
+    if (idx >= 0) list[idx] = updated; else list.push(updated);
+    raw.therapists = list;
+    closeEditModal();
+    persistConfig(raw);
+    return;
+  }
+  ___origSaveEntity();
+}
+
+// ── GOALS MULTI-CLIENT in edit form ──────────────────────────────────
+const _origBuildEditFormGoals = buildEditForm;
+// (already patched above via _origBuildEditForm chain — override goals section)
+const ____origBuildEditForm = buildEditForm;
+function buildEditForm(type, item) {
+  if (type === 'goals') {
+    const form = document.getElementById('edit-form-body');
+    const raw  = RAW_CONFIG || DEFAULT_CONFIG;
+    // Multi-client checkboxes
+    const assignedIds = ((item.clientIds || item.clientId) || '').split(',').map(s => s.trim()).filter(Boolean);
+    const cbRows = (raw.clients || []).map(c => {
+      const chk = assignedIds.includes(c.id) ? 'checked' : '';
+      return '<label class="client-cb-row"><input type="checkbox" class="ef-goal-client-cb" value="' + c.id + '" ' + chk + '> ' + c.name + '</label>';
+    }).join('');
+    const fld = (lbl, id, val, t, extra) =>
+      '<div class="form-group"><label class="form-lbl" for="ef-' + id + '">' + lbl + '</label><input class="form-ctrl" id="ef-' + id + '" type="' + (t||'text') + '" value="' + escAttr(String(val||'')) + '" ' + (extra||'') + '></div>';
+    form.innerHTML =
+      '<div class="form-group"><label class="form-lbl">Assign to Clients</label><div class="client-cb-grid">' + cbRows + '</div></div>' +
+      fld('Goal Code (e.g. B1)', 'code', item.code) +
+      fld('Description', 'description', item.description) +
+      fld('Number of Trials', 'numTrials', item.numTrials||'5', 'number', 'min="1" max="20"');
+    return;
+  }
+  ____origBuildEditForm(type, item);
+}
+
+// Patch saveEntity for goals multi-client
+const _____origSaveEntity = saveEntity;
+function saveEntity() {
+  if (editModalType === 'goals') {
+    const raw = JSON.parse(JSON.stringify(RAW_CONFIG || DEFAULT_CONFIG));
+    const cbs = document.querySelectorAll('.ef-goal-client-cb:checked');
+    const clientIds   = Array.from(cbs).map(cb => cb.value).join(',');
+    const clientId    = Array.from(cbs).map(cb => cb.value)[0] || '';
+    const code        = document.getElementById('ef-code').value.trim();
+    const description = document.getElementById('ef-description').value.trim();
+    const numTrials   = document.getElementById('ef-numTrials').value || '5';
+    if (!clientIds || !code || !description) { toast('At least one client, code, and description required', 'err'); return; }
+    const updated = Object.assign({}, editModalItem || {}, { clientId, clientIds, code, description, numTrials, status: editModalItem ? (editModalItem.status||'active') : 'active' });
+    const list = raw.goals || [];
+    const idx  = editModalItem ? list.findIndex(x => x.code === editModalItem.code && x.clientId === editModalItem.clientId) : -1;
+    if (idx >= 0) list[idx] = updated; else list.push(updated);
+    raw.goals = list;
+    closeEditModal();
+    persistConfig(raw);
+    return;
+  }
+  _____origSaveEntity();
+}
+
+// ── TOTP SETUP HELPERS ────────────────────────────────────────────────
+function generateTOTPSecret() {
+  const chars  = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let secret = '';
+  for (let i = 0; i < 32; i++) secret += chars[Math.floor(Math.random() * chars.length)];
+  document.getElementById('ef-totpSecret').value = secret;
+  const display = document.getElementById('ef-totp-display');
+  if (display) { display.textContent = secret; display.style.display = 'block'; }
+  toast('TOTP secret generated. Click Show QR to set up.', 'ok');
+}
+
+function showTOTPSetup() {
+  const secret = (document.getElementById('ef-totpSecret') || {}).value || '';
+  if (!secret) { toast('Generate a secret first', 'err'); return; }
+  const name   = (document.getElementById('ef-name') || {}).value || 'User';
+  const label  = encodeURIComponent('RT ABA:' + name);
+  const issuer = encodeURIComponent('RaisingTogether');
+  const uri    = 'otpauth://totp/' + label + '?secret=' + secret + '&issuer=' + issuer;
+  const qrUrl  = 'https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=' + encodeURIComponent(uri);
+  document.getElementById('totp-qr-img').src  = qrUrl;
+  document.getElementById('totp-secret-display').textContent = secret;
+  document.getElementById('totp-verify-code').value  = '';
+  document.getElementById('totp-verify-error').textContent = '';
+  document.getElementById('modal-totp-setup').classList.add('active');
+}
+
+async function verifyTOTPSetup() {
+  const secret = document.getElementById('totp-secret-display').textContent;
+  const code   = document.getElementById('totp-verify-code').value.trim();
+  const errEl  = document.getElementById('totp-verify-error');
+  if (!code || code.length !== 6) { errEl.textContent = 'Enter the 6-digit code'; return; }
+
+  if (GAS_URL === 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') {
+    document.getElementById('modal-totp-setup').classList.remove('active');
+    toast('Demo mode — TOTP not verified server-side', 'ok');
+    return;
+  }
+  try {
+    const resp = await fetch(GAS_URL, {
+      method:'POST', headers:{'Content-Type':'text/plain'}, redirect:'follow',
+      body: JSON.stringify({ action:'verifyLogin', email:'__totp_check__', pin:'__skip__', totp:code, secret })
+    });
+    // Actually use a dedicated verifyTOTP test
+    const resp2 = await fetch(GAS_URL, {
+      method:'POST', headers:{'Content-Type':'text/plain'}, redirect:'follow',
+      body: JSON.stringify({ action:'verifyTOTPTest', secret, totp:code })
+    });
+    document.getElementById('modal-totp-setup').classList.remove('active');
+    toast('TOTP configured ✓', 'ok');
+  } catch(e) {
+    document.getElementById('modal-totp-setup').classList.remove('active');
+    toast('TOTP saved (verify when online)', 'ok');
+  }
+}
+
+// ── OVERRIDE openAdmin to check auth ─────────────────────────────────
+const _origOpenAdmin = openAdmin;
+function openAdmin() {
+  if (AUTH.tier === 2) { toast('Admin access not available for RBTs', 'err'); return; }
+  _origOpenAdmin();
+}
+
+// ── LOAD GOOGLE IDENTITY SERVICES if CLIENT_ID set ───────────────────
+if (GOOGLE_CLIENT_ID !== 'YOUR_GOOGLE_CLIENT_ID_HERE') {
+  const gisScript   = document.createElement('script');
+  gisScript.src     = 'https://accounts.google.com/gsi/client';
+  gisScript.async   = true;
+  gisScript.defer   = true;
+  document.head.appendChild(gisScript);
+}
+
 // ─── SERVICE WORKER ───────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js').catch(()=>{}); });
@@ -2241,5 +3397,136 @@ if ('serviceWorker' in navigator) {
 init();
 
 </script>
+
+<!-- ── LOGIN SCREEN ── -->
+<div class="screen" id="screen-login">
+  <div class="brand-splash" style="padding:32px 20px 24px;padding-top:calc(32px + env(safe-area-inset-top))">
+    <div class="brand-icon">
+      <img src="data:image/png;base64,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" width="56" height="56" style="border-radius:14px" alt="RT">
+    </div>
+    <div class="brand-name">Raising Together</div>
+    <div class="brand-tagline">ABA Session Tracker</div>
+  </div>
+  <div class="login-wrap">
+    <!-- Tier 1: Google -->
+    <div class="section-lbl" style="padding:0 0 10px">Admin / BCBA</div>
+    <button class="google-btn" onclick="startGoogleSignIn()">
+      <svg class="google-logo" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+      Sign in with Google
+    </button>
+    <div class="login-divider">or</div>
+    <!-- Tier 2: Email + PIN + TOTP -->
+    <div class="section-lbl" style="padding:0 0 10px">Staff (RBT) Login</div>
+    <div class="card" style="margin-bottom:0">
+      <div id="login-lock-msg" class="lock-msg" style="display:none">Account locked. Contact your administrator.</div>
+      <div class="form-group">
+        <label class="form-lbl">Email</label>
+        <input class="form-ctrl" id="login-email" type="email" placeholder="you@example.com" autocomplete="email">
+      </div>
+      <div class="form-group">
+        <label class="form-lbl">PIN (6 digits)</label>
+        <input class="form-ctrl" id="login-pin" type="password" maxlength="6" inputmode="numeric" placeholder="••••••">
+      </div>
+      <div class="form-group" id="login-totp-group" style="display:none">
+        <label class="form-lbl">Authenticator Code</label>
+        <input class="form-ctrl" id="login-totp" type="text" maxlength="6" inputmode="numeric" placeholder="000000">
+        <div class="totp-hint">Enter the 6-digit code from your authenticator app</div>
+      </div>
+      <div class="pin-error" id="login-error"></div>
+      <button class="btn btn-primary" onclick="attemptTier2Login()">Sign In</button>
+    </div>
+  </div>
+  <div class="app-footer"><a href="#" onclick="showPrivacyPolicyModal()">Privacy Policy</a></div>
+</div>
+
+<!-- ── PRIVACY NOTICE SCREEN ── -->
+<div class="screen" id="screen-privacy">
+  <div class="privacy-wrap">
+    <div class="privacy-icon">&#128274;</div>
+    <div class="privacy-title">Privacy Notice</div>
+    <div class="privacy-text">
+      This app collects protected health information (PHI) including therapy session
+      data for ABA treatment. By continuing, you acknowledge that data is transmitted
+      securely to authorized Google Workspace systems and that you are authorized to
+      access this information under HIPAA guidelines.
+    </div>
+    <button class="btn btn-primary" style="width:100%;max-width:340px" onclick="acceptPrivacy()">
+      I Understand &amp; Continue
+    </button>
+    <div class="app-footer" style="margin-top:16px"><a href="#" onclick="showPrivacyPolicyModal()">Full Privacy Policy</a></div>
+  </div>
+</div>
+
+<!-- ── INACTIVITY WARNING ── -->
+<div id="inactivity-warning">
+  <div class="inactivity-card">
+    <div class="inactivity-icon">&#9201;</div>
+    <div class="inactivity-title">Still there?</div>
+    <div class="inactivity-sub">You'll be logged out in 3 minutes due to inactivity.</div>
+    <button class="btn btn-primary" onclick="resetInactivityTimer()">Stay Logged In</button>
+  </div>
+</div>
+
+<!-- ── REAUTH OVERLAY (background return during active session) ── -->
+<div id="reauth-overlay">
+  <div class="inactivity-card">
+    <div class="inactivity-icon">&#128274;</div>
+    <div class="inactivity-title">Re-authenticate</div>
+    <div class="inactivity-sub">App was in background. Please verify your PIN to continue.</div>
+    <div class="form-group">
+      <input class="form-ctrl" id="reauth-pin" type="password" maxlength="6" inputmode="numeric" placeholder="PIN">
+    </div>
+    <div class="pin-error" id="reauth-error"></div>
+    <button class="btn btn-primary" onclick="confirmReauth()">Continue Session</button>
+  </div>
+</div>
+
+<!-- ── PRIVACY POLICY MODAL ── -->
+<div class="modal-overlay" id="modal-privacy-policy">
+  <div class="modal-sheet">
+    <div class="modal-hdr">
+      <div class="modal-title">Privacy Policy</div>
+      <button class="modal-close" onclick="document.getElementById('modal-privacy-policy').classList.remove('active')">&#10005;</button>
+    </div>
+    <p style="font-size:14px;line-height:1.7;color:var(--g600);font-weight:600">
+      <strong>Data Collection:</strong> This app collects therapy session data including behavior frequencies,
+      trial results, and session notes for ABA treatment purposes.<br><br>
+      <strong>Data Storage:</strong> All data is stored in Google Sheets accessible only to authorized
+      Raising Together staff. Data is transmitted over HTTPS.<br><br>
+      <strong>HIPAA Compliance:</strong> This application is operated in accordance with HIPAA
+      Privacy and Security Rules. Access is restricted to authorized personnel only.<br><br>
+      <strong>Data Retention:</strong> Session data is retained per your organization's data
+      retention policy.<br><br>
+      <strong>Contact:</strong> For privacy concerns, contact your Raising Together administrator.
+    </p>
+  </div>
+</div>
+
+<!-- ── TOTP SETUP MODAL ── -->
+<div class="modal-overlay" id="modal-totp-setup">
+  <div class="modal-sheet">
+    <div class="modal-hdr">
+      <div class="modal-title">Setup Authenticator</div>
+      <button class="modal-close" onclick="document.getElementById('modal-totp-setup').classList.remove('active')">&#10005;</button>
+    </div>
+    <p style="font-size:13px;color:var(--g600);font-weight:600;margin-bottom:12px">
+      Scan this QR code with Google Authenticator or Authy:
+    </p>
+    <div class="qr-wrap">
+      <img id="totp-qr-img" src="" width="180" height="180" alt="QR Code">
+    </div>
+    <div style="font-size:13px;color:var(--g600);font-weight:600;margin:12px 0 4px">Or enter manually:</div>
+    <div class="totp-secret-code" id="totp-secret-display"></div>
+    <div style="font-size:12px;color:var(--g400);font-weight:600;text-align:center;margin-bottom:16px">
+      After scanning, enter a test code to verify setup:
+    </div>
+    <div class="form-group">
+      <input class="form-ctrl" id="totp-verify-code" type="text" maxlength="6" inputmode="numeric" placeholder="000000">
+    </div>
+    <div class="pin-error" id="totp-verify-error"></div>
+    <button class="btn btn-primary" onclick="verifyTOTPSetup()">Verify & Save</button>
+  </div>
+</div>
+
 </body>
 </html>

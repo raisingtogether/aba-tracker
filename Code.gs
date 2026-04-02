@@ -1,26 +1,14 @@
 /**
- * Raising Together ABA Tracker — Google Apps Script Backend v2
- * Config-driven session tracking for ABA therapy.
+ * Raising Together ABA Tracker — Google Apps Script Backend v3
+ * HIPAA-compliance layer: audit log, TOTP verification, weekly hours,
+ * consumed hours, biweekly payroll, authorizations, admin tier mgmt.
  *
- * SETUP
- * ─────
- * 1. Create a Google Sheet called "RT Admin" (leave it blank — the app
- *    will create tabs automatically when you first save from the Admin panel).
- * 2. Copy its Sheet ID (the long string in the URL) into ADMIN_SHEET_ID below.
- * 3. Deploy -> New Deployment -> Web App
- *      Execute as : Me
- *      Who has access : Anyone
- * 4. Copy the Web App URL into index.html -> GAS_URL constant.
- *
- * ACTIONS (all via POST with Content-Type: text/plain)
- * ----------------------------------------------------
- *  { action: 'getConfig' }                       -> returns full config JSON
- *  { action: 'saveConfig', config: { ... } }     -> rewrites RT Admin tabs
- *  { action: 'saveSession', sheetId, ... }        -> appends session data
- *  (no action field)                              -> legacy saveSession
+ * CRITICAL: ES5 only. No ??, no ?., no template literals, no arrow
+ * functions, no spread, no let/const, no Array.from.
  */
 
 var ADMIN_SHEET_ID = '1VPBADMXvhOww_52O1n2CieTsQB6XCotLt6XdAQsq0ik';
+var AUDIT_SHEET_ID = ''; // Set to your RT Audit Log Sheet ID after creating it
 
 // ── ROUTER ────────────────────────────────────────────────────────────
 
@@ -31,9 +19,31 @@ function doPost(e) {
 
     if (data.action === 'getConfig') {
       result = { success: true, config: getConfig() };
+
     } else if (data.action === 'saveConfig') {
       saveConfig(data.config);
       result = { success: true };
+
+    } else if (data.action === 'verifyLogin') {
+      var loginResult = verifyLogin(data.email, data.pin, data.totp);
+      result = { success: true, valid: loginResult.valid, therapist: loginResult.therapist, reason: loginResult.reason };
+
+    } else if (data.action === 'logAudit') {
+      writeAuditLog(data.timestamp, data.userId, data.auditAction, data.clientName, data.details);
+      result = { success: true };
+
+    } else if (data.action === 'getWeeklyHours') {
+      var hours = getWeeklyHours(data.therapistName, data.weekStart, data.clients);
+      result = { success: true, hours: hours };
+
+    } else if (data.action === 'getConsumedHours') {
+      var consumed = getConsumedHours(data.billingCode, data.sheetId);
+      result = { success: true, consumed: consumed };
+
+    } else if (data.action === 'getBiweeklyHours') {
+      var payroll = getBiweeklyHours(data.periodStart, data.periodEnd, data.clients);
+      result = { success: true, payroll: payroll };
+
     } else {
       processSession(data);
       result = { success: true };
@@ -52,8 +62,296 @@ function doPost(e) {
 
 function doGet() {
   return ContentService
-    .createTextOutput(JSON.stringify({ status: 'RT ABA Tracker v2 - online' }))
+    .createTextOutput(JSON.stringify({ status: 'RT ABA Tracker v3 - online' }))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+
+// ── AUTH: TIER 2 LOGIN VERIFICATION ───────────────────────────────────
+
+/**
+ * Verify RBT login: email + 6-digit PIN + TOTP code.
+ * Looks up therapist by email in the Therapists sheet.
+ */
+function verifyLogin(email, pin, totp) {
+  if (!email || !pin) {
+    return { valid: false, reason: 'Missing credentials' };
+  }
+
+  var ss = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var therapists = sheetToObjects(ss, 'Therapists');
+  var therapist = null;
+
+  for (var i = 0; i < therapists.length; i++) {
+    var t = therapists[i];
+    if (String(t.email || '').toLowerCase().trim() === String(email).toLowerCase().trim()) {
+      therapist = t;
+      break;
+    }
+  }
+
+  if (!therapist) {
+    return { valid: false, reason: 'Account not found' };
+  }
+
+  if ((therapist.status || 'active') === 'inactive') {
+    return { valid: false, reason: 'Account is inactive' };
+  }
+
+  // Verify 6-digit PIN
+  if (String(therapist.pin || '') !== String(pin)) {
+    return { valid: false, reason: 'Incorrect PIN' };
+  }
+
+  // Verify TOTP if secret is configured
+  var secret = String(therapist.totpSecret || '').trim();
+  if (secret) {
+    if (!totp) return { valid: false, reason: 'Authenticator code required' };
+    if (!verifyTOTP(secret, String(totp).trim())) {
+      return { valid: false, reason: 'Invalid authenticator code' };
+    }
+  }
+
+  return {
+    valid: true,
+    therapist: {
+      id:               therapist.id,
+      name:             therapist.name,
+      initials:         therapist.initials,
+      color:            therapist.color,
+      profile:          therapist.profile,
+      email:            therapist.email,
+      clientIds:        therapist.clientIds || '',
+      weeklyHourLimit:  therapist.weeklyHourLimit || '30',
+      payRate:          therapist.payRate || ''
+    }
+  };
+}
+
+
+// ── TOTP VERIFICATION ─────────────────────────────────────────────────
+
+function verifyTOTP(secret, token) {
+  var key = base32Decode(secret);
+  var counter = Math.floor(Date.now() / 1000 / 30);
+  for (var offset = -1; offset <= 1; offset++) {
+    if (generateTOTP(key, counter + offset) === token) return true;
+  }
+  return false;
+}
+
+function generateTOTP(key, counter) {
+  var msg = counterToBytes(counter);
+  var hash = Utilities.computeHmacSignature(
+    Utilities.MacAlgorithm.HMAC_SHA_1, msg, key
+  );
+  var offset = hash[19] & 0xf;
+  var code = ((hash[offset] & 0x7f) << 24) |
+             ((hash[offset + 1] & 0xff) << 16) |
+             ((hash[offset + 2] & 0xff) << 8) |
+              (hash[offset + 3] & 0xff);
+  code = code % 1000000;
+  var str = String(code);
+  while (str.length < 6) str = '0' + str;
+  return str;
+}
+
+function counterToBytes(counter) {
+  var bytes = [0, 0, 0, 0, 0, 0, 0, 0];
+  for (var i = 7; i >= 0; i--) {
+    bytes[i] = counter & 0xff;
+    counter = Math.floor(counter / 256);
+  }
+  return bytes;
+}
+
+function base32Decode(encoded) {
+  var alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  var bits = 0;
+  var value = 0;
+  var output = [];
+  var str = encoded.replace(/=+$/, '').toUpperCase();
+  for (var i = 0; i < str.length; i++) {
+    var idx = alphabet.indexOf(str[i]);
+    if (idx === -1) continue;
+    value = (value << 5) | idx;
+    bits += 5;
+    if (bits >= 8) {
+      bits -= 8;
+      output.push((value >>> bits) & 0xff);
+    }
+  }
+  return output;
+}
+
+
+// ── AUDIT LOG ─────────────────────────────────────────────────────────
+
+function writeAuditLog(timestamp, userId, action, clientName, details) {
+  if (!AUDIT_SHEET_ID) return;
+  try {
+    var ss = SpreadsheetApp.openById(AUDIT_SHEET_ID);
+    var sheet = getOrCreateSheet(ss, 'Audit Log', [
+      'Timestamp', 'User', 'Action', 'Client', 'Details'
+    ]);
+    sheet.appendRow([
+      timestamp  || new Date().toISOString(),
+      userId     || '',
+      action     || '',
+      clientName || '',
+      details    || ''
+    ]);
+  } catch (e) {
+    // Don't let audit failures break other operations
+  }
+}
+
+
+// ── WEEKLY HOURS ──────────────────────────────────────────────────────
+
+/**
+ * Sum hours worked by therapistName across all client sheets
+ * within [weekStart, weekStart+7d).
+ * clients: array of { name, sheetId }
+ */
+function getWeeklyHours(therapistName, weekStart, clients) {
+  if (!clients || !clients.length) return 0;
+
+  var weekStartDate = new Date(weekStart);
+  var weekEndDate   = new Date(weekStartDate.getTime());
+  weekEndDate.setDate(weekEndDate.getDate() + 7);
+
+  var totalMin = 0;
+
+  for (var ci = 0; ci < clients.length; ci++) {
+    var client = clients[ci];
+    if (!client.sheetId) continue;
+    try {
+      var ss    = SpreadsheetApp.openById(client.sheetId);
+      var sheet = ss.getSheetByName('Time In Time Out');
+      if (!sheet) continue;
+      var rows = sheet.getDataRange().getValues();
+      if (rows.length < 2) continue;
+
+      var headers = rows[0];
+      var dateCol = -1, therapistCol = -1, durationCol = -1;
+      for (var hi = 0; hi < headers.length; hi++) {
+        var h = String(headers[hi]).trim().toLowerCase();
+        if (h === 'date')           dateCol      = hi;
+        if (h === 'therapist')      therapistCol = hi;
+        if (h === 'duration (min)') durationCol  = hi;
+      }
+      if (dateCol < 0 || therapistCol < 0 || durationCol < 0) continue;
+
+      for (var ri = 1; ri < rows.length; ri++) {
+        var row = rows[ri];
+        var rowTherapist = String(row[therapistCol] || '').trim();
+        if (rowTherapist !== therapistName) continue;
+        var rowDate = new Date(row[dateCol]);
+        if (rowDate >= weekStartDate && rowDate < weekEndDate) {
+          totalMin += parseFloat(row[durationCol]) || 0;
+        }
+      }
+    } catch (e) {
+      // skip inaccessible client sheet
+    }
+  }
+
+  return totalMin / 60;
+}
+
+
+// ── CONSUMED HOURS PER BILLING CODE ───────────────────────────────────
+
+/**
+ * Sum minutes billed under billingCode in the given client sheet.
+ * Returns hours (float).
+ */
+function getConsumedHours(billingCode, sheetId) {
+  if (!sheetId || !billingCode) return 0;
+  try {
+    var ss    = SpreadsheetApp.openById(sheetId);
+    var sheet = ss.getSheetByName('Time In Time Out');
+    if (!sheet) return 0;
+    var rows = sheet.getDataRange().getValues();
+    if (rows.length < 2) return 0;
+
+    var headers = rows[0];
+    var billingCol = -1, durationCol = -1;
+    for (var hi = 0; hi < headers.length; hi++) {
+      var h = String(headers[hi]).trim().toLowerCase();
+      if (h === 'billing code')   billingCol  = hi;
+      if (h === 'duration (min)') durationCol = hi;
+    }
+    if (billingCol < 0 || durationCol < 0) return 0;
+
+    var totalMin = 0;
+    for (var ri = 1; ri < rows.length; ri++) {
+      var row     = rows[ri];
+      var rowCode = String(row[billingCol] || '').trim();
+      if (rowCode === billingCode) {
+        totalMin += parseFloat(row[durationCol]) || 0;
+      }
+    }
+    return totalMin / 60;
+  } catch (e) {
+    return 0;
+  }
+}
+
+
+// ── BIWEEKLY PAYROLL ──────────────────────────────────────────────────
+
+/**
+ * Aggregate hours per therapist per client in [periodStart, periodEnd] inclusive.
+ * Returns { therapistName: { total: h, clients: { clientName: h } } }
+ */
+function getBiweeklyHours(periodStart, periodEnd, clients) {
+  if (!clients || !clients.length) return {};
+
+  var startDate = new Date(periodStart);
+  var endDate   = new Date(periodEnd);
+  endDate.setDate(endDate.getDate() + 1); // make end inclusive
+
+  var result = {};
+
+  for (var ci = 0; ci < clients.length; ci++) {
+    var client = clients[ci];
+    if (!client.sheetId) continue;
+    try {
+      var ss    = SpreadsheetApp.openById(client.sheetId);
+      var sheet = ss.getSheetByName('Time In Time Out');
+      if (!sheet) continue;
+      var rows = sheet.getDataRange().getValues();
+      if (rows.length < 2) continue;
+
+      var headers = rows[0];
+      var dateCol = -1, therapistCol = -1, durationCol = -1;
+      for (var hi = 0; hi < headers.length; hi++) {
+        var h = String(headers[hi]).trim().toLowerCase();
+        if (h === 'date')           dateCol      = hi;
+        if (h === 'therapist')      therapistCol = hi;
+        if (h === 'duration (min)') durationCol  = hi;
+      }
+      if (dateCol < 0 || therapistCol < 0 || durationCol < 0) continue;
+
+      for (var ri = 1; ri < rows.length; ri++) {
+        var row     = rows[ri];
+        var rowDate = new Date(row[dateCol]);
+        if (rowDate < startDate || rowDate >= endDate) continue;
+        var tName = String(row[therapistCol] || '').trim();
+        if (!tName) continue;
+        var mins = parseFloat(row[durationCol]) || 0;
+        if (!result[tName]) result[tName] = { total: 0, clients: {} };
+        result[tName].total += mins / 60;
+        if (!result[tName].clients[client.name]) result[tName].clients[client.name] = 0;
+        result[tName].clients[client.name] += mins / 60;
+      }
+    } catch (e) {
+      // skip
+    }
+  }
+  return result;
 }
 
 
@@ -62,11 +360,13 @@ function doGet() {
 function getConfig() {
   var ss = SpreadsheetApp.openById(ADMIN_SHEET_ID);
   return {
-    therapists: sheetToObjects(ss, 'Therapists'),
-    clients:    sheetToObjects(ss, 'Clients'),
-    behaviors:  sheetToObjects(ss, 'Behaviors'),
-    goals:      sheetToObjects(ss, 'Goals'),
-    billing:    sheetToObjects(ss, 'Billing')
+    therapists:     sheetToObjects(ss, 'Therapists'),
+    clients:        sheetToObjects(ss, 'Clients'),
+    behaviors:      sheetToObjects(ss, 'Behaviors'),
+    goals:          sheetToObjects(ss, 'Goals'),
+    billing:        sheetToObjects(ss, 'Billing'),
+    authorizations: sheetToObjects(ss, 'Authorizations'),
+    admins:         sheetToObjects(ss, 'Admins')
   };
 }
 
@@ -78,7 +378,8 @@ function saveConfig(cfg) {
 
   if (cfg.therapists !== undefined)
     objectsToSheet(ss, 'Therapists',
-      ['id', 'name', 'initials', 'color', 'profile', 'status'],
+      ['id', 'name', 'initials', 'color', 'profile', 'email', 'pin',
+       'totpSecret', 'clientIds', 'weeklyHourLimit', 'payRate', 'status'],
       cfg.therapists);
 
   if (cfg.clients !== undefined)
@@ -93,13 +394,25 @@ function saveConfig(cfg) {
 
   if (cfg.goals !== undefined)
     objectsToSheet(ss, 'Goals',
-      ['clientId', 'code', 'description', 'numTrials', 'status'],
+      ['clientId', 'clientIds', 'code', 'description', 'numTrials', 'status'],
       cfg.goals);
 
   if (cfg.billing !== undefined)
     objectsToSheet(ss, 'Billing',
       ['profile', 'sessionType', 'code'],
       cfg.billing);
+
+  if (cfg.authorizations !== undefined)
+    objectsToSheet(ss, 'Authorizations',
+      ['clientId', 'payerType', 'insuranceCompany', 'authorizationNumber',
+       'billingCode', 'authorizedHours', 'startDate', 'endDate',
+       'coInsurance', 'stepUpProgram', 'status'],
+      cfg.authorizations);
+
+  if (cfg.admins !== undefined)
+    objectsToSheet(ss, 'Admins',
+      ['email', 'name', 'status'],
+      cfg.admins);
 }
 
 
@@ -111,6 +424,14 @@ function processSession(d) {
   writeSessionLog(ss, d);
   writeTrialData(ss, d);
   writeABCData(ss, d);
+  // Also write audit entry if audit sheet configured
+  writeAuditLog(
+    new Date().toISOString(),
+    d.therapist || '',
+    'session_submit',
+    d.clientName || '',
+    'Session ' + (d.submissionId || '') + ' duration=' + (d.durationMin || 0) + 'min'
+  );
 }
 
 /**
@@ -140,28 +461,31 @@ function writeBehaviorData(ss, d) {
  * Time In Time Out tab.
  * Columns: Date | Billing Code | Type of Session | Time In | Time Out |
  *          Duration (min) | Location | Therapist |
- *          App Start Time | Actual Start Time | Late Start Reason | Notes
+ *          App Start Time | Actual Start Time | Late Start Reason |
+ *          Submission ID | Notes
  */
 function writeSessionLog(ss, d) {
   var sheet = getOrCreateSheet(ss, 'Time In Time Out', [
     'Date', 'Billing Code', 'Type of Session', 'Time In', 'Time Out',
     'Duration (min)', 'Location', 'Therapist',
-    'App Start Time', 'Actual Start Time', 'Late Start Reason', 'Notes'
+    'App Start Time', 'Actual Start Time', 'Late Start Reason',
+    'Submission ID', 'Notes'
   ]);
 
   sheet.appendRow([
     d.date,
-    d.billingCode || '',
-    d.sessionType || '',
-    d.timeIn      || '',
-    d.timeOut     || '',
-    d.durationMin || 0,
-    d.location    || '',
-    d.therapist   || '',
-    d.appStartTime    || '',
-    d.actualStartTime || '',
-    d.lateStartReason || '',
-    d.notes           || ''
+    d.billingCode         || '',
+    d.sessionType         || '',
+    d.timeIn              || '',
+    d.timeOut             || '',
+    d.durationMin         || 0,
+    d.location            || '',
+    d.therapist           || '',
+    d.appStartTime        || '',
+    d.actualStartTime     || '',
+    d.lateStartReason     || '',
+    d.submissionId        || '',
+    d.notes               || ''
   ]);
 }
 
@@ -206,7 +530,6 @@ function writeTrialData(ss, d) {
  * ABC Data tab.
  * Columns: Date | Initials | Setting | Antecedent | Behavior |
  *          Consequence | Hypothesized Function
- * One row per ABC incident.
  */
 function writeABCData(ss, d) {
   if (!d.abcData || !d.abcData.length) return;
@@ -220,11 +543,11 @@ function writeABCData(ss, d) {
     var inc = d.abcData[i];
     sheet.appendRow([
       d.date,
-      d.therapistInitials    || '',
-      inc.setting            || '',
-      inc.antecedent         || '',
-      inc.behavior           || '',
-      inc.consequence        || '',
+      d.therapistInitials      || '',
+      inc.setting              || '',
+      inc.antecedent           || '',
+      inc.behavior             || '',
+      inc.consequence          || '',
       inc.hypothesizedFunction || ''
     ]);
   }
@@ -292,13 +615,13 @@ function objectsToSheet(ss, tabName, headers, objects) {
   r.setFontColor('#FFFFFF');
   sheet.setFrozenRows(1);
 
-  if (objects.length > 0) {
+  if (objects && objects.length > 0) {
     var rows = [];
     for (var oi = 0; oi < objects.length; oi++) {
       var row = [];
       for (var hi = 0; hi < headers.length; hi++) {
         var val = objects[oi][headers[hi]];
-        row.push(val !== undefined ? val : '');
+        row.push((val !== undefined && val !== null) ? val : '');
       }
       rows.push(row);
     }

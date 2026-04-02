@@ -1,6 +1,6 @@
-# Raising Together ABA Tracker v2
+# Raising Together ABA Tracker v3
 
-Mobile-first PWA for ABA therapy data collection. Config-driven — manage clients, therapists, behaviors, and goals from the in-app admin panel without touching code.
+Mobile-first PWA for ABA therapy data collection with HIPAA compliance layer.
 
 ## Files
 | File | Purpose |
@@ -9,120 +9,209 @@ Mobile-first PWA for ABA therapy data collection. Config-driven — manage clien
 | `manifest.json` | PWA manifest for Add to Home Screen |
 | `sw.js` | Service worker (offline support) |
 | `Code.gs` | Google Apps Script backend |
-| `icon-192.png` / `icon-512.png` | App icons (add your own) |
 
 ---
 
 ## Setup Steps
 
-### 1. Add app icons
-Create `icon-192.png` (192×192) and `icon-512.png` (512×512) with the Raising Together logo.
-Free option: use [realfavicongenerator.net](https://realfavicongenerator.net).
+### 1. Create Google Sheets
 
-### 2. Create the RT Admin Google Sheet
-1. Go to [sheets.google.com](https://sheets.google.com) → create a new sheet called **RT Admin**
-2. Leave it blank — the app creates tabs automatically on first save
-3. Copy the Sheet ID from the URL (the long string between `/d/` and `/edit`)
+**RT Admin Sheet** (config + data)
+1. Create a new Google Sheet called **RT Admin**
+2. Leave it blank — the app populates tabs automatically
+3. Copy the Sheet ID from the URL
 
-### 3. Deploy the Google Apps Script
+**RT Audit Log Sheet** (HIPAA audit trail — separate from admin data)
+1. Create a second Google Sheet called **RT Audit Log**
+2. Leave it blank — the app creates the "Audit Log" tab automatically
+3. Copy the Sheet ID
+
+### 2. Deploy Google Apps Script
 1. Go to [script.google.com](https://script.google.com) → **New Project**
-2. Paste the contents of `Code.gs`
-3. Set `ADMIN_SHEET_ID` at the top to your RT Admin Sheet ID
-4. Click **Deploy → New Deployment**
-   - Type: **Web App**
+2. Paste contents of `Code.gs`
+3. Set the two constants at the top:
+   ```javascript
+   var ADMIN_SHEET_ID = 'your-rt-admin-sheet-id';
+   var AUDIT_SHEET_ID = 'your-rt-audit-log-sheet-id';
+   ```
+4. **Deploy → New Deployment → Web App**
    - Execute as: **Me**
    - Who has access: **Anyone**
-5. Click **Deploy** → copy the Web App URL
+5. Copy the Web App URL
 
-### 4. Configure `index.html`
-Open `index.html` and find these two constants near the top of the `<script>` tag:
+### 3. Configure `index.html`
+Find these constants near the top of the `<script>` tag:
 
 ```js
-const GAS_URL   = 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE';
-const ADMIN_PIN = '1234';   // change to your preferred PIN
-```
-
-Replace `GAS_URL` with the Web App URL from step 3.
-Optionally change `ADMIN_PIN` to a different 4-digit PIN.
-
-### 5. Host the frontend
-**Option A — GitHub Pages (free):**
-1. Push these files to a GitHub repo
-2. Settings → Pages → Source: main branch → `/` root
-3. Your URL: `https://yourusername.github.io/repo-name/`
-
-**Option B** — Netlify, Vercel, or any static host — just drag and drop the folder.
-
-### 6. Add to Home Screen (iPhone)
-1. Open the hosted URL in **Safari**
-2. Tap the **Share** button → **Add to Home Screen**
-3. Name it "RT ABA" → **Add**
-
----
-
-## App Flow
-```
-Select Therapist → Select Client → Start Session
-                                        ↓
-                              [Behaviors | Trials | ABC]
-                                        ↓
-                                   End Session
-                                  (submit → Sheets)
+const GAS_URL          = 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE';
+const GOOGLE_CLIENT_ID = 'YOUR_GOOGLE_CLIENT_ID_HERE';  // for Tier 1 auth
+const ADMIN_PIN_DEFAULT = '1234';  // legacy fallback
 ```
 
 ---
 
-## Admin Panel
+## Two-Tier Authentication
 
-Tap the **⚙ gear icon** on the therapist selection screen → enter your PIN (default: **1234**).
+### Tier 1 — Admin / BCBA (Google Sign-In)
+- Uses Google Identity Services OAuth
+- Email must be in the **Admins** tab of the admin panel
+- Full access: admin panel, payroll, audit log, all clients
 
-The admin panel has four tabs:
+**Google Cloud Console setup:**
+1. Go to [console.cloud.google.com](https://console.cloud.google.com)
+2. Create or select a project
+3. APIs & Services → Credentials → Create Credentials → **OAuth 2.0 Client ID**
+4. Application type: **Web application**
+5. Authorized JavaScript origins: add your hosted URL (e.g. `https://yourusername.github.io`)
+6. Copy the **Client ID** → paste into `GOOGLE_CLIENT_ID` in `index.html`
+7. Add authorized Tier 1 emails in Admin panel → **Admins** tab
 
-| Tab | What you can manage |
-|-----|-------------------|
-| **Therapists** | Name, initials, color |
-| **Clients** | Name, initials, Google Sheet ID |
-| **Behaviors** | Key, display label, color |
-| **Goals** | Client assignment, code, description, number of trials |
+Tatiana (`tatiana@raisingtogether.com`) is pre-configured as the initial admin in `DEFAULT_CONFIG`.
 
-Changes are saved immediately to the RT Admin Google Sheet and take effect on the next app load.
+### Tier 2 — RBT / Data Collection (Email + PIN + TOTP)
+- Email + 6-digit PIN (set by admin in Therapists tab)
+- Optional TOTP 2FA (Google Authenticator compatible)
+- Restricted access: data collection only — no admin panel, no payroll, no audit log
 
-To deactivate an entity (hide it without deleting), tap **Disable**. Tap **Activate** to re-enable it.
+**TOTP / Google Authenticator setup:**
+1. Admin panel → **Therapists** → Edit a therapist → click **Generate** (creates a random TOTP secret)
+2. Click **Show QR** → therapist scans with Google Authenticator or Authy
+3. Therapist enters the 6-digit test code to verify setup
+4. Click **Verify & Save** — secret is saved to the Therapists sheet
+
+---
+
+## Security Features
+
+| Feature | Details |
+|---------|---------|
+| Auto-logout | 30-minute inactivity timeout; 27-minute warning |
+| Failed login lockout | 5 failed attempts → 30-minute account lock |
+| PHI clear on logout | All session data, CFG, and non-essential localStorage cleared |
+| Background re-auth | App in background >5 min while session active → PIN prompt on return |
+| Privacy notice | Shown on first login; user must accept before proceeding |
+
+---
+
+## Audit Log
+
+Every significant action writes to the **RT Audit Log** Google Sheet:
+
+| Column | Description |
+|--------|-------------|
+| Timestamp | ISO 8601 UTC |
+| User | Email or name |
+| Action | `login`, `logout`, `session_submit`, `failed_login`, `account_locked`, `admin_config_change`, `reauth_success` |
+| Client | Client name (if applicable) |
+| Details | Free-text context |
+
+Actions are also buffered in `localStorage` (last 1000 entries).
+
+**Export:** Admin panel → Settings → **Export Audit Log (CSV)**
+
+---
+
+## Role-Based Access Control
+
+| Feature | Tier 1 (Admin) | Tier 2 (RBT) |
+|---------|:--------------:|:------------:|
+| Admin panel | ✓ | ✗ |
+| All clients | ✓ | Assigned only |
+| Payroll tab | ✓ | ✗ |
+| Audit log export | ✓ | ✗ |
+| Data collection | ✓ | ✓ |
+| Weekly hour limit | Exempt | ✓ (default 30h) |
+
+**Assign clients to therapists:** Admin panel → Therapists → Edit → Assigned Clients checkboxes
+
+---
+
+## RBT Weekly Hour Limit
+
+- Default: **30 hours/week** (Mon–Sun)
+- Configurable per therapist in Admin panel → Therapists → Edit → Weekly Hour Limit
+- Hours are read from the **Time In Time Out** tab across all client sheets
+- **Warning:** shown when ≤2 hours remain
+- **Block:** session cannot start when limit is reached; message says "Contact your administrator"
+
+---
+
+## Authorization Tracking
+
+Admin panel → **Auth** tab. All fields optional except Client and Payer Type.
+
+**Per billing code tracking:** Each code (e.g. 97153, 97155) has its own separate pool of authorized hours. Consuming 97153 hours does not reduce the 97155 balance.
+
+Dashboard shows (when data is available):
+- Per-code progress bar: green (<75%), yellow (75–90%), red (>90%)
+- Hours used / remaining / authorized per code
+- Total summary across all codes
+- ⚠️ Alert when <10% remaining on any code
+- ⏰ Alert when authorization expires within 45 days
+
+Payer types: **Insurance**, **Step Up**, **Private Pay**
+
+---
+
+## Biweekly Payroll (Admin Only)
+
+Admin panel → **Payroll** tab (Tier 1 only).
+
+- Select pay period: 1st–15th or 16th–end of current and previous month
+- Shows each therapist's hours, hourly rate, and calculated pay
+- Breakdown by client
+- **Export CSV** button
+- Set hourly rate: Admin panel → Therapists → Edit → Hourly Pay Rate
+
+---
+
+## Goals: Multi-Client Assignment
+
+Goals can now be assigned to multiple clients simultaneously (same as behaviors). In Admin panel → Goals → Edit, select one or more clients using checkboxes. A goal like `G11` can be active for Camila AND Dylan at the same time.
 
 ---
 
 ## Google Sheets Architecture
 
-### RT Admin Sheet (one shared sheet)
+### RT Admin Sheet (shared config)
 | Tab | Columns |
 |-----|---------|
-| Therapists | id, name, initials, color, status |
+| Therapists | id, name, initials, color, profile, email, pin, totpSecret, clientIds, weeklyHourLimit, payRate, status |
 | Clients | id, name, initials, sheetId, status |
-| Behaviors | key, label, icon, color, status |
-| Goals | clientId, code, description, numTrials, status |
+| Behaviors | key, label, icon, color, clientIds, status |
+| Goals | clientId, clientIds, code, description, numTrials, status |
+| Billing | profile, sessionType, code |
+| Authorizations | clientId, payerType, insuranceCompany, authorizationNumber, billingCode, authorizedHours, startDate, endDate, coInsurance, stepUpProgram, status |
+| Admins | email, name, status |
 
-### Per-client Sheets (one per client)
+### RT Audit Log Sheet (separate — HIPAA audit trail)
+| Tab | Columns |
+|-----|---------|
+| Audit Log | Timestamp, User, Action, Client, Details |
+
+### Per-Client Sheets (one per client)
 | Tab | Purpose |
 |-----|---------|
-| Session Log | Date, type, times, billing code, notes |
-| Behavior Data | Dynamic columns based on active behaviors |
-| Trial Data | Dynamic columns based on active goals |
+| Time In Time Out | Date, Billing Code, Session Type, Times, Duration, Therapist, Submission ID, Notes |
+| Behavior Data | Dynamic columns per behavior |
+| Trial Data | Dynamic columns per goal |
 | ABC Data | Incident records |
-
-Tabs are created automatically on first session submit.
 
 ---
 
-## Billing Codes
-Auto-populated based on session type:
-- 1:1 with client → **97153**
-- Supervision → **97155**
-- Parent Training → **97156**
+## Session Data Integrity
+
+Each submitted session includes:
+- **Submission ID:** UUID v4 for traceability
+- **Payload Hash:** Simple checksum of core fields (therapist, client, date, times)
+- **Submitted By:** Email of the logged-in user
 
 ---
 
 ## Demo Mode
-If `GAS_URL` is left as `YOUR_GOOGLE_APPS_SCRIPT_URL_HERE`, the app runs in **demo mode**:
-- Uses built-in default config (5 clients, 4 therapists, 7 behaviors, all goals)
-- Session data is logged to the browser console instead of Google Sheets
-- Admin panel changes apply in memory only (reset on page reload)
+
+If `GAS_URL` is left as `YOUR_GOOGLE_APPS_SCRIPT_URL_HERE`:
+- Uses built-in default config
+- Login accepts any credentials matching local config (no server verification)
+- Session data logged to console instead of Google Sheets
+- Audit log stored in localStorage only
