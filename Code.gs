@@ -8,7 +8,7 @@
  */
 
 var ADMIN_SHEET_ID = '1VPBADMXvhOww_52O1n2CieTsQB6XCotLt6XdAQsq0ik';
-var AUDIT_SHEET_ID = ''; // Set to your RT Audit Log Sheet ID after creating it
+var AUDIT_SHEET_ID = '1tf98iS18vV08mQtPV9Vq6hQVkEp6Qg-ebUwHkeRlwaQ';
 
 // ── ROUTER ────────────────────────────────────────────────────────────
 
