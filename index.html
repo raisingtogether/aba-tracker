@@ -2830,20 +2830,6 @@ async function init() {
   }
 }
 
-// ── GOALS MULTI-CLIENT (override applyConfig to use clientIds) ────────
-// Patch applyConfig to support clientIds on goals
-const _origApplyConfig = applyConfig;
-function applyConfig(raw, opts) {
-  if (opts === undefined) opts = {};
-  // Normalize goals: support both clientId (legacy) and clientIds (multi)
-  if (raw && raw.goals) {
-    raw.goals = raw.goals.map(g => {
-      if (!g.clientIds && g.clientId) g.clientIds = g.clientId;
-      return g;
-    });
-  }
-  _origApplyConfig(raw, opts);
-}
 
 // ── ADMIN: EXPANDED FUNCTIONS ─────────────────────────────────────────
 
