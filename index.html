@@ -2522,27 +2522,54 @@ function acceptPrivacy() {
   goTo('login');
 }
 
-// ── GOOGLE SIGN-IN ────────────────────────────────────────────────────
-function initGoogleSignIn() {
-  if (GOOGLE_CLIENT_ID === 'YOUR_GOOGLE_CLIENT_ID_HERE') return;
-  google.accounts.id.initialize({
-    client_id: GOOGLE_CLIENT_ID,
-    callback:  handleGoogleCredential,
-    auto_select: false,
-    cancel_on_tap_outside: true,
-  });
-  const btnEl = document.getElementById('google-signin-btn');
-  if (btnEl) {
-    google.accounts.id.renderButton(btnEl, { theme: 'outline', size: 'large', width: 300, text: 'signin_with' });
+// ── GOOGLE SIGN-IN (OAuth redirect flow) ─────────────────────────────
+function startGoogleSignIn() {
+  if (GOOGLE_CLIENT_ID === 'YOUR_GOOGLE_CLIENT_ID_HERE') {
+    toast('Google Sign-In not configured', 'err'); return;
   }
+  const redirectUri = window.location.origin + window.location.pathname;
+  const url = 'https://accounts.google.com/o/oauth2/v2/auth' +
+    '?client_id='     + encodeURIComponent(GOOGLE_CLIENT_ID) +
+    '&redirect_uri='  + encodeURIComponent(redirectUri) +
+    '&response_type=token' +
+    '&scope='         + encodeURIComponent('email profile') +
+    '&prompt=select_account';
+  window.location.href = url;
 }
 
-function handleGoogleCredential(response) {
+async function handleGoogleOAuthReturn() {
+  // Parse access_token from URL hash after OAuth redirect
+  const hash = window.location.hash;
+  if (!hash || hash.indexOf('access_token=') < 0) return;
+
+  // Clean token from address bar immediately
+  history.replaceState(null, '', window.location.pathname);
+
+  const params = {};
+  hash.replace(/^#/, '').split('&').forEach(function(pair) {
+    const parts = pair.split('=');
+    params[decodeURIComponent(parts[0])] = decodeURIComponent(parts[1] || '');
+  });
+
+  const token = params['access_token'];
+  if (!token) { toast('Sign-in failed: no token', 'err'); return; }
+
+  // Show loading indicator
+  goTo('loading');
+  document.getElementById('loading-lbl').textContent = 'Signing in\u2026';
+
   try {
-    const parts   = response.credential.split('.');
-    const payload = JSON.parse(atob(parts[1].replace(/-/g,'+').replace(/_/g,'/')));
-    const email   = payload.email.toLowerCase();
-    const raw     = RAW_CONFIG || DEFAULT_CONFIG;
+    const resp = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (!resp.ok) { toast('Sign-in failed: could not verify token', 'err'); goTo('login'); return; }
+    const info  = await resp.json();
+    const email = String(info.email || '').toLowerCase();
+    const name  = info.name || email;
+
+    if (!email) { toast('Sign-in failed: no email returned', 'err'); goTo('login'); return; }
+
+    const raw = RAW_CONFIG || DEFAULT_CONFIG;
 
     // Look up in therapists table by email + role
     const therapists = raw.therapists || [];
@@ -2560,16 +2587,16 @@ function handleGoogleCredential(response) {
       if (role === 'collector') {
         toast('Collectors must use email + PIN login', 'err');
         logAuditEvent('failed_login', email, '', 'Collector attempted Google Sign-In');
-        return;
+        goTo('login'); return;
       }
       AUTH = {
         role: role,
         user: {
-          email:            email,
-          name:             payload.name || tMatch.name || email,
-          therapistId:      tMatch.id || null,
-          clientIds:        tMatch.clientIds || '',
-          weeklyHourLimit:  parseFloat(tMatch.weeklyHourLimit) || DEFAULT_WEEKLY_LIMIT
+          email:           email,
+          name:            name || tMatch.name || email,
+          therapistId:     tMatch.id || null,
+          clientIds:       tMatch.clientIds || '',
+          weeklyHourLimit: parseFloat(tMatch.weeklyHourLimit) || DEFAULT_WEEKLY_LIMIT
         }
       };
       logAuditEvent('login', email, '', 'Google Sign-In: ' + role);
@@ -2579,12 +2606,15 @@ function handleGoogleCredential(response) {
     }
 
     // Backward compat: check legacy admins table
-    const admins = (raw.admins || []).filter(a => (a.status || 'active') !== 'inactive');
-    const aMatch = admins.find(a => String(a.email || '').toLowerCase() === email);
+    const admins = (raw.admins || []).filter(function(a) { return (a.status || 'active') !== 'inactive'; });
+    var aMatch = null;
+    for (var j = 0; j < admins.length; j++) {
+      if (String(admins[j].email || '').toLowerCase() === email) { aMatch = admins[j]; break; }
+    }
     if (aMatch) {
       AUTH = {
         role: 'admin',
-        user: { email: email, name: payload.name || aMatch.name || email, therapistId: null, clientIds: '', weeklyHourLimit: 0 }
+        user: { email: email, name: name || aMatch.name || email, therapistId: null, clientIds: '', weeklyHourLimit: 0 }
       };
       logAuditEvent('login', email, '', 'Google Sign-In: admin (legacy)');
       clearLockout(email);
@@ -2592,10 +2622,12 @@ function handleGoogleCredential(response) {
       return;
     }
 
-    toast('Access denied — not in user list', 'err');
+    toast('Access denied \u2014 not in user list', 'err');
     logAuditEvent('failed_login', email, '', 'Email not in user list');
+    goTo('login');
   } catch(e) {
     toast('Sign-in failed: ' + e.message, 'err');
+    goTo('login');
   }
 }
 
@@ -2887,6 +2919,11 @@ async function init() {
     } catch(e) {
       applyConfig(DEFAULT_CONFIG, { navigate: false });
     }
+  }
+  // Check for OAuth redirect return (access_token in URL hash)
+  if (window.location.hash && window.location.hash.indexOf('access_token=') >= 0) {
+    await handleGoogleOAuthReturn();
+    return;
   }
   // Now show privacy or login
   if (!localStorage.getItem('privacyAccepted')) {
@@ -3454,15 +3491,6 @@ function openAdmin() {
   goTo('admin');
 }
 
-// ── LOAD GOOGLE IDENTITY SERVICES ────────────────────────────────────
-if (GOOGLE_CLIENT_ID !== 'YOUR_GOOGLE_CLIENT_ID_HERE') {
-  const gisScript = document.createElement('script');
-  gisScript.src   = 'https://accounts.google.com/gsi/client';
-  gisScript.async = true;
-  gisScript.onload = initGoogleSignIn;
-  document.head.appendChild(gisScript);
-}
-
 // ─── SERVICE WORKER ───────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js').catch(()=>{}); });
@@ -3486,7 +3514,15 @@ init();
   <div class="login-wrap">
     <!-- Google Sign-In: Admin / BCBA / Therapist -->
     <div class="section-lbl" style="padding:0 0 10px">Admin / BCBA / Therapist (Google)</div>
-    <div id="google-signin-btn" style="min-height:44px;display:flex;justify-content:center;margin-bottom:4px"></div>
+    <button class="google-btn" onclick="startGoogleSignIn()">
+      <svg width="18" height="18" viewBox="0 0 18 18" style="flex-shrink:0" aria-hidden="true">
+        <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615z"/>
+        <path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/>
+        <path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/>
+        <path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z"/>
+      </svg>
+      Sign in with Google
+    </button>
     <div class="login-divider">or</div>
     <!-- Collector: Email + PIN + TOTP -->
     <div class="section-lbl" style="padding:0 0 10px">Collector Login (no Workspace account)</div>
