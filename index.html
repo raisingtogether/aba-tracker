@@ -2571,11 +2571,21 @@ async function handleGoogleOAuthReturn() {
 
     const raw = RAW_CONFIG || DEFAULT_CONFIG;
 
+    // ── DEBUG ─────────────────────────────────────────────────────────
+    console.log('[Auth] Google returned email:', JSON.stringify(email));
+    console.log('[Auth] raw userinfo object:', info);
+    const _therapistEmails = (raw.therapists || []).map(function(t) { return { id: t.id, email: t.email, role: t.role, status: t.status }; });
+    const _adminEmails     = (raw.admins || []).map(function(a) { return { email: a.email, status: a.status }; });
+    console.log('[Auth] therapists list:', _therapistEmails);
+    console.log('[Auth] admins list:', _adminEmails);
+    // ─────────────────────────────────────────────────────────────────
+
     // Look up in therapists table by email + role
     const therapists = raw.therapists || [];
     var tMatch = null;
     for (var i = 0; i < therapists.length; i++) {
       var t = therapists[i];
+      console.log('[Auth] comparing therapist email', JSON.stringify(String(t.email || '').toLowerCase()), '===', JSON.stringify(email));
       if (String(t.email || '').toLowerCase() === email && (t.status || 'active') !== 'inactive') {
         tMatch = t;
         break;
