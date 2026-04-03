@@ -2538,21 +2538,17 @@ function startGoogleSignIn() {
 }
 
 async function handleGoogleOAuthReturn() {
-  // Parse access_token from URL hash after OAuth redirect
+  // Parse ALL hash params with URLSearchParams (handles any order, encoded values)
   const hash = window.location.hash;
-  if (!hash || hash.indexOf('access_token=') < 0) return;
+  if (!hash) return;
+  const params = new URLSearchParams(hash.replace(/^#/, ''));
+  const token  = params.get('access_token');
+  console.log('[Auth] URL hash keys:', Array.from(params.keys()));
+  console.log('[Auth] access_token present:', !!token);
+  if (!token) return;
 
   // Clean token from address bar immediately
   history.replaceState(null, '', window.location.pathname);
-
-  const params = {};
-  hash.replace(/^#/, '').split('&').forEach(function(pair) {
-    const parts = pair.split('=');
-    params[decodeURIComponent(parts[0])] = decodeURIComponent(parts[1] || '');
-  });
-
-  const token = params['access_token'];
-  if (!token) { toast('Sign-in failed: no token', 'err'); return; }
 
   // Show loading indicator
   goTo('loading');
@@ -2571,21 +2567,16 @@ async function handleGoogleOAuthReturn() {
 
     const raw = RAW_CONFIG || DEFAULT_CONFIG;
 
-    // ── DEBUG ─────────────────────────────────────────────────────────
-    console.log('[Auth] Google returned email:', JSON.stringify(email));
-    console.log('[Auth] raw userinfo object:', info);
-    const _therapistEmails = (raw.therapists || []).map(function(t) { return { id: t.id, email: t.email, role: t.role, status: t.status }; });
-    const _adminEmails     = (raw.admins || []).map(function(a) { return { email: a.email, status: a.status }; });
-    console.log('[Auth] therapists list:', _therapistEmails);
-    console.log('[Auth] admins list:', _adminEmails);
-    // ─────────────────────────────────────────────────────────────────
+    console.log('[Auth] Google email received:', JSON.stringify(email));
+    console.log('[Auth] therapists in config:', (raw.therapists || []).map(function(t) { return { email: t.email, role: t.role, status: t.status }; }));
+    console.log('[Auth] admins in config:', (raw.admins || []).map(function(a) { return { email: a.email, status: a.status }; }));
 
     // Look up in therapists table by email + role
     const therapists = raw.therapists || [];
     var tMatch = null;
     for (var i = 0; i < therapists.length; i++) {
       var t = therapists[i];
-      console.log('[Auth] comparing therapist email', JSON.stringify(String(t.email || '').toLowerCase()), '===', JSON.stringify(email));
+      console.log('[Auth] therapist compare:', JSON.stringify(String(t.email || '').toLowerCase()), 'vs', JSON.stringify(email), '->', String(t.email || '').toLowerCase() === email);
       if (String(t.email || '').toLowerCase() === email && (t.status || 'active') !== 'inactive') {
         tMatch = t;
         break;
