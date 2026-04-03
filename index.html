@@ -1127,10 +1127,10 @@ const ALL_CLIENT_IDS = 'C1,C2,C3,C4,C5';
 
 const DEFAULT_CONFIG = {
   therapists: [
-    { id:'T1', name:'Sandra',  initials:'SA', color:'#00A7C7', profile:'RBT',  status:'active' },
-    { id:'T2', name:'Janine',  initials:'JA', color:'#FF9701', profile:'RBT',  status:'active' },
-    { id:'T3', name:'Arlena',  initials:'AR', color:'#F1196E', profile:'RBT',  status:'active' },
-    { id:'T4', name:'Tatiana', initials:'TA', color:'#5D4337', profile:'BCBA', email:'tatiana@raising2gether.org', status:'active', role:'admin' },
+    { id:'T1', name:'Sandra',  initials:'SA', color:'#00A7C7', profile:'RBT',  email:'sandragomezj5@gmail.com',        status:'active', role:'collector' },
+    { id:'T2', name:'Janine',  initials:'JA', color:'#FF9701', profile:'RBT',  email:'janineabdelkader2023@gmail.com', status:'active', role:'collector' },
+    { id:'T3', name:'Arlena',  initials:'AR', color:'#F1196E', profile:'RBT',  email:'arlenas@gmail.com',              status:'active', role:'collector' },
+    { id:'T4', name:'Tatiana', initials:'TA', color:'#5D4337', profile:'BCBA', email:'tatiana@raising2gether.org',     status:'active', role:'admin' },
   ],
   clients: [
     { id:'C1', name:'Camila Correa',   initials:'CC', sheetId:'1RUPqT-seB-69ynPJw612YNUyuoYwA0fbIkSC-c7DFY8',   status:'active' },
@@ -1189,7 +1189,7 @@ const DEFAULT_CONFIG = {
   ],
   authorizations: [],
   admins: [
-    { email:'tatiana@raising2gether.org', name:'Tatiana', status:'active' },
+    { email:'tatiana@raising2gether.org', name:'Tatiana', status:'active', role:'admin' },
   ],
 };
 
@@ -1271,6 +1271,10 @@ async function init() {
 }
 
 function applyConfig(raw, opts = {}) {
+  // Preserve DEFAULT_CONFIG admins if server returned none
+  if (!raw.admins || raw.admins.length === 0) {
+    raw = Object.assign({}, raw, { admins: DEFAULT_CONFIG.admins });
+  }
   RAW_CONFIG = JSON.parse(JSON.stringify(raw));
 
   CFG.THERAPISTS = (raw.therapists || [])
@@ -2568,10 +2572,40 @@ async function handleGoogleOAuthReturn() {
     const raw = RAW_CONFIG || DEFAULT_CONFIG;
 
     console.log('[Auth] Google email received:', JSON.stringify(email));
+    console.log('[Auth] admins in config:', (raw.admins || []).map(function(a) { return { email: a.email, role: a.role, status: a.status }; }));
     console.log('[Auth] therapists in config:', (raw.therapists || []).map(function(t) { return { email: t.email, role: t.role, status: t.status }; }));
-    console.log('[Auth] admins in config:', (raw.admins || []).map(function(a) { return { email: a.email, status: a.status }; }));
 
-    // Look up in therapists table by email + role
+    // 1. Check admins list first
+    const admins = (raw.admins || []).filter(function(a) { return (a.status || 'active') !== 'inactive'; });
+    var aMatch = null;
+    for (var j = 0; j < admins.length; j++) {
+      console.log('[Auth] admin compare:', JSON.stringify(String(admins[j].email || '').toLowerCase()), 'vs', JSON.stringify(email), '->', String(admins[j].email || '').toLowerCase() === email);
+      if (String(admins[j].email || '').toLowerCase() === email) { aMatch = admins[j]; break; }
+    }
+    if (aMatch) {
+      // Find matching therapist record for therapistId (may be null)
+      var adminT = null;
+      var allT = raw.therapists || [];
+      for (var k = 0; k < allT.length; k++) {
+        if (String(allT[k].email || '').toLowerCase() === email) { adminT = allT[k]; break; }
+      }
+      AUTH = {
+        role: 'admin',
+        user: {
+          email:           email,
+          name:            name || aMatch.name || email,
+          therapistId:     adminT ? adminT.id : null,
+          clientIds:       adminT ? (adminT.clientIds || '') : '',
+          weeklyHourLimit: 0
+        }
+      };
+      logAuditEvent('login', email, '', 'Google Sign-In: admin');
+      clearLockout(email);
+      afterAuth();
+      return;
+    }
+
+    // 2. Check therapists table by email + role
     const therapists = raw.therapists || [];
     var tMatch = null;
     for (var i = 0; i < therapists.length; i++) {
@@ -2601,23 +2635,6 @@ async function handleGoogleOAuthReturn() {
         }
       };
       logAuditEvent('login', email, '', 'Google Sign-In: ' + role);
-      clearLockout(email);
-      afterAuth();
-      return;
-    }
-
-    // Backward compat: check legacy admins table
-    const admins = (raw.admins || []).filter(function(a) { return (a.status || 'active') !== 'inactive'; });
-    var aMatch = null;
-    for (var j = 0; j < admins.length; j++) {
-      if (String(admins[j].email || '').toLowerCase() === email) { aMatch = admins[j]; break; }
-    }
-    if (aMatch) {
-      AUTH = {
-        role: 'admin',
-        user: { email: email, name: name || aMatch.name || email, therapistId: null, clientIds: '', weeklyHourLimit: 0 }
-      };
-      logAuditEvent('login', email, '', 'Google Sign-In: admin (legacy)');
       clearLockout(email);
       afterAuth();
       return;
