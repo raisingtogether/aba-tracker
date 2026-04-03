@@ -1235,38 +1235,43 @@ let abcIdSeq = 0;
 // ─── INIT ─────────────────────────────────────────────────────────────
 async function init() {
   goTo('loading');
+  // Load config first (needed for login lookups)
   if (GAS_URL === 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') {
     await delay(500);
-    applyConfig(DEFAULT_CONFIG);
+    applyConfig(DEFAULT_CONFIG, { navigate: false });
     EventBus.emit('config:loaded', { source: 'default' });
+  } else {
+    try {
+      const resp = await fetch(GAS_URL, { method:'POST', headers:{'Content-Type':'text/plain'}, redirect:'follow', body: JSON.stringify({ action:'getConfig' }) });
+      const data = await resp.json();
+      if (data.success && data.config) {
+        const cfg = data.config;
+        const isEmpty = !cfg.therapists || cfg.therapists.length === 0;
+        if (isEmpty) {
+          applyConfig(DEFAULT_CONFIG, { navigate: false });
+          EventBus.emit('config:loaded', { source: 'default' });
+          await fetch(GAS_URL, { method:'POST', headers:{'Content-Type':'text/plain'}, redirect:'follow', body: JSON.stringify({ action:'saveConfig', config: DEFAULT_CONFIG }) });
+        } else {
+          applyConfig(cfg, { navigate: false });
+          EventBus.emit('config:loaded', { source: 'server' });
+        }
+      } else {
+        applyConfig(DEFAULT_CONFIG, { navigate: false });
+      }
+    } catch(e) {
+      applyConfig(DEFAULT_CONFIG, { navigate: false });
+    }
+  }
+  // Check for OAuth redirect return (access_token in URL hash)
+  if (window.location.hash && window.location.hash.indexOf('access_token=') >= 0) {
+    await handleGoogleOAuthReturn();
     return;
   }
-  try {
-    const resp = await fetch(GAS_URL, { method:'POST', headers:{'Content-Type':'text/plain'}, redirect:'follow', body:JSON.stringify({ action: 'getConfig' }) });
-    const data = await resp.json();
-    if (data.success && data.config) {
-      const cfg = data.config;
-      const isEmpty = !cfg.therapists || cfg.therapists.length === 0;
-      if (isEmpty) {
-        // RT Admin sheet is blank — seed it with defaults
-        applyConfig(DEFAULT_CONFIG);
-        EventBus.emit('config:loaded', { source: 'default' });
-        toast('Seeding RT Admin sheet with defaults\u2026', 'ok');
-        await fetch(GAS_URL, { method:'POST', headers:{'Content-Type':'text/plain'}, redirect:'follow', body:JSON.stringify({ action:'saveConfig', config:DEFAULT_CONFIG }) });
-        toast('RT Admin sheet populated \u2713', 'ok');
-      } else {
-        applyConfig(cfg);
-        EventBus.emit('config:loaded', { source: 'server' });
-      }
-    } else {
-      toast('Config load failed \u2014 using defaults', 'err');
-      applyConfig(DEFAULT_CONFIG);
-      EventBus.emit('config:loaded', { source: 'default' });
-    }
-  } catch (e) {
-    toast('Offline \u2014 using default config', 'err');
-    applyConfig(DEFAULT_CONFIG);
-    EventBus.emit('config:loaded', { source: 'default' });
+  // Now show privacy or login
+  if (!localStorage.getItem('privacyAccepted')) {
+    goTo('privacy');
+  } else {
+    goTo('login');
   }
 }
 
@@ -1383,33 +1388,59 @@ function selectTherapist(t) {
 function buildClientScreen() {
   const list = document.getElementById('client-list');
   list.innerHTML = '';
-  CFG.CLIENTS.forEach(c => {
+  let clients = CFG.CLIENTS;
+  const role = AUTH.role || 'collector';
+  // All non-admin roles: filter to assigned clients
+  if (role !== 'admin' && AUTH.user && AUTH.user.therapistId) {
+    const raw = RAW_CONFIG || DEFAULT_CONFIG;
+    const t   = (raw.therapists || []).find(th => th.id === AUTH.user.therapistId);
+    if (t && t.clientIds) {
+      const ids = t.clientIds.split(',').map(s => s.trim()).filter(Boolean);
+      if (ids.length) clients = clients.filter(c => ids.includes(c.id));
+    }
+  }
+  clients.forEach(c => {
     const btn = document.createElement('button');
     btn.className = 'client-btn';
-    btn.innerHTML = `
-      <div class="av">${c.initials}</div>
-      <div class="info">
-        <div class="c-name">${c.name}</div>
-        <div class="c-goals">${c.goals.length} goal${c.goals.length!==1?'s':''} \u2022 ${c.behaviors.length} behavior${c.behaviors.length!==1?'s':''}</div>
-      </div>
-      <div class="c-arr">&#8250;</div>
-    `;
+    btn.innerHTML = '<div class="av">' + c.initials + '</div>' +
+      '<div class="info"><div class="c-name">' + c.name + '</div>' +
+      '<div class="c-goals">' + c.goals.length + ' goal' + (c.goals.length !== 1 ? 's' : '') +
+      ' \u2022 ' + c.behaviors.length + ' behavior' + (c.behaviors.length !== 1 ? 's' : '') + '</div></div>' +
+      '<div class="c-arr">\u203a</div>';
     btn.onclick = () => selectClient(c);
     list.appendChild(btn);
   });
 }
 
-function selectClient(c) {
+async function selectClient(c) {
   S.client = c;
   const now = new Date();
   S.dateStr    = fmtDate(now);
   S.timeIn     = fmtTime(now);
   S.timeInDate = now;
   document.getElementById('start-client-name').textContent    = c.name;
-  document.getElementById('start-therapist-name').textContent = S.therapist.name;
+  document.getElementById('start-therapist-name').textContent = S.therapist ? S.therapist.name : '';
   document.getElementById('start-date').textContent = S.dateStr;
   startClock('clock-start', 'start-time');
   goTo('start');
+
+  // Check hour limit
+  const warn = document.getElementById('hour-warn-msg');
+  const btn  = document.getElementById('begin-session-btn');
+  if (warn && (AUTH.role === 'collector' || AUTH.role === 'therapist')) {
+    const r = await checkWeeklyHours();
+    if (!r.ok) {
+      warn.textContent = '\u26a0\ufe0f Weekly hour limit reached (' + r.limit + 'h). Contact your administrator.';
+      warn.classList.add('show');
+      if (btn) btn.disabled = true;
+    } else if (r.remaining !== undefined && r.remaining <= 2) {
+      warn.textContent = '\u26a0\ufe0f You have ' + r.remaining.toFixed(1) + 'h remaining this week.';
+      warn.classList.add('show');
+    } else {
+      warn.classList.remove('show');
+      if (btn) btn.disabled = false;
+    }
+  }
 }
 
 
@@ -1840,6 +1871,7 @@ async function submitSession() {
     const data = await resp.json();
     document.getElementById('loading').classList.remove('active');
     if (data.success) {
+      logAuditEvent('session_submit', AUTH.user ? AUTH.user.email : S.therapist ? S.therapist.name : '', S.client ? S.client.name : '', 'Duration=' + S.durationMin + 'min');
       showSuccess();
     } else {
       toast('Submit failed: ' + (data.error||'Unknown error'), 'err');
@@ -1874,6 +1906,9 @@ function buildPayload() {
     return { goalCode:g.code, goalName:g.name, trials:t.map(v=>v===true?'\u2713':v===false?'\u2717':''), percentage:pct };
   });
 
+  const _subId = generateUUID();
+  const _core  = JSON.stringify({ therapist: S.therapist.name, client: S.client.name,
+    date: S.dateStr, timeIn: S.actualStartTime || S.timeIn, timeOut: S.timeOut });
   return {
     action:       'saveSession',
     sheetId:      S.client.sheetId,
@@ -1898,6 +1933,9 @@ function buildPayload() {
       behavior:inc.behavior, setting:inc.setting, antecedent:inc.antecedent,
       consequence:inc.consequence, hypothesizedFunction:inc.fn,
     })),
+    submissionId: _subId,
+    payloadHash:  simpleHash(_core + _subId),
+    submittedBy:  AUTH.user ? AUTH.user.email : '',
   };
 }
 
@@ -1937,10 +1975,14 @@ let editModalType = null;
 let editModalItem = null;
 
 function openAdmin() {
-  document.getElementById('pin-input').value = '';
-  document.getElementById('pin-error').textContent = '';
-  document.getElementById('modal-pin').classList.add('active');
-  setTimeout(() => document.getElementById('pin-input').focus(), 200);
+  const role = AUTH.role || 'collector';
+  if (role !== 'admin' && role !== 'bcba') {
+    toast('Admin panel not available for your role', 'err'); return;
+  }
+  // Already authenticated via Google — skip PIN modal, go straight to panel
+  const firstTab = (role === 'admin') ? 'therapists' : 'behaviors';
+  showAdminTab(firstTab);
+  goTo('admin');
 }
 
 function checkPin() {
@@ -1956,11 +1998,20 @@ function checkPin() {
 }
 
 function showAdminTab(tab) {
+  const role = AUTH.role || 'collector';
+  const bcbaBlocked = ['payroll','admins','authorizations','settings','therapists','clients','billing'];
+  if (role === 'bcba' && bcbaBlocked.indexOf(tab) >= 0) {
+    toast('Access restricted for BCBA role', 'err'); return;
+  }
+  if (role !== 'admin' && role !== 'bcba') {
+    toast('Admin access required', 'err'); return;
+  }
   adminTab = tab;
   document.querySelectorAll('.admin-tab-btn').forEach(b => b.classList.remove('active'));
-  document.getElementById('atab-' + tab).classList.add('active');
-  // Show/hide the + Add bar (not shown for settings tab)
-  document.getElementById('admin-add-bar').style.display = tab === 'settings' ? 'none' : '';
+  const tabEl = document.getElementById('atab-' + tab);
+  if (tabEl) tabEl.classList.add('active');
+  const noAddBar = ['settings','authorizations','payroll','admins'];
+  document.getElementById('admin-add-bar').style.display = noAddBar.indexOf(tab) >= 0 ? 'none' : '';
   renderAdminList(tab);
 }
 
@@ -1968,6 +2019,10 @@ function renderAdminList(type) {
   const container = document.getElementById('admin-list');
   container.innerHTML = '';
   adminItems = [];
+
+  if (type === 'authorizations') { renderAuthorizationsTab(container); return; }
+  if (type === 'payroll')        { renderPayrollTab(container);        return; }
+  if (type === 'admins')         { renderAdminsTab(container);         return; }
 
   if (type === 'settings') {
     renderSettingsTab(container);
@@ -2065,6 +2120,12 @@ function renderSettingsTab(container) {
         &#128274; Change Admin PIN
       </button>
     </div>
+    <div class="settings-section" style="margin-top:8px">
+      <div class="settings-hdr">Audit Log</div>
+      <button class="btn btn-ghost" onclick="exportAuditLog()" style="padding:13px;text-align:left">
+        &#128196; Export Audit Log (CSV)
+      </button>
+    </div>
   `;
 }
 
@@ -2134,6 +2195,16 @@ function buildEditForm(type, item) {
   if (type === 'therapists') {
     const profileOpts = ['RBT','BCBA'].map(p =>
       `<option value="${p}" ${(item.profile||'RBT')===p?'selected':''}>${p}</option>`).join('');
+    const raw2 = RAW_CONFIG || DEFAULT_CONFIG;
+    const assignedIds2  = (item.clientIds || '').split(',').map(s => s.trim()).filter(Boolean);
+    const clientChecks2 = (raw2.clients || []).map(c => {
+      const chk = assignedIds2.includes(c.id) ? 'checked' : '';
+      return '<label class="client-cb-row"><input type="checkbox" class="ef-therapist-client-cb" value="' + c.id + '" ' + chk + '> ' + c.name + '</label>';
+    }).join('');
+    const roleVal2 = item.role || 'collector';
+    const roleOpts2 = ['admin','bcba','therapist','collector'].map(function(r) {
+      return '<option value="' + r + '"' + (roleVal2 === r ? ' selected' : '') + '>' + r.charAt(0).toUpperCase() + r.slice(1) + '</option>';
+    }).join('');
     form.innerHTML =
       fld('Name', 'name', item.name) +
       fld('Initials (2-3 letters)', 'initials', item.initials, 'text', 'maxlength="3"') +
@@ -2141,7 +2212,17 @@ function buildEditForm(type, item) {
       `<div class="form-group">
         <label class="form-lbl" for="ef-profile">Profile</label>
         <select class="form-ctrl" id="ef-profile">${profileOpts}</select>
-      </div>`;
+      </div>` +
+      '<div class="form-group"><label class="form-lbl">Role</label><select class="form-ctrl" id="ef-role">' + roleOpts2 + '</select></div>' +
+      '<div class="form-group"><label class="form-lbl">Email (for login)</label><input class="form-ctrl" id="ef-email" type="email" value="' + escAttr(item.email||'') + '"></div>' +
+      '<div class="form-group"><label class="form-lbl">Login PIN (6 digits, Collectors only)</label><input class="form-ctrl" id="ef-pin" type="text" maxlength="6" inputmode="numeric" value="' + escAttr(item.pin||'') + '" placeholder="leave blank to keep existing"></div>' +
+      '<div class="form-group"><label class="form-lbl">Weekly Hour Limit</label><input class="form-ctrl" id="ef-hourLimit" type="number" value="' + escAttr(item.weeklyHourLimit||'30') + '"></div>' +
+      '<div class="form-group"><label class="form-lbl">Hourly Pay Rate ($)</label><input class="form-ctrl" id="ef-payRate" type="number" step="0.01" value="' + escAttr(item.payRate||'') + '"></div>' +
+      '<div class="form-group"><label class="form-lbl">Assigned Clients</label><div class="client-cb-grid" id="ef-therapist-clients">' + clientChecks2 + '</div></div>' +
+      '<div class="form-group"><div style="display:flex;justify-content:space-between;align-items:center"><label class="form-lbl" style="margin:0">TOTP Secret</label>' +
+      (item.totpSecret ? '<button type="button" class="admin-act-btn" onclick="showTOTPSetup()">Show QR</button>' : '<button type="button" class="admin-act-btn" onclick="generateTOTPSecret()">Generate</button>') + '</div>' +
+      '<div class="totp-secret-code" id="ef-totp-display" style="margin-top:8px;display:' + (item.totpSecret ? 'block' : 'none') + '">' + escAttr(item.totpSecret||'') + '</div>' +
+      '<input type="hidden" id="ef-totpSecret" value="' + escAttr(item.totpSecret||'') + '"></div>';
 
   } else if (type === 'clients') {
     form.innerHTML =
@@ -2170,13 +2251,13 @@ function buildEditForm(type, item) {
 
   } else if (type === 'goals') {
     const raw = RAW_CONFIG || DEFAULT_CONFIG;
-    const opts = (raw.clients||[]).map(c =>
-      `<option value="${escAttr(c.id)}" ${c.id===item.clientId?'selected':''}>${c.name}</option>`).join('');
-    form.innerHTML = `
-      <div class="form-group">
-        <label class="form-lbl" for="ef-clientId">Client</label>
-        <select class="form-ctrl" id="ef-clientId">${opts}</select>
-      </div>` +
+    const assignedGoalIds = ((item.clientIds || item.clientId) || '').split(',').map(s => s.trim()).filter(Boolean);
+    const goalCbRows = (raw.clients || []).map(c => {
+      const chk = assignedGoalIds.includes(c.id) ? 'checked' : '';
+      return '<label class="client-cb-row"><input type="checkbox" class="ef-goal-client-cb" value="' + escAttr(c.id) + '" ' + chk + '> ' + c.name + '</label>';
+    }).join('');
+    form.innerHTML =
+      '<div class="form-group"><label class="form-lbl">Assign to Clients</label><div class="client-cb-grid">' + goalCbRows + '</div></div>' +
       fld('Goal Code (e.g. B1)', 'code', item.code) +
       fld('Description', 'description', item.description) +
       fld('Number of Trials', 'numTrials', item.numTrials||'5', 'number', 'min="1" max="20"');
@@ -2193,14 +2274,68 @@ function saveEntity() {
   const raw  = JSON.parse(JSON.stringify(RAW_CONFIG || DEFAULT_CONFIG));
   let updated;
 
+  if (type === 'authorizations') {
+    const list = raw.authorizations || [];
+    const entry = {
+      clientId:            document.getElementById('auth-clientId').value,
+      payerType:           document.getElementById('auth-payerType').value,
+      insuranceCompany:    document.getElementById('auth-company').value.trim(),
+      authorizationNumber: document.getElementById('auth-authNum').value.trim(),
+      billingCode:         document.getElementById('auth-code').value.trim(),
+      authorizedHours:     document.getElementById('auth-hours').value.trim(),
+      startDate:           document.getElementById('auth-start').value,
+      endDate:             document.getElementById('auth-end').value,
+      coInsurance:         document.getElementById('auth-coins').value.trim(),
+      stepUpProgram:       document.getElementById('auth-stepup').value.trim(),
+      status:              'active'
+    };
+    if (!entry.clientId) { toast('Client required', 'err'); return; }
+    const filtered = list.filter(a => a.clientId !== entry.clientId);
+    filtered.push(entry);
+    raw.authorizations = filtered;
+    closeEditModal();
+    persistConfig(raw);
+    return;
+  }
+
+  if (type === 'admins') {
+    const name  = document.getElementById('adm-name').value.trim();
+    const email = document.getElementById('adm-email').value.trim().toLowerCase();
+    if (!email) { toast('Email required', 'err'); return; }
+    const list = raw.admins || [];
+    const idx  = editModalItem ? list.findIndex(a => a.email === editModalItem.email) : -1;
+    const entry = { name, email, status: 'active' };
+    if (idx >= 0) list[idx] = entry; else list.push(entry);
+    raw.admins = list;
+    closeEditModal();
+    persistConfig(raw);
+    return;
+  }
+
   if (type === 'therapists') {
     const name     = document.getElementById('ef-name').value.trim();
     const initials = document.getElementById('ef-initials').value.trim().toUpperCase();
     const color    = document.getElementById('ef-color').value;
     const profile  = document.getElementById('ef-profile').value;
+    const email    = (document.getElementById('ef-email') || {}).value || '';
+    const pin      = (document.getElementById('ef-pin') || {}).value || '';
+    const roleEl      = document.getElementById('ef-role');
+    const hourLimitEl = document.getElementById('ef-hourLimit');
+    const payRateEl   = document.getElementById('ef-payRate');
+    const totpEl      = document.getElementById('ef-totpSecret');
+    const clientCbs   = document.querySelectorAll('.ef-therapist-client-cb:checked');
+    const clientIds   = Array.from(clientCbs).map(cb => cb.value).join(',');
     if (!name || !initials) { toast('Name and initials required', 'err'); return; }
-    updated = { ...(editModalItem||{}), name, initials, color, profile,
-      status: editModalItem ? (editModalItem.status||'active') : 'active' };
+    updated = Object.assign({}, editModalItem || {}, {
+      name, initials, color, profile, email: email.trim().toLowerCase(),
+      clientIds,
+      role:            roleEl      ? roleEl.value      : 'collector',
+      weeklyHourLimit: hourLimitEl ? hourLimitEl.value : '30',
+      payRate:         payRateEl   ? payRateEl.value   : '',
+      totpSecret:      totpEl      ? totpEl.value      : (editModalItem ? editModalItem.totpSecret : ''),
+      status: editModalItem ? (editModalItem.status || 'active') : 'active',
+    });
+    if (pin) updated.pin = pin;
     if (!updated.id) updated.id = 'T' + Date.now();
 
   } else if (type === 'clients') {
@@ -2225,13 +2360,15 @@ function saveEntity() {
       status: editModalItem ? (editModalItem.status||'active') : 'active' };
 
   } else if (type === 'goals') {
-    const clientId    = document.getElementById('ef-clientId').value;
+    const cbs         = document.querySelectorAll('.ef-goal-client-cb:checked');
+    const clientIds   = Array.from(cbs).map(cb => cb.value).join(',');
+    const clientId    = Array.from(cbs).map(cb => cb.value)[0] || '';
     const code        = document.getElementById('ef-code').value.trim();
     const description = document.getElementById('ef-description').value.trim();
     const numTrials   = document.getElementById('ef-numTrials').value || '5';
-    if (!clientId || !code || !description) { toast('All fields required', 'err'); return; }
-    updated = { ...(editModalItem||{}), clientId, code, description, numTrials,
-      status: editModalItem ? (editModalItem.status||'active') : 'active' };
+    if (!clientIds || !code || !description) { toast('At least one client, code, and description required', 'err'); return; }
+    updated = Object.assign({}, editModalItem || {}, { clientId, clientIds, code, description, numTrials,
+      status: editModalItem ? (editModalItem.status||'active') : 'active' });
   }
 
   const list = raw[type] || [];
@@ -2821,181 +2958,10 @@ async function checkWeeklyHours() {
   return { ok: true };
 }
 
-// ── OVERRIDE selectClient to check hours ─────────────────────────────
-const _origSelectClient = selectClient;
-async function selectClient(c) {
-  S.client = c;
-  // (rest of original runs synchronously after setup)
-  const now = new Date();
-  S.dateStr    = fmtDate(now);
-  S.timeIn     = fmtTime(now);
-  S.timeInDate = now;
-  document.getElementById('start-client-name').textContent    = c.name;
-  document.getElementById('start-therapist-name').textContent = S.therapist ? S.therapist.name : '';
-  document.getElementById('start-date').textContent = S.dateStr;
-  startClock('clock-start', 'start-time');
-  goTo('start');
 
-  // Check hour limit
-  const warn = document.getElementById('hour-warn-msg');
-  const btn  = document.getElementById('begin-session-btn');
-  if (warn && (AUTH.role === 'collector' || AUTH.role === 'therapist')) {
-    const r = await checkWeeklyHours();
-    if (!r.ok) {
-      warn.textContent = '\u26a0\ufe0f Weekly hour limit reached (' + r.limit + 'h). Contact your administrator.';
-      warn.classList.add('show');
-      if (btn) btn.disabled = true;
-    } else if (r.remaining !== undefined && r.remaining <= 2) {
-      warn.textContent = '\u26a0\ufe0f You have ' + r.remaining.toFixed(1) + 'h remaining this week.';
-      warn.classList.add('show');
-    } else {
-      warn.classList.remove('show');
-      if (btn) btn.disabled = false;
-    }
-  }
-}
-
-// ── OVERRIDE buildClientScreen to filter by assigned clients (RBAC) ──
-const _origBuildClientScreen = buildClientScreen;
-function buildClientScreen() {
-  const list = document.getElementById('client-list');
-  list.innerHTML = '';
-  let clients = CFG.CLIENTS;
-  const role = AUTH.role || 'collector';
-  // All non-admin roles: filter to assigned clients
-  if (role !== 'admin' && AUTH.user && AUTH.user.therapistId) {
-    const raw = RAW_CONFIG || DEFAULT_CONFIG;
-    const t   = (raw.therapists || []).find(th => th.id === AUTH.user.therapistId);
-    if (t && t.clientIds) {
-      const ids = t.clientIds.split(',').map(s => s.trim()).filter(Boolean);
-      if (ids.length) clients = clients.filter(c => ids.includes(c.id));
-    }
-  }
-  clients.forEach(c => {
-    const btn = document.createElement('button');
-    btn.className = 'client-btn';
-    btn.innerHTML = '<div class="av">' + c.initials + '</div>' +
-      '<div class="info"><div class="c-name">' + c.name + '</div>' +
-      '<div class="c-goals">' + c.goals.length + ' goal' + (c.goals.length !== 1 ? 's' : '') +
-      ' \u2022 ' + c.behaviors.length + ' behavior' + (c.behaviors.length !== 1 ? 's' : '') + '</div></div>' +
-      '<div class="c-arr">\u203a</div>';
-    btn.onclick = () => selectClient(c);
-    list.appendChild(btn);
-  });
-}
-
-// ── OVERRIDE buildPayload to add UUID + hash ─────────────────────────
-const _origBuildPayload = buildPayload;
-function buildPayload() {
-  const payload = _origBuildPayload();
-  const id   = generateUUID();
-  const core = JSON.stringify({
-    therapist: payload.therapist, client: payload.clientName,
-    date: payload.date, timeIn: payload.timeIn, timeOut: payload.timeOut
-  });
-  payload.submissionId  = id;
-  payload.payloadHash   = simpleHash(core + id);
-  payload.submittedBy   = AUTH.user ? AUTH.user.email : '';
-  return payload;
-}
-
-// ── OVERRIDE submitSession to log audit ──────────────────────────────
-const _origSubmitSession = submitSession;
-async function submitSession() {
-  await _origSubmitSession();
-  logAuditEvent('session_submit', AUTH.user ? AUTH.user.email : S.therapist ? S.therapist.name : '',
-    S.client ? S.client.name : '', 'Duration=' + S.durationMin + 'min');
-}
-
-// ── OVERRIDE init to show login screen first ──────────────────────────
-const _origInit = init;
-async function init() {
-  goTo('loading');
-  // Load config first (needed for login lookups)
-  if (GAS_URL === 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') {
-    await delay(500);
-    applyConfig(DEFAULT_CONFIG, { navigate: false });
-    EventBus.emit('config:loaded', { source: 'default' });
-  } else {
-    try {
-      const resp = await fetch(GAS_URL, { method:'POST', headers:{'Content-Type':'text/plain'}, redirect:'follow', body: JSON.stringify({ action:'getConfig' }) });
-      const data = await resp.json();
-      if (data.success && data.config) {
-        const cfg = data.config;
-        const isEmpty = !cfg.therapists || cfg.therapists.length === 0;
-        if (isEmpty) {
-          applyConfig(DEFAULT_CONFIG, { navigate: false });
-          EventBus.emit('config:loaded', { source: 'default' });
-          await fetch(GAS_URL, { method:'POST', headers:{'Content-Type':'text/plain'}, redirect:'follow', body: JSON.stringify({ action:'saveConfig', config: DEFAULT_CONFIG }) });
-        } else {
-          applyConfig(cfg, { navigate: false });
-          EventBus.emit('config:loaded', { source: 'server' });
-        }
-      } else {
-        applyConfig(DEFAULT_CONFIG, { navigate: false });
-      }
-    } catch(e) {
-      applyConfig(DEFAULT_CONFIG, { navigate: false });
-    }
-  }
-  // Check for OAuth redirect return (access_token in URL hash)
-  if (window.location.hash && window.location.hash.indexOf('access_token=') >= 0) {
-    await handleGoogleOAuthReturn();
-    return;
-  }
-  // Now show privacy or login
-  if (!localStorage.getItem('privacyAccepted')) {
-    goTo('privacy');
-  } else {
-    goTo('login');
-  }
-}
 
 
 // ── ADMIN: EXPANDED FUNCTIONS ─────────────────────────────────────────
-
-// Override showAdminTab to gate restricted tabs by role
-const _origShowAdminTab = showAdminTab;
-function showAdminTab(tab) {
-  const role = AUTH.role || 'collector';
-  const bcbaBlocked = ['payroll','admins','authorizations','settings','therapists','clients','billing'];
-  if (role === 'bcba' && bcbaBlocked.indexOf(tab) >= 0) {
-    toast('Access restricted for BCBA role', 'err'); return;
-  }
-  if (role !== 'admin' && role !== 'bcba') {
-    toast('Admin access required', 'err'); return;
-  }
-  _origShowAdminTab(tab);
-}
-
-// Override renderAdminList to handle new tabs
-const _origRenderAdminList = renderAdminList;
-function renderAdminList(type) {
-  if (type === 'authorizations') { renderAuthorizationsTab(document.getElementById('admin-list')); return; }
-  if (type === 'payroll')        { renderPayrollTab(document.getElementById('admin-list'));        return; }
-  if (type === 'admins')         { renderAdminsTab(document.getElementById('admin-list'));         return; }
-  _origRenderAdminList(type);
-}
-
-// Override showAdminTab to update UI for role-based tabs
-const _origShowAdminTab2 = showAdminTab;
-function showAdminTab(tab) {
-  const role = AUTH.role || 'collector';
-  const bcbaBlocked = ['payroll','admins','authorizations','settings','therapists','clients','billing'];
-  if (role === 'bcba' && bcbaBlocked.indexOf(tab) >= 0) {
-    toast('Access restricted for BCBA role', 'err'); return;
-  }
-  if (role !== 'admin' && role !== 'bcba') {
-    toast('Admin access required', 'err'); return;
-  }
-  adminTab = tab;
-  document.querySelectorAll('.admin-tab-btn').forEach(b => b.classList.remove('active'));
-  const tabEl = document.getElementById('atab-' + tab);
-  if (tabEl) tabEl.classList.add('active');
-  const noAddBar = ['settings','authorizations','payroll','admins'];
-  document.getElementById('admin-add-bar').style.display = noAddBar.indexOf(tab) >= 0 ? 'none' : '';
-  renderAdminList(tab);
-}
 
 // ── AUTHORIZATIONS TAB ───────────────────────────────────────────────
 function renderAuthorizationsTab(container) {
@@ -3101,33 +3067,6 @@ function openEditAuthModal(clientId) {
   document.getElementById('modal-edit').classList.add('active');
 }
 
-// Override saveEntity for authorizations
-const _origSaveEntity = saveEntity;
-function saveEntity() {
-  if (editModalType !== 'authorizations') { _origSaveEntity(); return; }
-  const raw  = JSON.parse(JSON.stringify(RAW_CONFIG || DEFAULT_CONFIG));
-  const list = raw.authorizations || [];
-  const entry = {
-    clientId:            document.getElementById('auth-clientId').value,
-    payerType:           document.getElementById('auth-payerType').value,
-    insuranceCompany:    document.getElementById('auth-company').value.trim(),
-    authorizationNumber: document.getElementById('auth-authNum').value.trim(),
-    billingCode:         document.getElementById('auth-code').value.trim(),
-    authorizedHours:     document.getElementById('auth-hours').value.trim(),
-    startDate:           document.getElementById('auth-start').value,
-    endDate:             document.getElementById('auth-end').value,
-    coInsurance:         document.getElementById('auth-coins').value.trim(),
-    stepUpProgram:       document.getElementById('auth-stepup').value.trim(),
-    status:              'active'
-  };
-  if (!entry.clientId) { toast('Client required', 'err'); return; }
-  // Remove existing entries for this client, add new one
-  const filtered = list.filter(a => a.clientId !== entry.clientId);
-  filtered.push(entry);
-  raw.authorizations = filtered;
-  closeEditModal();
-  persistConfig(raw);
-}
 
 // ── PAYROLL TAB ───────────────────────────────────────────────────────
 let _payrollPeriod = null;
@@ -3275,25 +3214,6 @@ function openEditAdminModal(idx) {
   document.getElementById('modal-edit').classList.add('active');
 }
 
-// Patch saveEntity for admins
-const __origSaveEntity = saveEntity;
-function saveEntity() {
-  if (editModalType === 'admins') {
-    const raw   = JSON.parse(JSON.stringify(RAW_CONFIG || DEFAULT_CONFIG));
-    const name  = document.getElementById('adm-name').value.trim();
-    const email = document.getElementById('adm-email').value.trim().toLowerCase();
-    if (!email) { toast('Email required', 'err'); return; }
-    const list = raw.admins || [];
-    const idx  = editModalItem ? list.findIndex(a => a.email === editModalItem.email) : -1;
-    const entry = { name, email, status: 'active' };
-    if (idx >= 0) list[idx] = entry; else list.push(entry);
-    raw.admins = list;
-    closeEditModal();
-    persistConfig(raw);
-    return;
-  }
-  __origSaveEntity();
-}
 
 function toggleAdminStatus(idx) {
   const raw  = JSON.parse(JSON.stringify(RAW_CONFIG || DEFAULT_CONFIG));
@@ -3304,142 +3224,10 @@ function toggleAdminStatus(idx) {
   }
 }
 
-// ── SETTINGS TAB: add Audit Log export + payRate in therapist edit ────
-const _origRenderSettingsTab = renderSettingsTab;
-function renderSettingsTab(container) {
-  _origRenderSettingsTab(container);
-  // Append audit log section
-  container.innerHTML += `
-    <div class="settings-section" style="margin-top:8px">
-      <div class="settings-hdr">Audit Log</div>
-      <button class="btn btn-ghost" onclick="exportAuditLog()" style="padding:13px;text-align:left">
-        &#128196; Export Audit Log (CSV)
-      </button>
-    </div>`;
-}
 
-// ── OVERRIDE therapist edit form to include new fields ────────────────
-const _origBuildEditForm = buildEditForm;
-function buildEditForm(type, item) {
-  _origBuildEditForm(type, item);
-  if (type !== 'therapists') return;
-  // Append extra fields
-  const form = document.getElementById('edit-form-body');
-  const raw  = RAW_CONFIG || DEFAULT_CONFIG;
-  // Client assignment checkboxes
-  const assignedIds  = (item.clientIds || '').split(',').map(s => s.trim()).filter(Boolean);
-  const clientChecks = (raw.clients || []).map(c => {
-    const chk = assignedIds.includes(c.id) ? 'checked' : '';
-    return '<label class="client-cb-row"><input type="checkbox" class="ef-therapist-client-cb" value="' + c.id + '" ' + chk + '> ' + c.name + '</label>';
-  }).join('');
 
-  const roleVal = item.role || 'collector';
-  const roleOpts = ['admin','bcba','therapist','collector'].map(function(r) {
-    return '<option value="' + r + '"' + (roleVal === r ? ' selected' : '') + '>' + r.charAt(0).toUpperCase() + r.slice(1) + '</option>';
-  }).join('');
 
-  form.innerHTML +=
-    '<div class="form-group"><label class="form-lbl">Role</label><select class="form-ctrl" id="ef-role">' + roleOpts + '</select></div>' +
-    '<div class="form-group"><label class="form-lbl">Email (for login)</label><input class="form-ctrl" id="ef-email" type="email" value="' + (item.email||'') + '"></div>' +
-    '<div class="form-group"><label class="form-lbl">Login PIN (6 digits, Collectors only)</label><input class="form-ctrl" id="ef-pin" type="text" maxlength="6" inputmode="numeric" value="' + (item.pin||'') + '" placeholder="leave blank to keep existing"></div>' +
-    '<div class="form-group"><label class="form-lbl">Weekly Hour Limit</label><input class="form-ctrl" id="ef-hourLimit" type="number" value="' + (item.weeklyHourLimit||'30') + '"></div>' +
-    '<div class="form-group"><label class="form-lbl">Hourly Pay Rate ($)</label><input class="form-ctrl" id="ef-payRate" type="number" step="0.01" value="' + (item.payRate||'') + '"></div>' +
-    '<div class="form-group"><label class="form-lbl">Assigned Clients</label><div class="client-cb-grid" id="ef-therapist-clients">' + clientChecks + '</div></div>' +
-    '<div class="form-group"><div style="display:flex;justify-content:space-between;align-items:center"><label class="form-lbl" style="margin:0">TOTP Secret</label>' +
-    (item.totpSecret ? '<button type="button" class="admin-act-btn" onclick="showTOTPSetup()">Show QR</button>' : '<button type="button" class="admin-act-btn" onclick="generateTOTPSecret()">Generate</button>') + '</div>' +
-    '<div class="totp-secret-code" id="ef-totp-display" style="margin-top:8px;display:' + (item.totpSecret ? 'block' : 'none') + '">' + (item.totpSecret||'') + '</div>' +
-    '<input type="hidden" id="ef-totpSecret" value="' + (item.totpSecret||'') + '"></div>';
-}
 
-// Override saveEntity for therapists to capture new fields
-const ___origSaveEntity = saveEntity;
-function saveEntity() {
-  if (editModalType === 'therapists') {
-    const raw      = JSON.parse(JSON.stringify(RAW_CONFIG || DEFAULT_CONFIG));
-    const name     = document.getElementById('ef-name').value.trim();
-    const initials = document.getElementById('ef-initials').value.trim().toUpperCase();
-    const color    = document.getElementById('ef-color').value;
-    const profile  = document.getElementById('ef-profile').value;
-    const email    = (document.getElementById('ef-email') || {}).value || '';
-    const pin      = (document.getElementById('ef-pin') || {}).value || '';
-    const roleEl      = document.getElementById('ef-role');
-    const hourLimitEl = document.getElementById('ef-hourLimit');
-    const payRateEl   = document.getElementById('ef-payRate');
-    const totpEl      = document.getElementById('ef-totpSecret');
-    const clientCbs   = document.querySelectorAll('.ef-therapist-client-cb:checked');
-    const clientIds   = Array.from(clientCbs).map(cb => cb.value).join(',');
-    if (!name || !initials) { toast('Name and initials required', 'err'); return; }
-    const updated = Object.assign({}, editModalItem || {}, {
-      name, initials, color, profile, email: email.trim().toLowerCase(),
-      clientIds,
-      role:            roleEl      ? roleEl.value       : 'collector',
-      weeklyHourLimit: hourLimitEl ? hourLimitEl.value : '30',
-      payRate:         payRateEl   ? payRateEl.value   : '',
-      totpSecret:      totpEl      ? totpEl.value       : (editModalItem ? editModalItem.totpSecret : ''),
-      status: editModalItem ? (editModalItem.status || 'active') : 'active',
-    });
-    if (pin) updated.pin = pin; // only update PIN if entered
-    if (!updated.id) updated.id = 'T' + Date.now();
-    const list = raw.therapists || [];
-    const idx  = editModalItem ? list.findIndex(x => x.id === editModalItem.id) : -1;
-    if (idx >= 0) list[idx] = updated; else list.push(updated);
-    raw.therapists = list;
-    closeEditModal();
-    persistConfig(raw);
-    return;
-  }
-  ___origSaveEntity();
-}
-
-// ── GOALS MULTI-CLIENT in edit form ──────────────────────────────────
-const _origBuildEditFormGoals = buildEditForm;
-// (already patched above via _origBuildEditForm chain — override goals section)
-const ____origBuildEditForm = buildEditForm;
-function buildEditForm(type, item) {
-  if (type === 'goals') {
-    const form = document.getElementById('edit-form-body');
-    const raw  = RAW_CONFIG || DEFAULT_CONFIG;
-    // Multi-client checkboxes
-    const assignedIds = ((item.clientIds || item.clientId) || '').split(',').map(s => s.trim()).filter(Boolean);
-    const cbRows = (raw.clients || []).map(c => {
-      const chk = assignedIds.includes(c.id) ? 'checked' : '';
-      return '<label class="client-cb-row"><input type="checkbox" class="ef-goal-client-cb" value="' + c.id + '" ' + chk + '> ' + c.name + '</label>';
-    }).join('');
-    const fld = (lbl, id, val, t, extra) =>
-      '<div class="form-group"><label class="form-lbl" for="ef-' + id + '">' + lbl + '</label><input class="form-ctrl" id="ef-' + id + '" type="' + (t||'text') + '" value="' + escAttr(String(val||'')) + '" ' + (extra||'') + '></div>';
-    form.innerHTML =
-      '<div class="form-group"><label class="form-lbl">Assign to Clients</label><div class="client-cb-grid">' + cbRows + '</div></div>' +
-      fld('Goal Code (e.g. B1)', 'code', item.code) +
-      fld('Description', 'description', item.description) +
-      fld('Number of Trials', 'numTrials', item.numTrials||'5', 'number', 'min="1" max="20"');
-    return;
-  }
-  ____origBuildEditForm(type, item);
-}
-
-// Patch saveEntity for goals multi-client
-const _____origSaveEntity = saveEntity;
-function saveEntity() {
-  if (editModalType === 'goals') {
-    const raw = JSON.parse(JSON.stringify(RAW_CONFIG || DEFAULT_CONFIG));
-    const cbs = document.querySelectorAll('.ef-goal-client-cb:checked');
-    const clientIds   = Array.from(cbs).map(cb => cb.value).join(',');
-    const clientId    = Array.from(cbs).map(cb => cb.value)[0] || '';
-    const code        = document.getElementById('ef-code').value.trim();
-    const description = document.getElementById('ef-description').value.trim();
-    const numTrials   = document.getElementById('ef-numTrials').value || '5';
-    if (!clientIds || !code || !description) { toast('At least one client, code, and description required', 'err'); return; }
-    const updated = Object.assign({}, editModalItem || {}, { clientId, clientIds, code, description, numTrials, status: editModalItem ? (editModalItem.status||'active') : 'active' });
-    const list = raw.goals || [];
-    const idx  = editModalItem ? list.findIndex(x => x.code === editModalItem.code && x.clientId === editModalItem.clientId) : -1;
-    if (idx >= 0) list[idx] = updated; else list.push(updated);
-    raw.goals = list;
-    closeEditModal();
-    persistConfig(raw);
-    return;
-  }
-  _____origSaveEntity();
-}
 
 // ── TOTP SETUP HELPERS ────────────────────────────────────────────────
 function generateTOTPSecret() {
@@ -3496,18 +3284,6 @@ async function verifyTOTPSetup() {
   }
 }
 
-// ── OVERRIDE openAdmin to check auth ─────────────────────────────────
-const _origOpenAdmin = openAdmin;
-function openAdmin() {
-  const role = AUTH.role || 'collector';
-  if (role !== 'admin' && role !== 'bcba') {
-    toast('Admin panel not available for your role', 'err'); return;
-  }
-  // Already authenticated via Google — skip PIN modal, go straight to panel
-  const firstTab = (role === 'admin') ? 'therapists' : 'behaviors';
-  showAdminTab(firstTab);
-  goTo('admin');
-}
 
 // ─── SERVICE WORKER ───────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
