@@ -2520,36 +2520,91 @@ function stopInactivityTimer() {
 
 // ── BACKGROUND DETECTION ─────────────────────────────────────────────
 let _bgStart = null;
-document.addEventListener('visibilitychange', () => {
+let _reauthFailCount = 0;
+document.addEventListener('visibilitychange', function() {
   if (document.hidden) {
     _bgStart = Date.now();
   } else {
     if (_bgStart && (Date.now() - _bgStart) > BACKGROUND_REAUTH_MS && AUTH.user) {
+      _reauthFailCount = 0;
       document.getElementById('reauth-pin').value = '';
       document.getElementById('reauth-error').textContent = '';
       document.getElementById('reauth-overlay').classList.add('show');
+      // Stop inactivity timer while reauth overlay is active — the overlay
+      // itself is the security gate; timer will restart on successful reauth
+      stopInactivityTimer();
     }
     _bgStart = null;
   }
 });
 
-function confirmReauth() {
-  const pin = document.getElementById('reauth-pin').value;
-  const errEl = document.getElementById('reauth-error');
+async function saveDraftSession() {
+  if (!S.client || !S.therapist) return;
+  if (GAS_URL === 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') return;
+  try {
+    var payload = buildPayload();
+    payload.draft = true;
+    payload.notes = (S.notes || '') + ' [DRAFT — session incomplete, auto-saved after re-auth lockout]';
+    await fetch(GAS_URL, { method:'POST', headers:{'Content-Type':'text/plain'}, redirect:'follow', body: JSON.stringify(payload) });
+  } catch(e) {
+    // Best-effort — do not block logout if draft save fails
+  }
+}
+
+async function confirmReauth() {
+  const pin    = document.getElementById('reauth-pin').value;
+  const errEl  = document.getElementById('reauth-error');
   let ok = false;
   const reauthRole = AUTH.role || 'collector';
+
   if (reauthRole === 'admin' || reauthRole === 'bcba' || reauthRole === 'therapist') {
-    ok = true; // Google Sign-In users don't use PIN for reauth
+    ok = true; // Google Sign-In users don't need a PIN for re-auth
   } else {
-    const therapist = CFG.THERAPISTS.find(t => t.id === (AUTH.user && AUTH.user.therapistId));
-    ok = therapist && String(therapist.pin || '') === pin;
+    // Always fetch fresh config from server so a PIN change is picked up immediately
+    var therapist = null;
+    if (GAS_URL !== 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') {
+      try {
+        var resp = await fetch(GAS_URL, { method:'POST', headers:{'Content-Type':'text/plain'}, redirect:'follow', body: JSON.stringify({ action:'getConfig' }) });
+        var freshData = await resp.json();
+        if (freshData.success && freshData.config && freshData.config.therapists) {
+          var freshTherapists = freshData.config.therapists;
+          var tid = AUTH.user ? AUTH.user.therapistId : null;
+          for (var i = 0; i < freshTherapists.length; i++) {
+            if (freshTherapists[i].id === tid) { therapist = freshTherapists[i]; break; }
+          }
+          // Silently refresh local config without navigating away
+          applyConfig(freshData.config, { navigate: false });
+        }
+      } catch(e) {
+        // Fall back to local config if server is unreachable
+      }
+    }
+    if (!therapist) {
+      var tid2 = AUTH.user ? AUTH.user.therapistId : null;
+      var locals = CFG.THERAPISTS;
+      for (var j = 0; j < locals.length; j++) {
+        if (locals[j].id === tid2) { therapist = locals[j]; break; }
+      }
+    }
+    ok = !!(therapist && String(therapist.pin || '') === String(pin));
   }
+
   if (ok) {
+    _reauthFailCount = 0;
     document.getElementById('reauth-overlay').classList.remove('show');
     resetInactivityTimer();
     logAuditEvent('reauth_success', AUTH.user ? AUTH.user.email : '', '', '');
   } else {
-    errEl.textContent = 'Incorrect PIN';
+    _reauthFailCount++;
+    if (_reauthFailCount >= MAX_LOGIN_ATTEMPTS) {
+      errEl.textContent = 'Too many failed attempts — saving draft and logging out\u2026';
+      logAuditEvent('account_locked', AUTH.user ? AUTH.user.email : '', '', 'Re-auth failed ' + _reauthFailCount + ' times');
+      await saveDraftSession();
+      logoutUser('reauth_failed');
+    } else {
+      var remaining = MAX_LOGIN_ATTEMPTS - _reauthFailCount;
+      errEl.textContent = 'Incorrect PIN \u2014 ' + remaining + ' attempt' + (remaining !== 1 ? 's' : '') + ' remaining';
+    }
   }
 }
 
@@ -3375,7 +3430,7 @@ init();
   <div class="inactivity-card">
     <div class="inactivity-icon">&#128274;</div>
     <div class="inactivity-title">Re-authenticate</div>
-    <div class="inactivity-sub">App was in background. Please verify your PIN to continue.</div>
+    <div class="inactivity-sub">Your session data is preserved. Enter your PIN to continue.</div>
     <div class="form-group">
       <input class="form-ctrl" id="reauth-pin" type="password" maxlength="6" inputmode="numeric" placeholder="PIN">
     </div>
