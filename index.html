@@ -2572,8 +2572,21 @@ async function confirmReauth() {
           for (var i = 0; i < freshTherapists.length; i++) {
             if (freshTherapists[i].id === tid) { therapist = freshTherapists[i]; break; }
           }
-          // Silently refresh local config without navigating away
-          applyConfig(freshData.config, { navigate: false });
+          // Update only the therapists list in CFG and RAW_CONFIG — do NOT call
+          // applyConfig() here because it resets S.behaviors/S.trials/S.tantrum
+          // to zero, destroying the in-progress session counters.
+          if (RAW_CONFIG) { RAW_CONFIG.therapists = freshTherapists; }
+          for (var fi = 0; fi < freshTherapists.length; fi++) {
+            var found = false;
+            for (var ci = 0; ci < CFG.THERAPISTS.length; ci++) {
+              if (CFG.THERAPISTS[ci].id === freshTherapists[fi].id) {
+                CFG.THERAPISTS[ci] = freshTherapists[fi];
+                found = true;
+                break;
+              }
+            }
+            if (!found) { CFG.THERAPISTS.push(freshTherapists[fi]); }
+          }
         }
       } catch(e) {
         // Fall back to local config if server is unreachable
