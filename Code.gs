@@ -443,43 +443,76 @@ function processSession(d) {
 
 /**
  * Behavior Data tab.
- * Columns: Date | Therapist | Setting | <behavior labels> |
- *          Tantrum Frequency | Tantrum Total (Min)
+ * Base columns: Date | Therapist | Setting | <behavior labels> |
+ *               Tantrum Frequency | Tantrum Total (Min)
+ * Analytics columns (appended, backward-compatible):
+ *   submissionId | clientName | clientId | therapistEmail |
+ *   sessionType | billingCode | isDraft | payloadHash | submittedAt | dateISO
  */
 function writeBehaviorData(ss, d) {
   var keys   = d.behaviorKeys   || ['aggression','whining','ingestingInedibles','elopement','taskRefusal','outOfArea','sib'];
   var labels = d.behaviorLabels || ['Aggression','Whining','Ingesting Inedibles','Elopement','Task Refusal','Out of Area','SIB'];
   var bd     = d.behaviorData || {};
 
-  var headers = ['Date', 'Therapist', 'Setting'].concat(labels, ['Tantrum Frequency', 'Tantrum Total (Min)']);
-  var sheet   = getOrCreateSheet(ss, 'Behavior Data', headers);
+  var analyticsHeaders = [
+    'submissionId', 'clientName', 'clientId', 'therapistEmail',
+    'sessionType', 'billingCode', 'isDraft', 'payloadHash', 'submittedAt', 'dateISO'
+  ];
+  var allHeaders = ['Date', 'Therapist', 'Setting']
+    .concat(labels, ['Tantrum Frequency', 'Tantrum Total (Min)'])
+    .concat(analyticsHeaders);
+
+  var sheet = getOrCreateSheet(ss, 'Behavior Data', allHeaders);
+  ensureSheetColumns(sheet, allHeaders);
 
   var row = [d.date, d.therapist, d.location];
   for (var i = 0; i < keys.length; i++) {
-    row.push(bd[keys[i]] || 0);
+    row.push(typeof bd[keys[i]] === 'number' ? bd[keys[i]] : (bd[keys[i]] || 0));
   }
   row.push(bd.tantrumFrequency || 0);
   row.push(bd.tantrumTotalMin  || 0);
+  // Analytics columns
+  row.push(d.submissionId   || '');
+  row.push(d.clientName     || '');
+  row.push(d.clientId       || '');
+  row.push(d.therapistEmail || d.submittedBy || '');
+  row.push(d.sessionType    || '');
+  row.push(d.billingCode    || '');
+  row.push(d.isDraft ? true : false);
+  row.push(d.payloadHash    || '');
+  row.push(d.submittedAt    || new Date().toISOString());
+  row.push(d.dateISO        || '');
 
   sheet.appendRow(row);
 }
 
 /**
  * Time In Time Out tab.
- * Columns: Date | Billing Code | Type of Session | Time In | Time Out |
- *          Duration (min) | Location | Therapist |
- *          App Start Time | Actual Start Time | Late Start Reason |
- *          Submission ID | Notes
+ * Base columns (unchanged): Date | Billing Code | Type of Session | Time In |
+ *   Time Out | Duration (min) | Location | Therapist | App Start Time |
+ *   Actual Start Time | Late Start Reason | Submission ID | Notes
+ * Analytics columns (appended, backward-compatible):
+ *   clientName | clientId | therapistEmail | isDraft | payloadHash |
+ *   submittedAt | dateISO
  */
 function writeSessionLog(ss, d) {
-  var sheet = getOrCreateSheet(ss, 'Time In Time Out', [
+  var baseHeaders = [
     'Date', 'Billing Code', 'Type of Session', 'Time In', 'Time Out',
     'Duration (min)', 'Location', 'Therapist',
     'App Start Time', 'Actual Start Time', 'Late Start Reason',
     'Submission ID', 'Notes'
-  ]);
+  ];
+  var analyticsHeaders = [
+    'clientName', 'clientId', 'therapistEmail',
+    'isDraft', 'payloadHash', 'submittedAt', 'dateISO'
+  ];
+  var allHeaders = baseHeaders.concat(analyticsHeaders);
+
+  var sheet = getOrCreateSheet(ss, 'Time In Time Out', allHeaders);
+  ensureSheetColumns(sheet, allHeaders);
 
   sheet.appendRow([
+    // Base columns (unchanged)
     d.date,
     d.billingCode         || '',
     d.sessionType         || '',
@@ -492,14 +525,27 @@ function writeSessionLog(ss, d) {
     d.actualStartTime     || '',
     d.lateStartReason     || '',
     d.submissionId        || '',
-    d.notes               || ''
+    d.notes               || '',
+    // Analytics columns
+    d.clientName          || '',
+    d.clientId            || '',
+    d.therapistEmail      || d.submittedBy || '',
+    d.isDraft ? true : false,
+    d.payloadHash         || '',
+    d.submittedAt         || new Date().toISOString(),
+    d.dateISO             || ''
   ]);
 }
 
 /**
  * Trial Data tab — dynamic columns based on active goals.
  * Base columns: Date | Setting | Therapist
- * Then per goal: [Goal Code | Trial 1 ... Trial N | %]
+ * Per-goal columns: [Goal Code | Trial 1 … Trial N | %]  (% kept as string for compat)
+ * Analytics columns (appended, backward-compatible):
+ *   submissionId | clientName | clientId | therapistEmail | sessionType |
+ *   billingCode | isDraft | payloadHash | submittedAt | dateISO | Percent Correct
+ * "Percent Correct" is a JSON string mapping goal codes to numeric percentages,
+ * e.g. {"G1":80,"G2":100} — use JSON_EXTRACT in BigQuery for clean numerics.
  */
 function writeTrialData(ss, d) {
   if (!d.trialData || !d.trialData.length) return;
@@ -517,7 +563,25 @@ function writeTrialData(ss, d) {
     goalHeaders.push('%');
   }
 
-  var sheet = getOrCreateSheet(ss, 'Trial Data', baseHeaders.concat(goalHeaders));
+  var analyticsHeaders = [
+    'submissionId', 'clientName', 'clientId', 'therapistEmail',
+    'sessionType', 'billingCode', 'isDraft', 'payloadHash',
+    'submittedAt', 'dateISO', 'Percent Correct'
+  ];
+  var allHeaders = baseHeaders.concat(goalHeaders, analyticsHeaders);
+
+  var sheet = getOrCreateSheet(ss, 'Trial Data', allHeaders);
+  ensureSheetColumns(sheet, analyticsHeaders);
+
+  // Build numeric percentages map for the Percent Correct column
+  var pctMap = {};
+  for (var gi3 = 0; gi3 < d.trialData.length; gi3++) {
+    var gp = d.trialData[gi3];
+    if (gp.percentage !== null && gp.percentage !== undefined) {
+      pctMap[gp.goalCode] = gp.percentage;
+    }
+  }
+  var percentCorrectJSON = JSON.stringify(pctMap);
 
   var row = [d.date, d.location, d.therapist];
   for (var gi2 = 0; gi2 < d.trialData.length; gi2++) {
@@ -530,32 +594,72 @@ function writeTrialData(ss, d) {
     }
     row.push(pct);
   }
+  // Analytics columns
+  row.push(d.submissionId   || '');
+  row.push(d.clientName     || '');
+  row.push(d.clientId       || '');
+  row.push(d.therapistEmail || d.submittedBy || '');
+  row.push(d.sessionType    || '');
+  row.push(d.billingCode    || '');
+  row.push(d.isDraft ? true : false);
+  row.push(d.payloadHash    || '');
+  row.push(d.submittedAt    || new Date().toISOString());
+  row.push(d.dateISO        || '');
+  row.push(percentCorrectJSON);
+
   sheet.appendRow(row);
 }
 
 /**
  * ABC Data tab.
- * Columns: Date | Initials | Setting | Antecedent | Behavior |
- *          Consequence | Hypothesized Function
+ * Base columns (unchanged): Date | Initials | Setting | Antecedent |
+ *   Behavior | Consequence | Hypothesized Function
+ * Analytics columns (appended, backward-compatible):
+ *   Time | submissionId | clientName | clientId | therapistName |
+ *   therapistEmail | sessionType | billingCode | isDraft | payloadHash |
+ *   submittedAt | dateISO
  */
 function writeABCData(ss, d) {
   if (!d.abcData || !d.abcData.length) return;
 
-  var sheet = getOrCreateSheet(ss, 'ABC Data', [
+  var baseHeaders = [
     'Date', 'Initials', 'Setting', 'Antecedent',
     'Behavior', 'Consequence', 'Hypothesized Function'
-  ]);
+  ];
+  var analyticsHeaders = [
+    'Time', 'submissionId', 'clientName', 'clientId',
+    'therapistName', 'therapistEmail', 'sessionType', 'billingCode',
+    'isDraft', 'payloadHash', 'submittedAt', 'dateISO'
+  ];
+  var allHeaders = baseHeaders.concat(analyticsHeaders);
+
+  var sheet = getOrCreateSheet(ss, 'ABC Data', allHeaders);
+  ensureSheetColumns(sheet, allHeaders);
 
   for (var i = 0; i < d.abcData.length; i++) {
     var inc = d.abcData[i];
     sheet.appendRow([
+      // Base columns (unchanged)
       d.date,
       d.therapistInitials      || '',
       inc.setting              || '',
       inc.antecedent           || '',
       inc.behavior             || '',
       inc.consequence          || '',
-      inc.hypothesizedFunction || ''
+      inc.hypothesizedFunction || '',
+      // Analytics columns
+      inc.time                 || '',
+      d.submissionId           || '',
+      d.clientName             || '',
+      d.clientId               || '',
+      d.therapist              || '',
+      d.therapistEmail         || d.submittedBy || '',
+      d.sessionType            || '',
+      d.billingCode            || '',
+      d.isDraft ? true : false,
+      d.payloadHash            || '',
+      d.submittedAt            || new Date().toISOString(),
+      d.dateISO                || ''
     ]);
   }
 }
@@ -576,6 +680,43 @@ function getOrCreateSheet(ss, name, headers) {
     sheet.setFrozenRows(1);
   }
   return sheet;
+}
+
+/**
+ * Add any headers from the provided list that are not already in row 1.
+ * New headers are appended at the right — existing columns are never moved.
+ * Safe to call on every write; no-ops when all headers are already present.
+ */
+function ensureSheetColumns(sheet, headers) {
+  var lastCol = sheet.getLastColumn();
+  if (lastCol === 0) {
+    // Completely empty sheet — write all headers from scratch
+    var r = sheet.getRange(1, 1, 1, headers.length);
+    r.setValues([headers]);
+    r.setFontWeight('bold');
+    r.setBackground('#00A7C7');
+    r.setFontColor('#FFFFFF');
+    sheet.setFrozenRows(1);
+    return;
+  }
+  var existing = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  var existingMap = {};
+  for (var i = 0; i < existing.length; i++) {
+    existingMap[String(existing[i]).trim()] = true;
+  }
+  var toAdd = [];
+  for (var j = 0; j < headers.length; j++) {
+    if (!existingMap[String(headers[j]).trim()]) {
+      toAdd.push(headers[j]);
+    }
+  }
+  if (!toAdd.length) return;
+  var startCol = lastCol + 1;
+  var r2 = sheet.getRange(1, startCol, 1, toAdd.length);
+  r2.setValues([toAdd]);
+  r2.setFontWeight('bold');
+  r2.setBackground('#00A7C7');
+  r2.setFontColor('#FFFFFF');
 }
 
 /** Read a sheet tab into an array of plain objects (row 1 = keys). */

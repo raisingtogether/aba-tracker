@@ -1694,7 +1694,7 @@ function calcPct(code) {
 
 // ─── ABC INCIDENTS ────────────────────────────────────────────────────
 function addABC() {
-  S.abc.push({ id: ++abcIdSeq, behavior:null, setting:S.location||null, antecedent:'', consequence:'', fn:null });
+  S.abc.push({ id: ++abcIdSeq, behavior:null, setting:S.location||null, antecedent:'', consequence:'', fn:null, time: fmtTime(new Date()) });
   renderABCList();
   setTimeout(() => { const c = document.getElementById('tab-abc'); c.scrollTop = c.scrollHeight; }, 80);
   EventBus.emit('abc:added', { id: abcIdSeq });
@@ -1909,14 +1909,26 @@ function buildPayload() {
   const _subId = generateUUID();
   const _core  = JSON.stringify({ therapist: S.therapist.name, client: S.client.name,
     date: S.dateStr, timeIn: S.actualStartTime || S.timeIn, timeOut: S.timeOut });
+  const _submittedAt = new Date().toISOString();
+  // ISO date from session start date object; fall back to submittedAt date
+  const _td  = S.timeInDate || new Date();
+  const _tdM = String(_td.getMonth() + 1);
+  const _tdD = String(_td.getDate());
+  const _dateISO = _td.getFullYear() + '-' +
+    (_tdM.length < 2 ? '0' + _tdM : _tdM) + '-' +
+    (_tdD.length < 2 ? '0' + _tdD : _tdD);
+
   return {
     action:       'saveSession',
     sheetId:      S.client.sheetId,
     clientName:   S.client.name,
+    clientId:     S.client.id || '',
     therapist:    S.therapist.name,
     therapistInitials: S.therapist.initials,
     therapistProfile:  profile,
+    therapistEmail:    AUTH.user ? AUTH.user.email : '',
     date:         S.dateStr,
+    dateISO:      _dateISO,
     sessionType:  S.sessType,
     location:     S.location,
     timeIn:       S.actualStartTime || S.timeIn,
@@ -1932,10 +1944,13 @@ function buildPayload() {
     abcData: S.abc.map(inc => ({
       behavior:inc.behavior, setting:inc.setting, antecedent:inc.antecedent,
       consequence:inc.consequence, hypothesizedFunction:inc.fn,
+      time: inc.time || '',
     })),
     submissionId: _subId,
     payloadHash:  simpleHash(_core + _subId),
     submittedBy:  AUTH.user ? AUTH.user.email : '',
+    isDraft:      false,
+    submittedAt:  _submittedAt,
   };
 }
 
@@ -2543,7 +2558,8 @@ async function saveDraftSession() {
   if (GAS_URL === 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') return;
   try {
     var payload = buildPayload();
-    payload.draft = true;
+    payload.isDraft = true;
+    payload.draft   = true;  // legacy field kept for compatibility
     payload.notes = (S.notes || '') + ' [DRAFT — session incomplete, auto-saved after re-auth lockout]';
     await fetch(GAS_URL, { method:'POST', headers:{'Content-Type':'text/plain'}, redirect:'follow', body: JSON.stringify(payload) });
   } catch(e) {
