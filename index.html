@@ -1608,6 +1608,11 @@ function beginSession() {
 
   // Async mastery check — does NOT block session start
   loadMasteryStatus();
+
+  // Warn before navigating away with unsaved session data
+  window.onbeforeunload = function() {
+    return 'You have an active session. If you leave, all unsaved data will be lost.';
+  };
 }
 
 function updateElapsed() {
@@ -2152,7 +2157,8 @@ function buildPayload() {
 }
 
 function showSuccess() {
-  document.getElementById('success-sub').textContent = `${S.client.name} \u2014 ${S.dateStr}`;
+  window.onbeforeunload = null;
+  document.getElementById('success-sub').textContent = S.client.name + ' \u2014 ' + S.dateStr;
   document.getElementById('success-screen').classList.add('active');
 }
 
@@ -2860,6 +2866,7 @@ async function confirmReauth() {
 
 // ── LOGOUT ───────────────────────────────────────────────────────────
 function logoutUser(reason) {
+  window.onbeforeunload = null;
   var userEmail = AUTH.user ? AUTH.user.email : '';
   logAuditEvent('logout', userEmail, '', reason || '');
   EventBus.emit('session:logout', { user: userEmail, timestamp: new Date().toISOString() });
@@ -3732,7 +3739,9 @@ function openEditAuthModal(clientId) {
 
 
 // ── PAYROLL TAB ───────────────────────────────────────────────────────
-let _payrollPeriod = null;
+var _payrollPeriod = null;
+var _payrollCache  = null;   // { data: payrollObj, periodLabel: str, therapists: [] }
+
 
 function renderPayrollTab(container) {
   const now    = new Date();
@@ -3769,52 +3778,63 @@ function renderPayrollTab(container) {
 }
 
 async function loadPayroll(start, end) {
-  const raw    = RAW_CONFIG || DEFAULT_CONFIG;
-  const sel    = document.getElementById('payroll-period-sel');
-  const periods = getPeriods();
-  const p      = periods[_payrollPeriod];
+  var raw    = RAW_CONFIG || DEFAULT_CONFIG;
+  var periods = getPeriods();
+  var p      = periods[_payrollPeriod];
   if (!start) start = p.start;
   if (!end)   end   = p.end;
 
-  const clients = (raw.clients || []).map(c => ({ name: c.name, sheetId: c.sheetId }));
+  var clients = (raw.clients || []).map(function(c) { return { name: c.name, sheetId: c.sheetId }; });
 
   if (GAS_URL === 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') {
     document.getElementById('payroll-table-wrap').innerHTML = '<div class="empty-msg">Demo mode — no payroll data</div>';
     return;
   }
 
+  document.getElementById('payroll-table-wrap').innerHTML = '<div class="empty-msg">Loading\u2026</div>';
+
   try {
-    const resp = await fetch(GAS_URL, {
+    var resp = await fetch(GAS_URL, {
       method:'POST', headers:{'Content-Type':'text/plain'}, redirect:'follow',
-      body: JSON.stringify({ action:'getBiweeklyHours', periodStart: start.toISOString(), periodEnd: end.toISOString(), clients })
+      body: JSON.stringify({ action:'getBiweeklyHours', periodStart: start.toISOString(), periodEnd: end.toISOString(), clients: clients })
     });
-    const data = await resp.json();
+    var data = await resp.json();
     if (!data.success) { document.getElementById('payroll-table-wrap').innerHTML = '<div class="empty-msg">Load failed</div>'; return; }
 
-    const payroll    = data.payroll || {};
-    const therapists = raw.therapists || [];
+    var payroll    = data.payroll || {};
+    var therapists = raw.therapists || [];
+
+    // Cache for CSV export
+    _payrollCache = { data: payroll, periodLabel: p.label, therapists: therapists };
+
     if (!Object.keys(payroll).length) {
       document.getElementById('payroll-table-wrap').innerHTML = '<div class="empty-msg">No sessions in this period</div>';
       return;
     }
 
-    let rows = '<table class="payroll-table"><thead><tr><th>Therapist</th><th>Hours</th><th>Rate</th><th>Total Pay</th></tr></thead><tbody>';
-    let grandTotal = 0;
-    Object.keys(payroll).forEach(tName => {
-      const tCfg    = therapists.find(t => t.name === tName);
-      const rate    = parseFloat((tCfg || {}).payRate || 0);
-      const hours   = payroll[tName].total || 0;
-      const pay     = rate > 0 ? (hours * rate) : null;
+    var html = '<table class="payroll-table"><thead><tr><th>Therapist</th><th>Billing Code</th><th>Hours</th><th>Rate</th><th>Total Pay</th></tr></thead><tbody>';
+    var grandTotal = 0;
+    Object.keys(payroll).forEach(function(tName) {
+      var tCfg  = null;
+      for (var ti = 0; ti < therapists.length; ti++) { if (therapists[ti].name === tName) { tCfg = therapists[ti]; break; } }
+      var rate  = parseFloat((tCfg || {}).payRate || 0);
+      var hours = payroll[tName].total || 0;
+      var pay   = rate > 0 ? (hours * rate) : null;
       if (pay) grandTotal += pay;
-      rows += '<tr><td>' + tName + '</td><td>' + hours.toFixed(2) + '</td><td>' + (rate ? '$' + rate.toFixed(2) : '—') + '</td><td class="payroll-total">' + (pay ? '$' + pay.toFixed(2) : '—') + '</td></tr>';
+
+      // Collect billing codes for display
+      var bCodes = payroll[tName].billingCodes || {};
+      var bCodeStr = Object.keys(bCodes).length ? Object.keys(bCodes).join(', ') : '—';
+
+      html += '<tr><td>' + tName + '</td><td>' + bCodeStr + '</td><td>' + hours.toFixed(2) + '</td><td>' + (rate ? '$' + rate.toFixed(2) : '—') + '</td><td class="payroll-total">' + (pay ? '$' + pay.toFixed(2) : '—') + '</td></tr>';
       // Client breakdown
-      Object.keys(payroll[tName].clients || {}).forEach(cName => {
-        const cHours = payroll[tName].clients[cName];
-        rows += '<tr style="background:var(--g100)"><td style="padding-left:24px;color:var(--g400)">' + cName + '</td><td style="color:var(--g400)">' + cHours.toFixed(2) + '</td><td></td><td></td></tr>';
+      Object.keys(payroll[tName].clients || {}).forEach(function(cName) {
+        var cHours = payroll[tName].clients[cName];
+        html += '<tr style="background:var(--g100)"><td style="padding-left:24px;color:var(--g400)">' + cName + '</td><td style="color:var(--g400)"></td><td style="color:var(--g400)">' + cHours.toFixed(2) + '</td><td></td><td></td></tr>';
       });
     });
-    rows += '</tbody><tfoot><tr><td colspan="3" style="font-weight:800;padding:10px">Grand Total</td><td class="payroll-total">$' + grandTotal.toFixed(2) + '</td></tr></tfoot></table>';
-    document.getElementById('payroll-table-wrap').innerHTML = rows;
+    html += '</tbody><tfoot><tr><td colspan="4" style="font-weight:800;padding:10px">Grand Total</td><td class="payroll-total">$' + grandTotal.toFixed(2) + '</td></tr></tfoot></table>';
+    document.getElementById('payroll-table-wrap').innerHTML = html;
   } catch(e) {
     document.getElementById('payroll-table-wrap').innerHTML = '<div class="empty-msg">Error loading payroll</div>';
   }
@@ -3833,16 +3853,56 @@ function getPeriods() {
 }
 
 function exportPayroll() {
-  const wrap = document.getElementById('payroll-table-wrap');
-  if (!wrap) return;
-  const rows = wrap.querySelectorAll('tr');
-  const csv  = Array.from(rows).map(r =>
-    Array.from(r.querySelectorAll('th,td')).map(c => '"' + c.textContent.trim().replace(/"/g,'""') + '"').join(',')
-  ).join('\n');
-  const blob = new Blob([csv], { type:'text/csv' });
-  const url  = URL.createObjectURL(blob);
-  const a    = document.createElement('a'); a.href = url;
-  a.download = 'payroll_' + new Date().toISOString().slice(0,10) + '.csv'; a.click();
+  if (!_payrollCache || !_payrollCache.data) { toast('No payroll data to export — load a period first', 'err'); return; }
+
+  var payroll    = _payrollCache.data;
+  var therapists = _payrollCache.therapists || [];
+  var periodLabel = _payrollCache.periodLabel || '';
+
+  function csvQ(v) { return '"' + String(v || '').replace(/"/g, '""') + '"'; }
+
+  var lines = [];
+  lines.push(csvQ('Pay Period') + ',' + csvQ(periodLabel));
+  lines.push('');
+  lines.push([csvQ('Therapist'), csvQ('Billing Code'), csvQ('Hours Worked'), csvQ('Hourly Rate'), csvQ('Total Pay'), csvQ('Client'), csvQ('Client Hours')].join(','));
+
+  var grandTotal = 0;
+  Object.keys(payroll).forEach(function(tName) {
+    var tCfg  = null;
+    for (var ti = 0; ti < therapists.length; ti++) { if (therapists[ti].name === tName) { tCfg = therapists[ti]; break; } }
+    var rate  = parseFloat((tCfg || {}).payRate || 0);
+    var hours = payroll[tName].total || 0;
+    var pay   = rate > 0 ? hours * rate : 0;
+    if (pay) grandTotal += pay;
+
+    var bCodes = payroll[tName].billingCodes || {};
+    var bCodeStr = Object.keys(bCodes).join('; ');
+
+    // Summary row for therapist
+    lines.push([csvQ(tName), csvQ(bCodeStr), csvQ(hours.toFixed(2)), csvQ(rate ? '$' + rate.toFixed(2) : ''), csvQ(pay ? '$' + pay.toFixed(2) : ''), csvQ(''), csvQ('')].join(','));
+
+    // Per-billing-code breakdown
+    Object.keys(bCodes).forEach(function(code) {
+      lines.push([csvQ(''), csvQ(code), csvQ(bCodes[code].toFixed(2)), csvQ(''), csvQ(''), csvQ(''), csvQ('')].join(','));
+    });
+
+    // Per-client breakdown
+    Object.keys(payroll[tName].clients || {}).forEach(function(cName) {
+      var cHours = payroll[tName].clients[cName];
+      lines.push([csvQ(''), csvQ(''), csvQ(''), csvQ(''), csvQ(''), csvQ(cName), csvQ(cHours.toFixed(2))].join(','));
+    });
+  });
+
+  lines.push('');
+  lines.push([csvQ('GRAND TOTAL'), csvQ(''), csvQ(''), csvQ(''), csvQ('$' + grandTotal.toFixed(2)), csvQ(''), csvQ('')].join(','));
+
+  var csv  = lines.join('\n');
+  var blob = new Blob([csv], { type: 'text/csv' });
+  var url  = URL.createObjectURL(blob);
+  var a    = document.createElement('a');
+  a.href = url;
+  a.download = 'payroll_' + periodLabel.replace(/[^a-z0-9]/gi, '_') + '_' + new Date().toISOString().slice(0, 10) + '.csv';
+  a.click();
   URL.revokeObjectURL(url);
 }
 

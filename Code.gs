@@ -344,12 +344,13 @@ function getBiweeklyHours(periodStart, periodEnd, clients) {
       if (rows.length < 2) continue;
 
       var headers = rows[0];
-      var dateCol = -1, therapistCol = -1, durationCol = -1;
+      var dateCol = -1, therapistCol = -1, durationCol = -1, billingCol = -1;
       for (var hi = 0; hi < headers.length; hi++) {
         var h = String(headers[hi]).trim().toLowerCase();
         if (h === 'date')           dateCol      = hi;
         if (h === 'therapist')      therapistCol = hi;
         if (h === 'duration (min)') durationCol  = hi;
+        if (h === 'billing code')   billingCol   = hi;
       }
       if (dateCol < 0 || therapistCol < 0 || durationCol < 0) continue;
 
@@ -360,10 +361,15 @@ function getBiweeklyHours(periodStart, periodEnd, clients) {
         var tName = String(row[therapistCol] || '').trim();
         if (!tName) continue;
         var mins = parseFloat(row[durationCol]) || 0;
-        if (!result[tName]) result[tName] = { total: 0, clients: {} };
+        var bCode = billingCol >= 0 ? String(row[billingCol] || '').trim() : '';
+        if (!result[tName]) result[tName] = { total: 0, clients: {}, billingCodes: {} };
         result[tName].total += mins / 60;
         if (!result[tName].clients[client.name]) result[tName].clients[client.name] = 0;
         result[tName].clients[client.name] += mins / 60;
+        if (bCode) {
+          if (!result[tName].billingCodes[bCode]) result[tName].billingCodes[bCode] = 0;
+          result[tName].billingCodes[bCode] += mins / 60;
+        }
       }
     } catch (e) {
       // skip
