@@ -931,6 +931,19 @@ function checkBehaviorMastery(ss, clientId, clientName, therapistName, therapist
   }
 }
 
+/**
+ * Normalize a cell value to a YYYY-MM-DD string.
+ * Google Sheets sometimes auto-converts ISO date strings to Date objects
+ * when stored via appendRow; this undoes that conversion safely.
+ */
+function toDateISO(val) {
+  if (!val && val !== 0) return '';
+  if (val instanceof Date) {
+    return Utilities.formatDate(val, 'UTC', 'yyyy-MM-dd');
+  }
+  return String(val).trim();
+}
+
 function isMasteryLogged(ss, type, code, dateISO) {
   var sheet = ss.getSheetByName('Mastery Log');
   if (!sheet) return false;
@@ -949,7 +962,7 @@ function isMasteryLogged(ss, type, code, dateISO) {
     var row = data[ri];
     if (String(row[typeCol]).trim() === type &&
         String(row[codeCol]).trim() === code &&
-        String(row[dateCol]).trim() === dateISO) {
+        toDateISO(row[dateCol]) === dateISO) {
       return true;
     }
   }
@@ -1002,18 +1015,24 @@ function getMasteryReport(year, month, clients) {
 
       for (var ri = 1; ri < data.length; ri++) {
         var row = data[ri];
-        var dateISO = String(row[colMap['dateISO']] || '').trim();
-        if (dateISO.indexOf(prefix) !== 0) continue;
+        // Normalize dateISO — Google Sheets may store ISO strings as Date objects
+        var dateISO = toDateISO(colMap['dateISO'] !== undefined ? row[colMap['dateISO']] : '');
+        // Fall back to masteryDate column if dateISO is missing
+        if (!dateISO && colMap['masteryDate'] !== undefined) {
+          dateISO = toDateISO(row[colMap['masteryDate']]);
+        }
+        if (!dateISO || dateISO.indexOf(prefix) !== 0) continue;
+        var masteryDateVal = colMap['masteryDate'] !== undefined ? toDateISO(row[colMap['masteryDate']]) : dateISO;
         entries.push({
           clientId:      client.id || '',
           clientName:    client.name || '',
-          type:          String(row[colMap['type']]         || '').trim(),
-          code:          String(row[colMap['code']]         || '').trim(),
-          description:   String(row[colMap['description']]  || '').trim(),
-          masteryDate:   String(row[colMap['masteryDate']]  || '').trim(),
-          lastScores:    String(row[colMap['lastScores']]   || '').trim(),
-          therapistName: String(row[colMap['therapistName']]|| '').trim(),
-          therapistEmail:String(row[colMap['therapistEmail']]||'').trim()
+          type:          String(row[colMap['type']]          || '').trim(),
+          code:          String(row[colMap['code']]          || '').trim(),
+          description:   String(row[colMap['description']]   || '').trim(),
+          masteryDate:   masteryDateVal,
+          lastScores:    String(row[colMap['lastScores']]    || '').trim(),
+          therapistName: String(row[colMap['therapistName']] || '').trim(),
+          therapistEmail:String(row[colMap['therapistEmail']]|| '').trim()
         });
       }
     } catch(e) {
