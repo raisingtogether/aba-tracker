@@ -741,6 +741,49 @@
     .settings-hdr { font-size:12px; font-weight:700; text-transform:uppercase;
                     letter-spacing:0.8px; color:var(--g400); margin-bottom:12px; }
 
+    /* ── LOGOUT BUTTON ── */
+    .logout-btn {
+      padding: 6px 14px; border-radius: 100px; border: none;
+      background: rgba(255,255,255,0.18); color: white;
+      font-family: 'Nunito', sans-serif; font-size: 13px; font-weight: 700;
+      cursor: pointer; white-space: nowrap; flex-shrink: 0;
+      transition: background .13s; -webkit-tap-highlight-color: transparent;
+    }
+    .logout-btn:active { background: rgba(255,255,255,0.32); }
+
+    /* ── SESSION ELAPSED TIMER ── */
+    #sess-elapsed { font-size: 15px; font-weight: 900; color: #00A7C7;
+                    background: rgba(255,255,255,0.92); border-radius: 8px;
+                    padding: 3px 8px; font-variant-numeric: tabular-nums; }
+    .sess-timer-label { font-size: 10px; color: rgba(255,255,255,0.7);
+                        font-weight: 600; text-align: right; margin-top: 2px; }
+
+    /* ── MASTERY BADGES ── */
+    .mastery-badge-goal {
+      display: inline-flex; align-items: center; gap: 3px;
+      background: #FEF3C7; border: 1.5px solid #F59E0B;
+      border-radius: 100px; padding: 2px 8px;
+      font-size: 10px; font-weight: 800; color: #B45309;
+      margin-left: 6px; vertical-align: middle;
+    }
+    .mastery-badge-beh {
+      display: inline-flex; align-items: center; gap: 3px;
+      background: #DCFCE7; border: 1.5px solid #16A34A;
+      border-radius: 100px; padding: 2px 8px;
+      font-size: 10px; font-weight: 800; color: #16A34A;
+      margin-left: 4px; vertical-align: middle;
+    }
+    .mastery-loading { font-size: 10px; color: var(--g400); margin-left: 4px; animation: spin 1s linear infinite; display: inline-block; }
+
+    /* ── MASTERY REPORT ── */
+    .mastery-report-card { background:white; border-radius:var(--r); padding:16px; margin-bottom:12px; box-shadow:var(--shadow); }
+    .mastery-report-ttl { font-size:14px; font-weight:800; color:var(--g800); margin-bottom:10px; }
+    .mastery-entry { padding:8px 0; border-bottom:1px solid var(--g100); font-size:13px; }
+    .mastery-entry:last-child { border-bottom:none; }
+    .mastery-entry-code { font-weight:800; color:var(--primary); }
+    .mastery-entry-client { font-size:11px; color:var(--g400); font-weight:700; margin-top:2px; }
+    .mastery-period-sel { display:flex; gap:8px; align-items:center; margin-bottom:16px; flex-wrap:wrap; }
+
     /* ── QR CODE / TOTP SETUP ── */
     .qr-wrap { text-align:center; padding:16px 0; }
     .qr-wrap img { border:2px solid var(--g200); border-radius:var(--r-sm); }
@@ -782,10 +825,11 @@
 <div class="screen" id="screen-client">
   <div class="header">
     <button class="hdr-back" onclick="goTo('therapist')">&#8249;</button>
-    <div>
+    <div style="flex:1">
       <div class="hdr-title">Select Client</div>
       <div class="hdr-sub" id="hdr-therapist-name">&#8212;</div>
     </div>
+    <button class="logout-btn" onclick="confirmLogout()">Logout</button>
   </div>
   <div class="section-lbl">Active Clients</div>
   <div class="client-list" id="client-list"></div>
@@ -836,10 +880,11 @@
       <div class="hdr-title" id="sess-client-name">Session</div>
       <div class="hdr-sub" id="sess-subtitle">&#8212;</div>
     </div>
-    <div>
-      <div class="live-clock" id="sess-elapsed">00:00</div>
-      <div class="live-elapsed">elapsed</div>
+    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
+      <div id="sess-elapsed" style="font-size:15px;font-weight:900;color:#00A7C7;background:rgba(255,255,255,0.92);border-radius:8px;padding:3px 8px;font-variant-numeric:tabular-nums">0h 0m 0s</div>
+      <div class="sess-timer-label">elapsed</div>
     </div>
+    <button class="logout-btn" onclick="confirmLogout()" style="margin-left:8px">Logout</button>
   </div>
   <div class="session-bar">
     <div class="sbar-item"><span class="sbar-lbl">Type: </span><span class="sbar-val" id="bar-type">&#8212;</span></div>
@@ -886,7 +931,7 @@
     <button class="tab-btn active" id="tnav-behaviors" onclick="switchTab('behaviors')"><span class="tab-icon">&#128202;</span>Behaviors</button>
     <button class="tab-btn" id="tnav-trials" onclick="switchTab('trials')"><span class="tab-icon">&#127919;</span>Trials</button>
     <button class="tab-btn" id="tnav-abc" onclick="switchTab('abc')"><span class="tab-icon">&#128221;</span>ABC</button>
-    <button class="tab-btn end-btn" onclick="goTo('end')"><span class="tab-icon">&#127937;</span>End</button>
+    <button class="tab-btn end-btn" onclick="showEndTimeModal()"><span class="tab-icon">&#127937;</span>End</button>
   </div>
 </div>
 
@@ -894,7 +939,8 @@
 <div class="screen" id="screen-end">
   <div class="header">
     <button class="hdr-back" onclick="goTo('session')">&#8249;</button>
-    <div><div class="hdr-title">End Session</div><div class="hdr-sub" id="end-hdr-sub">&#8212;</div></div>
+    <div style="flex:1"><div class="hdr-title">End Session</div><div class="hdr-sub" id="end-hdr-sub">&#8212;</div></div>
+    <button class="logout-btn" onclick="confirmLogout()">Logout</button>
   </div>
   <div class="content">
     <div class="sum-card">
@@ -929,9 +975,23 @@
     </div>
     <div class="card">
       <div class="card-ttl">Session Notes</div>
-      <div class="notes-hint">Please write thorough, detailed notes about this session including activities, client responses, progress toward goals, and any notable events.</div>
-      <textarea class="form-ctrl" id="session-notes" rows="6"
-        placeholder="Add session notes here&#8230;"
+      <div class="notes-hint">Please write thorough, detailed notes. Use the template sections below as a guide (minimum 150 content words).</div>
+      <textarea class="form-ctrl" id="session-notes" rows="10"
+        placeholder="SESSION OVERVIEW: Describe overall session flow and client presentation
+
+SKILL ACQUISITION &amp; PROGRAMS: Report on goals targeted, prompting levels, and progress
+
+BEHAVIOR SUMMARY: Describe frequency and intensity of target behaviors
+
+INTERVENTIONS &amp; STRATEGIES USED: Detail specific ABA strategies applied
+
+ENGAGEMENT &amp; RESPONSE: Describe client's engagement level and responsiveness
+
+CAREGIVER INVOLVEMENT: Note any parent/caregiver participation or training
+
+SAFETY INCIDENTS: Report any safety concerns or incidents - write None if N/A
+
+FOCUS FOR NEXT SESSION: Outline priorities and goals for the next session"
         oninput="updateWordCount()"></textarea>
       <div class="word-count" id="notes-word-count">0 / 150 words</div>
     </div>
@@ -973,6 +1033,7 @@
         <button class="admin-tab-btn admin-only-tab" id="atab-authorizations" onclick="showAdminTab('authorizations')">Auth</button>
         <button class="admin-tab-btn admin-only-tab" id="atab-payroll" onclick="showAdminTab('payroll')">Payroll</button>
         <button class="admin-tab-btn admin-only-tab" id="atab-admins" onclick="showAdminTab('admins')">Admins</button>
+        <button class="admin-tab-btn admin-only-tab" id="atab-mastery" onclick="showAdminTab('mastery')">Mastery</button>
   </div>
   <div class="content" style="padding-bottom:0" id="admin-list"></div>
   <div class="admin-add-bar" id="admin-add-bar">
@@ -1227,6 +1288,10 @@ let S = {
   appStartTime:    null,  // fmtTime() when "Begin Session" was tapped
   actualStartTime: null,  // overridden if therapist says "started late"
   lateStartReason: '',
+  // End-time adjustment
+  adjustedEndTime: null,          // display string e.g. "3:45 PM" or null
+  adjustedEndTimeDate: null,      // Date object for duration calc
+  endTimeAdjustmentReason: '',
 };
 
 let abcIdSeq = 0;
@@ -1540,12 +1605,15 @@ function beginSession() {
     actualStartTime: S.actualStartTime,
     lateStartReason: S.lateStartReason,
   });
+
+  // Async mastery check — does NOT block session start
+  loadMasteryStatus();
 }
 
 function updateElapsed() {
   const sec = Math.floor((Date.now() - S.sessStartTs) / 1000);
   const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60), s = sec%60;
-  const str = h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+  const str = h > 0 ? (h + 'h ' + m + 'm ' + s + 's') : (m + 'm ' + s + 's');
   const el = document.getElementById('sess-elapsed');
   if (el) el.textContent = str;
 }
@@ -1567,14 +1635,16 @@ function buildBehaviorGrid() {
   (S.client.behaviors || []).forEach(b => {
     const d = document.createElement('div');
     d.className = 'beh-card';
-    d.innerHTML = `
-      <div class="beh-name" style="color:${b.color}">${b.label}</div>
-      <div class="beh-count" id="cnt-${b.key}" style="color:${b.color}">0</div>
-      <div class="ctr-btns">
-        <button class="ctr-btn minus" onclick="changeCnt('${b.key}',-1)">\u2212</button>
-        <button class="ctr-btn plus"  style="background:${b.color}" onclick="changeCnt('${b.key}',1)">+</button>
-      </div>
-    `;
+    d.innerHTML =
+      '<div class="beh-name" style="color:' + b.color + '">' + b.label +
+        '<span class="mastery-loading" id="mastery-loading-beh-' + b.key + '" title="Checking mastery...">&#9203;</span>' +
+        '<span class="mastery-badge-beh" id="mastery-beh-' + b.key + '" style="display:none">&#10003; MASTERED</span>' +
+      '</div>' +
+      '<div class="beh-count" id="cnt-' + b.key + '" style="color:' + b.color + '">0</div>' +
+      '<div class="ctr-btns">' +
+        '<button class="ctr-btn minus" onclick="changeCnt(\'' + b.key + '\',-1)">\u2212</button>' +
+        '<button class="ctr-btn plus" style="background:' + b.color + '" onclick="changeCnt(\'' + b.key + '\',1)">+</button>' +
+      '</div>';
     grid.appendChild(d);
   });
 }
@@ -1653,21 +1723,25 @@ function buildTrials() {
     S.trials[g.code] = Array(n).fill(null);
     const card = document.createElement('div');
     card.className = 'goal-card';
-    const slots = Array.from({length: n}, (_, i) => `
-      <div class="trial-slot">
-        <div class="trial-slot-num">T${i+1}</div>
-        <button class="trial-btn" id="tr-${g.code}-${i}-c" onclick="setTrial('${g.code}',${i},true)">\u2713</button>
-        <button class="trial-btn" id="tr-${g.code}-${i}-x" onclick="setTrial('${g.code}',${i},false)">\u2717</button>
-      </div>
-    `).join('');
-    card.innerHTML = `
-      <div class="goal-hdr">
-        <span class="goal-code">${g.code}</span>
-        <span class="goal-name">${g.name}</span>
-        <span class="goal-pct" id="pct-${g.code}">\u2014</span>
-      </div>
-      <div class="trial-btns">${slots}</div>
-    `;
+    var slots = '';
+    for (var i = 0; i < n; i++) {
+      slots +=
+        '<div class="trial-slot">' +
+          '<div class="trial-slot-num">T' + (i+1) + '</div>' +
+          '<button class="trial-btn" id="tr-' + g.code + '-' + i + '-c" onclick="setTrial(\'' + g.code + '\',' + i + ',true)">\u2713</button>' +
+          '<button class="trial-btn" id="tr-' + g.code + '-' + i + '-x" onclick="setTrial(\'' + g.code + '\',' + i + ',false)">\u2717</button>' +
+        '</div>';
+    }
+    card.innerHTML =
+      '<div class="goal-hdr">' +
+        '<span class="goal-code">' + g.code + '</span>' +
+        '<span class="goal-name">' + g.name +
+          '<span class="mastery-loading" id="mastery-loading-goal-' + g.code + '" title="Checking mastery...">&#9203;</span>' +
+          '<span class="mastery-badge-goal" id="mastery-goal-' + g.code + '" style="display:none">&#11088; MASTERED</span>' +
+        '</span>' +
+        '<span class="goal-pct" id="pct-' + g.code + '">\u2014</span>' +
+      '</div>' +
+      '<div class="trial-btns">' + slots + '</div>';
     wrap.appendChild(card);
   });
 }
@@ -1752,8 +1826,10 @@ function setABCText(id, field, value) {
 // ─── END SESSION SCREEN ───────────────────────────────────────────────
 function buildEndScreen() {
   const now = new Date();
-  S.timeOut     = fmtTime(now);
-  S.durationMin = Math.round((now - S.timeInDate) / 60000);
+  // Use adjusted end time if set, otherwise use current time
+  const endDate = S.adjustedEndTimeDate || now;
+  S.timeOut     = S.adjustedEndTime || fmtTime(now);
+  S.durationMin = Math.round((endDate - S.timeInDate) / 60000);
   const dh = Math.floor(S.durationMin / 60), dm = S.durationMin % 60;
   const durStr  = dh > 0 ? `${dh}h ${dm}m` : `${dm}m`;
   const units   = Math.floor(S.durationMin / 15);
@@ -1817,8 +1893,87 @@ function buildEndScreen() {
 function sumRow(lbl, val, isZero) {
   const d = document.createElement('div');
   d.className = 'sum-row';
-  d.innerHTML = `<span class="sum-lbl">${lbl}</span><span class="sum-val${isZero?' zero':''}">${val}</span>`;
+  d.innerHTML = '<span class="sum-lbl">' + lbl + '</span><span class="sum-val' + (isZero?' zero':'') + '">' + val + '</span>';
   return d;
+}
+
+
+// ─── END TIME ADJUSTMENT ──────────────────────────────────────────────
+function showEndTimeModal() {
+  // Reset form
+  document.getElementById('end-time-adjust-form').style.display = 'none';
+  document.getElementById('adjusted-end-time').value = '';
+  document.getElementById('end-adjust-reason').value = '';
+  document.getElementById('end-adjust-error').textContent = '';
+  S.adjustedEndTime = null;
+  S.adjustedEndTimeDate = null;
+  S.endTimeAdjustmentReason = '';
+  document.getElementById('modal-end-time').classList.add('active');
+}
+
+function confirmEndNow() {
+  document.getElementById('modal-end-time').classList.remove('active');
+  S.adjustedEndTime = null;
+  S.adjustedEndTimeDate = null;
+  S.endTimeAdjustmentReason = '';
+  goTo('end');
+}
+
+function showEndTimeAdjustForm() {
+  // Pre-fill with current time
+  const now = new Date();
+  const hh = String(now.getHours()).padStart(2, '0');
+  const mm = String(now.getMinutes()).padStart(2, '0');
+  document.getElementById('adjusted-end-time').value = hh + ':' + mm;
+  document.getElementById('end-time-adjust-form').style.display = 'block';
+}
+
+function confirmAdjustedEnd() {
+  const timeVal   = document.getElementById('adjusted-end-time').value;
+  const reasonVal = document.getElementById('end-adjust-reason').value.trim();
+  const errEl     = document.getElementById('end-adjust-error');
+  errEl.textContent = '';
+
+  if (!timeVal) { errEl.textContent = 'Please enter the end time'; return; }
+  if (!reasonVal) { errEl.textContent = 'Reason for adjustment is required'; return; }
+
+  var parts = timeVal.split(':').map(Number);
+  var hh = parts[0]; var mm = parts[1];
+  var today = S.timeInDate ? new Date(S.timeInDate) : new Date();
+  var adjustedDate = new Date(today.getFullYear(), today.getMonth(), today.getDate(), hh, mm, 0);
+
+  // If same day but time before session start (by more than 1 min), reject
+  if (S.timeInDate && adjustedDate.getTime() < S.timeInDate.getTime() - 60000) {
+    errEl.textContent = 'End time cannot be before start time';
+    return;
+  }
+
+  var ap = hh >= 12 ? 'PM' : 'AM';
+  var h12 = hh % 12 || 12;
+  S.adjustedEndTime = h12 + ':' + pad(mm) + ' ' + ap;
+  S.adjustedEndTimeDate = adjustedDate;
+  S.endTimeAdjustmentReason = reasonVal;
+
+  document.getElementById('modal-end-time').classList.remove('active');
+  EventBus.emit('session:timeAdjusted', {
+    originalTime: fmtTime(new Date()),
+    adjustedTime: S.adjustedEndTime,
+    reason: S.endTimeAdjustmentReason
+  });
+  goTo('end');
+}
+
+
+// ─── LOGOUT CONFIRMATION ──────────────────────────────────────────────
+function confirmLogout() {
+  // Simple confirm dialog since we can't use custom modals during session without extra HTML
+  if (window.confirm('Are you sure you want to logout? Any unsaved session data will be lost.')) {
+    EventBus.emit('session:logout', {
+      user: AUTH.user ? AUTH.user.email : '',
+      timestamp: new Date().toISOString()
+    });
+    logoutUser('manual_logout');
+  }
 }
 
 function toggleSupervision(btn) {
@@ -1830,8 +1985,39 @@ function toggleSupervision(btn) {
 // ─── WORD COUNT ───────────────────────────────────────────────────────
 const NOTES_MIN_WORDS = 150;
 
+// Template header keywords to strip before counting words
+const NOTES_TEMPLATE_HEADERS = [
+  'SESSION OVERVIEW:',
+  'SKILL ACQUISITION & PROGRAMS:',
+  'BEHAVIOR SUMMARY:',
+  'INTERVENTIONS & STRATEGIES USED:',
+  'ENGAGEMENT & RESPONSE:',
+  'CAREGIVER INVOLVEMENT:',
+  'SAFETY INCIDENTS:',
+  'FOCUS FOR NEXT SESSION:'
+];
+// Full template placeholder strings to strip (therapist may copy/paste these)
+const NOTES_TEMPLATE_FULL = [
+  'Describe overall session flow and client presentation',
+  'Report on goals targeted, prompting levels, and progress',
+  'Describe frequency and intensity of target behaviors',
+  'Detail specific ABA strategies applied',
+  "Describe client's engagement level and responsiveness",
+  'Note any parent/caregiver participation or training',
+  'Report any safety concerns or incidents - write None if N/A',
+  'Outline priorities and goals for the next session'
+];
+
 function countWords(text) {
-  return text.trim() === '' ? 0 : text.trim().split(/\s+/).length;
+  // Strip template headers and placeholder descriptions before counting
+  var cleaned = text;
+  NOTES_TEMPLATE_HEADERS.forEach(function(h) {
+    cleaned = cleaned.split(h).join('');
+  });
+  NOTES_TEMPLATE_FULL.forEach(function(h) {
+    cleaned = cleaned.split(h).join('');
+  });
+  return cleaned.trim() === '' ? 0 : cleaned.trim().split(/\s+/).length;
 }
 
 function updateWordCount() {
@@ -1839,7 +2025,7 @@ function updateWordCount() {
   const count = countWords(text);
   const el    = document.getElementById('notes-word-count');
   const btn   = document.getElementById('submit-btn');
-  el.textContent = `${count} / ${NOTES_MIN_WORDS} words`;
+  el.textContent = count + ' / ' + NOTES_MIN_WORDS + ' words';
   const met = count >= NOTES_MIN_WORDS;
   el.classList.toggle('met', met);
   btn.disabled = !met;
@@ -1850,7 +2036,7 @@ function updateWordCount() {
 async function submitSession() {
   S.notes = document.getElementById('session-notes').value;
   if (countWords(S.notes) < NOTES_MIN_WORDS) {
-    toast(`Please write at least ${NOTES_MIN_WORDS} words in your notes`, 'err'); return;
+    toast('Please write at least ' + NOTES_MIN_WORDS + ' content words in your notes', 'err'); return;
   }
   if (S.tantrum.running) timerStop();
   if (S.sessInterval) { clearInterval(S.sessInterval); S.sessInterval = null; }
@@ -1940,6 +2126,8 @@ function buildPayload() {
     appStartTime:    S.appStartTime,
     actualStartTime: S.actualStartTime,
     lateStartReason: S.lateStartReason,
+    adjustedEndTime: S.adjustedEndTime || '',
+    endTimeAdjustmentReason: S.endTimeAdjustmentReason || '',
     behaviorKeys, behaviorLabels, behaviorData, trialData,
     abcData: S.abc.map(inc => ({
       behavior:inc.behavior, setting:inc.setting, antecedent:inc.antecedent,
@@ -1977,6 +2165,7 @@ function resetState() {
   S.tantrum = { count:0, totalSec:0, curSec:0, running:false, interval:null, startTs:null };
   S.trials = {}; S.abc = []; abcIdSeq = 0;
   S.appStartTime = null; S.actualStartTime = null; S.lateStartReason = '';
+  S.adjustedEndTime = null; S.adjustedEndTimeDate = null; S.endTimeAdjustmentReason = '';
   if (S.clockInterval) { clearInterval(S.clockInterval); S.clockInterval = null; }
   if (S.sessInterval)  { clearInterval(S.sessInterval);  S.sessInterval  = null; }
   document.querySelectorAll('.opt-pill').forEach(p => p.classList.remove('sel'));
@@ -2014,7 +2203,7 @@ function checkPin() {
 
 function showAdminTab(tab) {
   const role = AUTH.role || 'collector';
-  const bcbaBlocked = ['payroll','admins','authorizations','settings','therapists','clients','billing'];
+  const bcbaBlocked = ['payroll','admins','authorizations','settings','therapists','clients','billing','mastery'];
   if (role === 'bcba' && bcbaBlocked.indexOf(tab) >= 0) {
     toast('Access restricted for BCBA role', 'err'); return;
   }
@@ -2025,7 +2214,7 @@ function showAdminTab(tab) {
   document.querySelectorAll('.admin-tab-btn').forEach(b => b.classList.remove('active'));
   const tabEl = document.getElementById('atab-' + tab);
   if (tabEl) tabEl.classList.add('active');
-  const noAddBar = ['settings','authorizations','payroll','admins'];
+  const noAddBar = ['settings','authorizations','payroll','admins','mastery'];
   document.getElementById('admin-add-bar').style.display = noAddBar.indexOf(tab) >= 0 ? 'none' : '';
   renderAdminList(tab);
 }
@@ -2038,6 +2227,7 @@ function renderAdminList(type) {
   if (type === 'authorizations') { renderAuthorizationsTab(container); return; }
   if (type === 'payroll')        { renderPayrollTab(container);        return; }
   if (type === 'admins')         { renderAdminsTab(container);         return; }
+  if (type === 'mastery')        { renderMasteryReportTab(container);  return; }
 
   if (type === 'settings') {
     renderSettingsTab(container);
@@ -2541,17 +2731,42 @@ document.addEventListener('visibilitychange', function() {
     _bgStart = Date.now();
   } else {
     if (_bgStart && (Date.now() - _bgStart) > BACKGROUND_REAUTH_MS && AUTH.user) {
-      _reauthFailCount = 0;
-      document.getElementById('reauth-pin').value = '';
-      document.getElementById('reauth-error').textContent = '';
-      document.getElementById('reauth-overlay').classList.add('show');
-      // Stop inactivity timer while reauth overlay is active — the overlay
-      // itself is the security gate; timer will restart on successful reauth
-      stopInactivityTimer();
+      showReauthOverlay();
     }
     _bgStart = null;
   }
 });
+
+function showReauthOverlay() {
+  _reauthFailCount = 0;
+  const reauthRole = AUTH.role || 'collector';
+  const isGoogleUser = (reauthRole === 'admin' || reauthRole === 'bcba' || reauthRole === 'therapist');
+
+  // Show/hide sections based on auth method
+  const gSection = document.getElementById('reauth-google-section');
+  const pSection = document.getElementById('reauth-pin-section');
+  const subEl    = document.getElementById('reauth-sub');
+
+  if (isGoogleUser) {
+    if (gSection) gSection.style.display = '';
+    if (pSection) pSection.style.display = 'none';
+    if (subEl)    subEl.textContent = 'Your session data is preserved. Sign in with Google to continue.';
+  } else {
+    if (gSection) gSection.style.display = 'none';
+    if (pSection) pSection.style.display = '';
+    if (subEl)    subEl.textContent = 'Your session data is preserved. Enter your PIN to continue.';
+    document.getElementById('reauth-pin').value = '';
+    document.getElementById('reauth-error').textContent = '';
+  }
+
+  document.getElementById('reauth-overlay').classList.add('show');
+  stopInactivityTimer();
+
+  EventBus.emit('auth:reauthRequired', {
+    method: isGoogleUser ? 'google' : 'pin',
+    userId: AUTH.user ? AUTH.user.email : ''
+  });
+}
 
 async function saveDraftSession() {
   if (!S.client || !S.therapist) return;
@@ -2568,14 +2783,11 @@ async function saveDraftSession() {
 }
 
 async function confirmReauth() {
+  // This function is only called for PIN (collector) reauth
   const pin    = document.getElementById('reauth-pin').value;
   const errEl  = document.getElementById('reauth-error');
   let ok = false;
-  const reauthRole = AUTH.role || 'collector';
-
-  if (reauthRole === 'admin' || reauthRole === 'bcba' || reauthRole === 'therapist') {
-    ok = true; // Google Sign-In users don't need a PIN for re-auth
-  } else {
+  {
     // Always fetch fresh config from server so a PIN change is picked up immediately
     var therapist = null;
     if (GAS_URL !== 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') {
@@ -2639,8 +2851,12 @@ async function confirmReauth() {
 
 // ── LOGOUT ───────────────────────────────────────────────────────────
 function logoutUser(reason) {
-  logAuditEvent('logout', AUTH.user ? AUTH.user.email : '', '', reason || '');
+  var userEmail = AUTH.user ? AUTH.user.email : '';
+  logAuditEvent('logout', userEmail, '', reason || '');
+  EventBus.emit('session:logout', { user: userEmail, timestamp: new Date().toISOString() });
   stopInactivityTimer();
+  // Clear pending reauth data if any
+  try { sessionStorage.removeItem('pendingReauth'); } catch(e) {}
   // Clear PHI from memory
   AUTH = { user: null, tier: null };
   resetState();
@@ -2748,6 +2964,44 @@ function acceptPrivacy() {
 }
 
 // ── GOOGLE SIGN-IN (OAuth redirect flow) ─────────────────────────────
+
+// Save in-progress session to sessionStorage before OAuth redirect (reauth flow)
+function saveSessionForReauth() {
+  if (!S.client) return;
+  try {
+    var snap = {
+      behaviors:           JSON.parse(JSON.stringify(S.behaviors || {})),
+      trials:              JSON.parse(JSON.stringify(S.trials   || {})),
+      abc:                 JSON.parse(JSON.stringify(S.abc      || [])),
+      tantrum:             JSON.parse(JSON.stringify({
+        count: S.tantrum.count, totalSec: S.tantrum.totalSec, curSec: S.tantrum.curSec
+      })),
+      notes:               S.notes || '',
+      sessType:            S.sessType || '',
+      location:            S.location || '',
+      dateStr:             S.dateStr || '',
+      timeIn:              S.timeIn || '',
+      timeInDateISO:       S.timeInDate ? S.timeInDate.toISOString() : null,
+      appStartTime:        S.appStartTime || '',
+      actualStartTime:     S.actualStartTime || '',
+      lateStartReason:     S.lateStartReason || '',
+      sessStartTs:         S.sessStartTs || 0,
+      clientId:            S.client.id || '',
+      therapistId:         S.therapist ? (S.therapist.id || '') : '',
+      abcIdSeq:            abcIdSeq,
+      isReauth:            true
+    };
+    sessionStorage.setItem('pendingReauth', JSON.stringify(snap));
+  } catch(e) {
+    // If we can't save, just proceed — session data may be lost but auth will still work
+  }
+}
+
+function startGoogleReauth() {
+  saveSessionForReauth();
+  startGoogleSignIn();
+}
+
 function startGoogleSignIn() {
   if (GOOGLE_CLIENT_ID === 'YOUR_GOOGLE_CLIENT_ID_HERE') {
     toast('Google Sign-In not configured', 'err'); return;
@@ -2968,8 +3222,113 @@ function completeRBTLogin(t) {
   afterAuth();
 }
 
+function restoreSessionAfterReauth() {
+  var snapStr = sessionStorage.getItem('pendingReauth');
+  if (!snapStr) return false;
+  sessionStorage.removeItem('pendingReauth');
+  try {
+    var snap = JSON.parse(snapStr);
+    if (!snap.isReauth || !snap.clientId) return false;
+
+    // Find client and therapist from CFG
+    var client    = null;
+    var therapist = null;
+    for (var ci = 0; ci < CFG.CLIENTS.length; ci++) {
+      if (CFG.CLIENTS[ci].id === snap.clientId) { client = CFG.CLIENTS[ci]; break; }
+    }
+    for (var ti = 0; ti < CFG.THERAPISTS.length; ti++) {
+      if (CFG.THERAPISTS[ti].id === snap.therapistId) { therapist = CFG.THERAPISTS[ti]; break; }
+    }
+    if (!client) return false;
+
+    S.client      = client;
+    S.therapist   = therapist || S.therapist;
+    S.behaviors   = snap.behaviors || {};
+    S.trials      = snap.trials    || {};
+    S.abc         = snap.abc       || [];
+    S.notes       = snap.notes     || '';
+    S.sessType    = snap.sessType  || null;
+    S.location    = snap.location  || null;
+    S.dateStr     = snap.dateStr   || null;
+    S.timeIn      = snap.timeIn    || null;
+    S.timeInDate  = snap.timeInDateISO ? new Date(snap.timeInDateISO) : new Date();
+    S.appStartTime    = snap.appStartTime    || null;
+    S.actualStartTime = snap.actualStartTime || null;
+    S.lateStartReason = snap.lateStartReason || '';
+    S.sessStartTs = snap.sessStartTs || Date.now();
+    abcIdSeq = snap.abcIdSeq || 0;
+
+    // Restore tantrum counts (no running timer after redirect)
+    S.tantrum = {
+      count: snap.tantrum ? (snap.tantrum.count || 0) : 0,
+      totalSec: snap.tantrum ? (snap.tantrum.totalSec || 0) : 0,
+      curSec: snap.tantrum ? (snap.tantrum.curSec || 0) : 0,
+      running: false, interval: null, startTs: null
+    };
+
+    // Rebuild UI
+    document.getElementById('sess-client-name').textContent = client.name;
+    document.getElementById('sess-subtitle').textContent    = (S.therapist ? S.therapist.name : '') + ' \u2022 ' + (S.sessType || '');
+    document.getElementById('bar-type').textContent      = S.sessType || '';
+    document.getElementById('bar-loc').textContent       = S.location || '';
+    document.getElementById('bar-therapist').textContent = S.therapist ? S.therapist.name : '';
+
+    buildBehaviorGrid();
+    // Restore behavior counts
+    var bKeys = Object.keys(S.behaviors);
+    for (var bi = 0; bi < bKeys.length; bi++) {
+      var bEl = document.getElementById('cnt-' + bKeys[bi]);
+      if (bEl) bEl.textContent = S.behaviors[bKeys[bi]] || 0;
+    }
+
+    buildTrials();
+    // Restore trial states
+    var gKeys = Object.keys(S.trials);
+    for (var gi = 0; gi < gKeys.length; gi++) {
+      var gcode = gKeys[gi];
+      var trials = S.trials[gcode];
+      for (var tidx = 0; tidx < trials.length; tidx++) {
+        var val = trials[tidx];
+        var cBtn = document.getElementById('tr-' + gcode + '-' + tidx + '-c');
+        var xBtn = document.getElementById('tr-' + gcode + '-' + tidx + '-x');
+        if (cBtn) cBtn.classList.toggle('correct',   val === true);
+        if (xBtn) xBtn.classList.toggle('incorrect', val === false);
+      }
+      calcPct(gcode);
+    }
+
+    renderABCList();
+    switchTab('behaviors');
+
+    // Restart elapsed timer
+    if (S.sessInterval) clearInterval(S.sessInterval);
+    S.sessInterval = setInterval(updateElapsed, 1000);
+
+    // Restore tantrum display
+    document.getElementById('tantrum-count').textContent = S.tantrum.count;
+    var tanMin = +(S.tantrum.totalSec/60).toFixed(1);
+    document.getElementById('tantrum-total').textContent = tanMin;
+
+    goTo('session');
+    toast('Session restored after re-authentication', 'ok');
+    logAuditEvent('reauth_success', AUTH.user ? AUTH.user.email : '', '', 'Google OAuth reauth — session restored');
+    loadMasteryStatus();
+    return true;
+  } catch(e) {
+    sessionStorage.removeItem('pendingReauth');
+    return false;
+  }
+}
+
 function afterAuth() {
   if (!localStorage.getItem('privacyAccepted')) { goTo('privacy'); return; }
+
+  // Check if this is a return from Google reauth during an active session
+  if (restoreSessionAfterReauth()) {
+    startInactivityTimer();
+    return;
+  }
+
   startInactivityTimer();
   const role = AUTH.role || 'collector';
 
@@ -3007,6 +3366,8 @@ function afterAuth() {
       btn.style.display = 'none';
     }
   });
+
+  EventBus.emit('auth:reauthSuccess', { method: AUTH.role === 'collector' ? 'pin' : 'google', userId: AUTH.user ? AUTH.user.email : '' });
 }
 
 // ── WEEKLY HOUR LIMIT CHECK ───────────────────────────────────────────
@@ -3043,6 +3404,215 @@ async function checkWeeklyHours() {
 }
 
 
+// ── MASTERY STATUS ────────────────────────────────────────────────────
+async function loadMasteryStatus() {
+  if (!S.client || !S.client.sheetId) {
+    document.querySelectorAll('.mastery-loading').forEach(function(el) { el.style.display = 'none'; });
+    return;
+  }
+  if (GAS_URL === 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') {
+    document.querySelectorAll('.mastery-loading').forEach(function(el) { el.style.display = 'none'; });
+    return;
+  }
+  try {
+    // Build label→key map for behaviors so backend can use it
+    var labelToKey = {};
+    if (S.client.behaviors) {
+      S.client.behaviors.forEach(function(b) { labelToKey[b.label] = b.key; });
+    }
+    var resp = await fetch(GAS_URL, {
+      method: 'POST', headers: {'Content-Type': 'text/plain'}, redirect: 'follow',
+      body: JSON.stringify({
+        action: 'getMasteryStatus',
+        clientSheetId: S.client.sheetId,
+        clientId: S.client.id,
+        clientName: S.client.name,
+        therapistName: S.therapist ? S.therapist.name : '',
+        therapistEmail: AUTH.user ? AUTH.user.email : '',
+        behaviorLabelToKey: labelToKey
+      })
+    });
+    var data = await resp.json();
+    if (data.success && data.mastery) {
+      applyMasteryBadges(data.mastery);
+      var newMasteries = data.mastery.newMasteries || [];
+      for (var ni = 0; ni < newMasteries.length; ni++) {
+        var m = newMasteries[ni];
+        if (m.type === 'goal') {
+          EventBus.emit('mastery:goalAchieved', {
+            clientId: S.client.id, clientName: S.client.name,
+            goalCode: m.code, goalDescription: m.description,
+            masteryDate: m.masteryDate, lastFiveScores: m.lastScores
+          });
+        } else {
+          EventBus.emit('mastery:behaviorAchieved', {
+            clientId: S.client.id, clientName: S.client.name,
+            behaviorCode: m.code, behaviorLabel: m.description,
+            masteryDate: m.masteryDate, lastEightScores: m.lastScores
+          });
+        }
+      }
+    }
+  } catch(e) {
+    // Silently fail — mastery check must not disrupt session
+  }
+  // Always hide loading spinners
+  document.querySelectorAll('.mastery-loading').forEach(function(el) { el.style.display = 'none'; });
+}
+
+function applyMasteryBadges(mastery) {
+  if (mastery.goals) {
+    var goalKeys = Object.keys(mastery.goals);
+    for (var gi = 0; gi < goalKeys.length; gi++) {
+      var code = goalKeys[gi];
+      if (mastery.goals[code]) {
+        var el = document.getElementById('mastery-goal-' + code);
+        if (el) el.style.display = '';
+      }
+    }
+  }
+  if (mastery.behaviors) {
+    var behKeys = Object.keys(mastery.behaviors);
+    for (var bi = 0; bi < behKeys.length; bi++) {
+      var key = behKeys[bi];
+      if (mastery.behaviors[key]) {
+        var el2 = document.getElementById('mastery-beh-' + key);
+        if (el2) el2.style.display = '';
+      }
+    }
+  }
+}
+
+
+// ── MASTERY REPORTS ADMIN TAB ─────────────────────────────────────────
+function renderMasteryReportTab(container) {
+  var now = new Date();
+  var year = now.getFullYear();
+  var month = now.getMonth() + 1; // 1-based
+
+  var html = '<div style="padding:16px">' +
+    '<div class="mastery-period-sel">' +
+      '<select class="form-ctrl" id="mastery-report-year" style="width:auto">';
+  for (var y = year; y >= year - 2; y--) {
+    html += '<option value="' + y + '"' + (y === year ? ' selected' : '') + '>' + y + '</option>';
+  }
+  html += '</select>' +
+      '<select class="form-ctrl" id="mastery-report-month" style="width:auto">';
+  var months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  for (var mi = 0; mi < 12; mi++) {
+    html += '<option value="' + (mi+1) + '"' + ((mi+1) === month ? ' selected' : '') + '>' + months[mi] + '</option>';
+  }
+  html += '</select>' +
+      '<button class="btn btn-primary" style="width:auto;padding:12px 20px" onclick="loadMasteryReport()">Load Report</button>' +
+      '<button class="btn btn-ghost" style="width:auto;padding:12px 20px" onclick="exportMasteryReportCSV()">Export CSV</button>' +
+    '</div>' +
+    '<div id="mastery-report-body"><div class="empty-msg">Select a month and click Load Report.</div></div>' +
+  '</div>';
+  container.innerHTML = html;
+}
+
+var _masteryReportData = null;
+
+async function loadMasteryReport() {
+  var year  = parseInt(document.getElementById('mastery-report-year').value);
+  var month = parseInt(document.getElementById('mastery-report-month').value);
+  var body  = document.getElementById('mastery-report-body');
+  if (!body) return;
+  body.innerHTML = '<div class="empty-msg">Loading\u2026</div>';
+
+  if (GAS_URL === 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') {
+    body.innerHTML = '<div class="empty-msg">Demo mode \u2014 no mastery data available.</div>';
+    return;
+  }
+
+  var clients = CFG.CLIENTS.map(function(c) { return { id: c.id, name: c.name, sheetId: c.sheetId }; });
+  try {
+    var resp = await fetch(GAS_URL, {
+      method: 'POST', headers: {'Content-Type': 'text/plain'}, redirect: 'follow',
+      body: JSON.stringify({ action: 'getMasteryReport', year: year, month: month, clients: clients })
+    });
+    var data = await resp.json();
+    if (data.success) {
+      _masteryReportData = data.entries || [];
+      renderMasteryReportResults(_masteryReportData, year, month);
+      EventBus.emit('report:masteryGenerated', {
+        month: month, year: year,
+        clientCount: data.clientCount || 0,
+        totalMasteries: _masteryReportData.length
+      });
+    } else {
+      body.innerHTML = '<div class="empty-msg">Failed to load report.</div>';
+    }
+  } catch(e) {
+    body.innerHTML = '<div class="empty-msg">Error loading report: ' + e.message + '</div>';
+  }
+}
+
+function renderMasteryReportResults(entries, year, month) {
+  var body = document.getElementById('mastery-report-body');
+  if (!body) return;
+  var months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  if (!entries.length) {
+    body.innerHTML = '<div class="empty-msg">No masteries recorded for ' + months[month-1] + ' ' + year + '.</div>';
+    return;
+  }
+
+  // Group by client
+  var byClient = {};
+  for (var i = 0; i < entries.length; i++) {
+    var e = entries[i];
+    var key = e.clientName || 'Unknown';
+    if (!byClient[key]) byClient[key] = [];
+    byClient[key].push(e);
+  }
+
+  var html = '<div class="settings-hdr">' + months[month-1] + ' ' + year + ' \u2014 ' + entries.length + ' mastered</div>';
+  var clientNames = Object.keys(byClient);
+  for (var ci = 0; ci < clientNames.length; ci++) {
+    var cname = clientNames[ci];
+    var cEntries = byClient[cname];
+    html += '<div class="mastery-report-card"><div class="mastery-report-ttl">' + cname + '</div>';
+    for (var ei = 0; ei < cEntries.length; ei++) {
+      var ent = cEntries[ei];
+      html += '<div class="mastery-entry">' +
+        '<span class="mastery-entry-code">' + (ent.code || '') + '</span>' +
+        ' \u2022 ' + (ent.type === 'goal' ? '&#127919;' : '&#128202;') +
+        ' ' + (ent.description || '') +
+        '<div class="mastery-entry-client">Mastered: ' + (ent.masteryDate || '') +
+          ' | Scores: ' + (ent.lastScores || '') + '</div>' +
+      '</div>';
+    }
+    html += '</div>';
+  }
+  body.innerHTML = html;
+}
+
+function exportMasteryReportCSV() {
+  if (!_masteryReportData || !_masteryReportData.length) {
+    toast('No report data to export', 'err'); return;
+  }
+  var headers = ['Client', 'Type', 'Code', 'Description', 'Mastery Date', 'Last Scores', 'Therapist'];
+  var rows = [headers.join(',')];
+  for (var i = 0; i < _masteryReportData.length; i++) {
+    var e = _masteryReportData[i];
+    var row = [
+      '"' + (e.clientName||'').replace(/"/g,'""') + '"',
+      '"' + (e.type||'').replace(/"/g,'""') + '"',
+      '"' + (e.code||'').replace(/"/g,'""') + '"',
+      '"' + (e.description||'').replace(/"/g,'""') + '"',
+      '"' + (e.masteryDate||'').replace(/"/g,'""') + '"',
+      '"' + (e.lastScores||'').replace(/"/g,'""') + '"',
+      '"' + (e.therapistName||'').replace(/"/g,'""') + '"'
+    ];
+    rows.push(row.join(','));
+  }
+  var csv = rows.join('\n');
+  var blob = new Blob([csv], {type: 'text/csv'});
+  var url  = URL.createObjectURL(blob);
+  var a    = document.createElement('a');
+  a.href = url; a.download = 'mastery_report.csv'; a.click();
+  URL.revokeObjectURL(url);
+}
 
 
 // ── ADMIN: EXPANDED FUNCTIONS ─────────────────────────────────────────
@@ -3459,12 +4029,54 @@ init();
   <div class="inactivity-card">
     <div class="inactivity-icon">&#128274;</div>
     <div class="inactivity-title">Re-authenticate</div>
-    <div class="inactivity-sub">Your session data is preserved. Enter your PIN to continue.</div>
-    <div class="form-group">
-      <input class="form-ctrl" id="reauth-pin" type="password" maxlength="6" inputmode="numeric" placeholder="PIN">
+    <div class="inactivity-sub" id="reauth-sub">Your session data is preserved.</div>
+    <!-- Google reauth section (admin/bcba/therapist roles) -->
+    <div id="reauth-google-section" style="display:none">
+      <p style="font-size:13px;color:var(--g400);font-weight:600;margin-bottom:16px">Sign in again with Google to continue your session.</p>
+      <button class="google-btn" onclick="startGoogleReauth()" style="width:100%;max-width:280px">
+        <svg width="18" height="18" viewBox="0 0 18 18" style="flex-shrink:0" aria-hidden="true">
+          <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615z"/>
+          <path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/>
+          <path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/>
+          <path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z"/>
+        </svg>
+        Re-authenticate with Google
+      </button>
     </div>
-    <div class="pin-error" id="reauth-error"></div>
-    <button class="btn btn-primary" onclick="confirmReauth()">Continue Session</button>
+    <!-- PIN reauth section (collector role) -->
+    <div id="reauth-pin-section">
+      <div class="form-group">
+        <input class="form-ctrl" id="reauth-pin" type="password" maxlength="6" inputmode="numeric" placeholder="PIN">
+      </div>
+      <div class="pin-error" id="reauth-error"></div>
+      <button class="btn btn-primary" onclick="confirmReauth()">Continue Session</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── END TIME ADJUSTMENT MODAL ── -->
+<div class="modal-overlay" id="modal-end-time">
+  <div class="modal-sheet">
+    <div class="late-modal-body">
+      <div class="modal-title" style="margin-bottom:16px">&#9201; End Session</div>
+      <div class="late-modal-q">Did the session end on time?</div>
+      <div class="late-modal-btns">
+        <button class="btn btn-primary" onclick="confirmEndNow()">&#10003; Yes, end now</button>
+        <button class="btn btn-ghost" onclick="showEndTimeAdjustForm()">No, adjust end time</button>
+      </div>
+      <div id="end-time-adjust-form" style="display:none;margin-top:16px">
+        <div class="form-group">
+          <label class="form-lbl" for="adjusted-end-time">What time did the session actually end?</label>
+          <input class="form-ctrl" id="adjusted-end-time" type="time">
+        </div>
+        <div class="form-group">
+          <label class="form-lbl" for="end-adjust-reason">Reason for adjustment (required)</label>
+          <textarea class="form-ctrl" id="end-adjust-reason" rows="3" placeholder="Briefly describe why the end time was adjusted&#8230;"></textarea>
+        </div>
+        <div class="pin-error" id="end-adjust-error"></div>
+        <button class="btn btn-primary" onclick="confirmAdjustedEnd()">Confirm Adjusted End Time</button>
+      </div>
+    </div>
   </div>
 </div>
 

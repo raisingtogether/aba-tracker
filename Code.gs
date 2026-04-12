@@ -44,6 +44,17 @@ function doPost(e) {
       var payroll = getBiweeklyHours(data.periodStart, data.periodEnd, data.clients);
       result = { success: true, payroll: payroll };
 
+    } else if (data.action === 'getMasteryStatus') {
+      var masteryResult = getMasteryStatus(
+        data.clientSheetId, data.clientId, data.clientName,
+        data.therapistName, data.therapistEmail, data.behaviorLabelToKey
+      );
+      result = { success: true, mastery: masteryResult };
+
+    } else if (data.action === 'getMasteryReport') {
+      var reportEntries = getMasteryReport(data.year, data.month, data.clients);
+      result = { success: true, entries: reportEntries, clientCount: (data.clients || []).length };
+
     } else {
       processSession(data);
       result = { success: true };
@@ -506,7 +517,9 @@ function writeSessionLog(ss, d) {
     'clientName', 'clientId', 'therapistEmail',
     'isDraft', 'payloadHash', 'submittedAt', 'dateISO'
   ];
-  var allHeaders = baseHeaders.concat(analyticsHeaders);
+  // New end-time adjustment columns — appended at END only
+  var adjustHeaders = ['Adjusted End Time', 'End Time Adjustment Reason'];
+  var allHeaders = baseHeaders.concat(analyticsHeaders, adjustHeaders);
 
   var sheet = getOrCreateSheet(ss, 'Time In Time Out', allHeaders);
   ensureSheetColumns(sheet, allHeaders);
@@ -533,7 +546,10 @@ function writeSessionLog(ss, d) {
     d.isDraft ? true : false,
     d.payloadHash         || '',
     d.submittedAt         || new Date().toISOString(),
-    d.dateISO             || ''
+    d.dateISO             || '',
+    // End-time adjustment columns (new — at end)
+    d.adjustedEndTime           || '',
+    d.endTimeAdjustmentReason   || ''
   ]);
 }
 
@@ -775,4 +791,228 @@ function objectsToSheet(ss, tabName, headers, objects) {
     }
     sheet.getRange(2, 1, rows.length, headers.length).setValues(rows);
   }
+}
+
+
+// ── MASTERY STATUS ─────────────────────────────────────────────────────
+
+/**
+ * Check goal and behavior mastery for a client.
+ * Goal mastery: 80%+ for 5 consecutive sessions.
+ * Behavior mastery: <=1 occurrence for 8 consecutive sessions.
+ * Returns: { goals: { code: bool }, behaviors: { key: bool }, newMasteries: [...] }
+ */
+function getMasteryStatus(clientSheetId, clientId, clientName, therapistName, therapistEmail, behaviorLabelToKey) {
+  var result = { goals: {}, behaviors: {}, newMasteries: [] };
+  if (!clientSheetId) return result;
+
+  try {
+    var ss = SpreadsheetApp.openById(clientSheetId);
+    checkGoalMastery(ss, clientId, clientName, therapistName, therapistEmail, result);
+    checkBehaviorMastery(ss, clientId, clientName, therapistName, therapistEmail, result, behaviorLabelToKey || {});
+  } catch (e) {
+    // Return empty on error — do not disrupt session
+  }
+  return result;
+}
+
+function checkGoalMastery(ss, clientId, clientName, therapistName, therapistEmail, result) {
+  var sheet = ss.getSheetByName('Trial Data');
+  if (!sheet) return;
+  var rows = sheet.getDataRange().getValues();
+  if (rows.length < 2) return;
+
+  var headers = rows[0];
+  // Find "Percent Correct" column (JSON map of goal->numeric pct)
+  var pctJsonCol = -1;
+  for (var hi = 0; hi < headers.length; hi++) {
+    if (String(headers[hi]).trim() === 'Percent Correct') { pctJsonCol = hi; break; }
+  }
+  if (pctJsonCol < 0) return;
+
+  // Collect data rows (skip header)
+  var dataRows = [];
+  for (var ri = 1; ri < rows.length; ri++) {
+    var pctJson = String(rows[ri][pctJsonCol] || '').trim();
+    if (pctJson) dataRows.push(pctJson);
+  }
+
+  // Need at least 5 rows to check mastery
+  if (dataRows.length < 5) return;
+
+  // Get the 5 most recent rows
+  var last5 = dataRows.slice(-5);
+
+  // Collect all goal codes seen across these 5 sessions
+  var goalMap = {};
+  for (var di = 0; di < last5.length; di++) {
+    try {
+      var pctObj = JSON.parse(last5[di]);
+      var codes = Object.keys(pctObj);
+      for (var ki = 0; ki < codes.length; ki++) {
+        var code = codes[ki];
+        if (!goalMap[code]) goalMap[code] = [];
+        goalMap[code].push(parseFloat(pctObj[code]));
+      }
+    } catch(e) {}
+  }
+
+  var today = new Date().toISOString().substring(0, 10);
+  var codes = Object.keys(goalMap);
+  for (var gi = 0; gi < codes.length; gi++) {
+    var code = codes[gi];
+    var scores = goalMap[code];
+    if (scores.length < 5) { result.goals[code] = false; continue; }
+    // Check if all 5 are >= 80
+    var allMastered = true;
+    for (var si = 0; si < scores.length; si++) {
+      if (isNaN(scores[si]) || scores[si] < 80) { allMastered = false; break; }
+    }
+    result.goals[code] = allMastered;
+    if (allMastered) {
+      // Check if this mastery is already recorded in Mastery Log
+      if (!isMasteryLogged(ss, 'goal', code, today)) {
+        var scoresStr = scores.join(', ') + '%';
+        writeMasteryLog(ss, 'goal', code, '', today, scoresStr, therapistName, therapistEmail, clientName, clientId);
+        result.newMasteries.push({ type: 'goal', code: code, description: '', masteryDate: today, lastScores: scoresStr });
+      }
+    }
+  }
+}
+
+function checkBehaviorMastery(ss, clientId, clientName, therapistName, therapistEmail, result, labelToKey) {
+  var sheet = ss.getSheetByName('Behavior Data');
+  if (!sheet) return;
+  var rows = sheet.getDataRange().getValues();
+  if (rows.length < 2) return;
+
+  var headers = rows[0];
+  // Find columns: Date=0, Therapist=1, Setting=2, then behaviors until Tantrum Frequency
+  var startCol = 3; // behavior columns start after Date, Therapist, Setting
+  var endCol   = -1;
+  for (var hi = 0; hi < headers.length; hi++) {
+    if (String(headers[hi]).trim() === 'Tantrum Frequency') { endCol = hi; break; }
+  }
+  if (endCol < 0) endCol = headers.length; // fallback: use all remaining cols
+
+  // Collect last 8 data rows
+  var dataRows = rows.slice(1); // skip header
+  if (dataRows.length < 8) return;
+  var last8 = dataRows.slice(-8);
+
+  var today = new Date().toISOString().substring(0, 10);
+
+  for (var ci = startCol; ci < endCol; ci++) {
+    var label = String(headers[ci] || '').trim();
+    if (!label) continue;
+    // Use the label→key map if provided; otherwise fall back to stripped lowercase
+    var key = (labelToKey && labelToKey[label]) ? labelToKey[label] : label.toLowerCase().replace(/[^a-z0-9]/g, '');
+    var allMastered = true;
+    var scores = [];
+    for (var ri = 0; ri < last8.length; ri++) {
+      var count = parseFloat(last8[ri][ci]) || 0;
+      scores.push(count);
+      if (count > 1) { allMastered = false; }
+    }
+    result.behaviors[key] = allMastered;
+    if (allMastered) {
+      if (!isMasteryLogged(ss, 'behavior', key, today)) {
+        var scoresStr = scores.join(', ');
+        writeMasteryLog(ss, 'behavior', key, label, today, scoresStr, therapistName, therapistEmail, clientName, clientId);
+        result.newMasteries.push({ type: 'behavior', code: key, description: label, masteryDate: today, lastScores: scoresStr });
+      }
+    }
+  }
+}
+
+function isMasteryLogged(ss, type, code, dateISO) {
+  var sheet = ss.getSheetByName('Mastery Log');
+  if (!sheet) return false;
+  var data = sheet.getDataRange().getValues();
+  if (data.length < 2) return false;
+  var headers = data[0];
+  var typeCol = -1, codeCol = -1, dateCol = -1;
+  for (var hi = 0; hi < headers.length; hi++) {
+    var h = String(headers[hi]).trim();
+    if (h === 'type')     typeCol = hi;
+    if (h === 'code')     codeCol = hi;
+    if (h === 'dateISO')  dateCol = hi;
+  }
+  if (typeCol < 0 || codeCol < 0 || dateCol < 0) return false;
+  for (var ri = 1; ri < data.length; ri++) {
+    var row = data[ri];
+    if (String(row[typeCol]).trim() === type &&
+        String(row[codeCol]).trim() === code &&
+        String(row[dateCol]).trim() === dateISO) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function writeMasteryLog(ss, type, code, description, masteryDate, lastScores, therapistName, therapistEmail, clientName, clientId) {
+  var masteryHeaders = [
+    'type', 'code', 'description', 'masteryDate', 'lastScores',
+    'therapistName', 'therapistEmail', 'clientName', 'clientId', 'dateISO'
+  ];
+  var sheet = getOrCreateSheet(ss, 'Mastery Log', masteryHeaders);
+  ensureSheetColumns(sheet, masteryHeaders);
+  sheet.appendRow([
+    type, code, description || '', masteryDate, lastScores || '',
+    therapistName || '', therapistEmail || '', clientName || '', clientId || '', masteryDate
+  ]);
+}
+
+
+// ── MASTERY REPORT ─────────────────────────────────────────────────────
+
+/**
+ * Aggregate mastery log entries across all client sheets for a given month/year.
+ * clients: [{ id, name, sheetId }]
+ * Returns array of entries.
+ */
+function getMasteryReport(year, month, clients) {
+  if (!clients || !clients.length) return [];
+  var entries = [];
+  var monthStr = String(month).length < 2 ? ('0' + month) : String(month);
+  var prefix   = year + '-' + monthStr;
+
+  for (var ci = 0; ci < clients.length; ci++) {
+    var client = clients[ci];
+    if (!client.sheetId) continue;
+    try {
+      var ss    = SpreadsheetApp.openById(client.sheetId);
+      var sheet = ss.getSheetByName('Mastery Log');
+      if (!sheet) continue;
+      var data  = sheet.getDataRange().getValues();
+      if (data.length < 2) continue;
+      var headers = data[0];
+
+      // Build column map
+      var colMap = {};
+      for (var hi = 0; hi < headers.length; hi++) {
+        colMap[String(headers[hi]).trim()] = hi;
+      }
+
+      for (var ri = 1; ri < data.length; ri++) {
+        var row = data[ri];
+        var dateISO = String(row[colMap['dateISO']] || '').trim();
+        if (dateISO.indexOf(prefix) !== 0) continue;
+        entries.push({
+          clientId:      client.id || '',
+          clientName:    client.name || '',
+          type:          String(row[colMap['type']]         || '').trim(),
+          code:          String(row[colMap['code']]         || '').trim(),
+          description:   String(row[colMap['description']]  || '').trim(),
+          masteryDate:   String(row[colMap['masteryDate']]  || '').trim(),
+          lastScores:    String(row[colMap['lastScores']]   || '').trim(),
+          therapistName: String(row[colMap['therapistName']]|| '').trim(),
+          therapistEmail:String(row[colMap['therapistEmail']]||'').trim()
+        });
+      }
+    } catch(e) {
+      // Skip inaccessible client sheets
+    }
+  }
+  return entries;
 }
