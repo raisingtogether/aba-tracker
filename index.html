@@ -931,7 +931,7 @@
     <button class="tab-btn active" id="tnav-behaviors" onclick="switchTab('behaviors')"><span class="tab-icon">&#128202;</span>Behaviors</button>
     <button class="tab-btn" id="tnav-trials" onclick="switchTab('trials')"><span class="tab-icon">&#127919;</span>Trials</button>
     <button class="tab-btn" id="tnav-abc" onclick="switchTab('abc')"><span class="tab-icon">&#128221;</span>ABC</button>
-    <button class="tab-btn end-btn" onclick="showEndTimeModal()"><span class="tab-icon">&#127937;</span>End</button>
+    <button class="tab-btn end-btn" onclick="goTo('end')"><span class="tab-icon">&#127937;</span>End</button>
   </div>
 </div>
 
@@ -1911,27 +1911,31 @@ function showEndTimeModal() {
   document.getElementById('modal-end-time').classList.add('active');
 }
 
+function cancelEndTimeModal() {
+  document.getElementById('modal-end-time').classList.remove('active');
+}
+
 function confirmEndNow() {
   document.getElementById('modal-end-time').classList.remove('active');
   S.adjustedEndTime = null;
   S.adjustedEndTimeDate = null;
   S.endTimeAdjustmentReason = '';
-  goTo('end');
+  doSubmitSession();
 }
 
 function showEndTimeAdjustForm() {
   // Pre-fill with current time
-  const now = new Date();
-  const hh = String(now.getHours()).padStart(2, '0');
-  const mm = String(now.getMinutes()).padStart(2, '0');
+  var now = new Date();
+  var hh = String(now.getHours()).padStart(2, '0');
+  var mm = String(now.getMinutes()).padStart(2, '0');
   document.getElementById('adjusted-end-time').value = hh + ':' + mm;
   document.getElementById('end-time-adjust-form').style.display = 'block';
 }
 
 function confirmAdjustedEnd() {
-  const timeVal   = document.getElementById('adjusted-end-time').value;
-  const reasonVal = document.getElementById('end-adjust-reason').value.trim();
-  const errEl     = document.getElementById('end-adjust-error');
+  var timeVal   = document.getElementById('adjusted-end-time').value;
+  var reasonVal = document.getElementById('end-adjust-reason').value.trim();
+  var errEl     = document.getElementById('end-adjust-error');
   errEl.textContent = '';
 
   if (!timeVal) { errEl.textContent = 'Please enter the end time'; return; }
@@ -1960,7 +1964,7 @@ function confirmAdjustedEnd() {
     adjustedTime: S.adjustedEndTime,
     reason: S.endTimeAdjustmentReason
   });
-  goTo('end');
+  doSubmitSession();
 }
 
 
@@ -2033,34 +2037,39 @@ function updateWordCount() {
 
 
 // ─── SUBMIT SESSION ───────────────────────────────────────────────────
-async function submitSession() {
+function submitSession() {
   S.notes = document.getElementById('session-notes').value;
   if (countWords(S.notes) < NOTES_MIN_WORDS) {
     toast('Please write at least ' + NOTES_MIN_WORDS + ' content words in your notes', 'err'); return;
   }
+  // Stop timers before showing modal
   if (S.tantrum.running) timerStop();
   if (S.sessInterval) { clearInterval(S.sessInterval); S.sessInterval = null; }
+  // Show end-time modal; actual submission happens in confirmEndNow / confirmAdjustedEnd
+  showEndTimeModal();
+}
 
-  const payload = buildPayload();
+async function doSubmitSession() {
+  var payload = buildPayload();
 
   if (GAS_URL === 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') {
     console.log('\uD83D\uDCCB Demo payload:', JSON.stringify(payload, null, 2));
     toast('Demo mode \u2014 data logged to console', 'ok');
-    setTimeout(() => showSuccess(), 1200);
+    setTimeout(function() { showSuccess(); }, 1200);
     return;
   }
 
   document.getElementById('loading-lbl').textContent = 'Submitting session\u2026';
   document.getElementById('loading').classList.add('active');
   try {
-    const resp = await fetch(GAS_URL, { method:'POST', headers:{'Content-Type':'text/plain'}, redirect:'follow', body:JSON.stringify(payload) });
-    const data = await resp.json();
+    var resp = await fetch(GAS_URL, { method:'POST', headers:{'Content-Type':'text/plain'}, redirect:'follow', body:JSON.stringify(payload) });
+    var data = await resp.json();
     document.getElementById('loading').classList.remove('active');
     if (data.success) {
       logAuditEvent('session_submit', AUTH.user ? AUTH.user.email : S.therapist ? S.therapist.name : '', S.client ? S.client.name : '', 'Duration=' + S.durationMin + 'min');
       showSuccess();
     } else {
-      toast('Submit failed: ' + (data.error||'Unknown error'), 'err');
+      toast('Submit failed: ' + (data.error || 'Unknown error'), 'err');
     }
   } catch(e) {
     document.getElementById('loading').classList.remove('active');
@@ -4075,6 +4084,9 @@ init();
         </div>
         <div class="pin-error" id="end-adjust-error"></div>
         <button class="btn btn-primary" onclick="confirmAdjustedEnd()">Confirm Adjusted End Time</button>
+      </div>
+      <div style="margin-top:14px;text-align:center">
+        <button class="btn btn-ghost" onclick="cancelEndTimeModal()" style="font-size:13px">&#8592; Back to notes</button>
       </div>
     </div>
   </div>
