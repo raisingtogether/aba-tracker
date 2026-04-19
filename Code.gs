@@ -59,6 +59,10 @@ function doPost(e) {
       var billingRows = getBillingReport(data.clientId, data.weekStart, data.clients);
       result = { success: true, rows: billingRows };
 
+    } else if (data.action === 'checkGoalUsage') {
+      var usageResult = checkGoalUsage(data.goalCode, data.clients);
+      result = { success: true, used: usageResult.used, sessionCount: usageResult.sessionCount, clients: usageResult.clients };
+
     } else {
       processSession(data);
       result = { success: true };
@@ -1163,4 +1167,66 @@ function getBillingReport(clientId, weekStart, clients) {
   });
 
   return rows;
+}
+
+// ── CHECK GOAL USAGE ──────────────────────────────────────────────────
+
+/**
+ * Checks whether a goal code has any recorded trial data across all client sheets.
+ * Returns { used, sessionCount, clients }
+ */
+function checkGoalUsage(goalCode, clients) {
+  var code = String(goalCode || '').trim().toLowerCase();
+  var totalCount = 0;
+  var foundClients = [];
+
+  for (var ci = 0; ci < clients.length; ci++) {
+    var client = clients[ci];
+    if (!client.sheetId) continue;
+    try {
+      var ss  = SpreadsheetApp.openById(client.sheetId);
+      var tab = ss.getSheetByName('Trial Data');
+      if (!tab) continue;
+      var vals = tab.getDataRange().getValues();
+      if (vals.length < 2) continue;
+
+      // Find columns whose header matches the goal code
+      var headers  = vals[0];
+      var goalCols = [];
+      for (var hi = 0; hi < headers.length; hi++) {
+        var h = String(headers[hi] || '').trim().toLowerCase();
+        // Match exact code or "code %" / "code_..." suffixes
+        if (h === code || h.indexOf(code + ' ') === 0 || h.indexOf(code + '_') === 0) {
+          goalCols.push(hi);
+        }
+      }
+      if (goalCols.length === 0) continue;
+
+      // Count data rows that have any non-empty value in a matched column
+      var clientCount = 0;
+      for (var ri = 1; ri < vals.length; ri++) {
+        var row = vals[ri];
+        for (var gi = 0; gi < goalCols.length; gi++) {
+          var val = row[goalCols[gi]];
+          if (val !== '' && val !== null && val !== undefined) {
+            clientCount++;
+            break;
+          }
+        }
+      }
+
+      if (clientCount > 0) {
+        totalCount += clientCount;
+        foundClients.push(client.name);
+      }
+    } catch(e) {
+      // Skip inaccessible sheets
+    }
+  }
+
+  return {
+    used:         totalCount > 0,
+    sessionCount: totalCount,
+    clients:      foundClients
+  };
 }

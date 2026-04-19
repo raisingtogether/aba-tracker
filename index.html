@@ -459,6 +459,7 @@
     .admin-act-btn:active { transform: scale(0.95); }
     .act-activate   { background: rgba(34,197,94,0.12); color: var(--success); }
     .act-deactivate { background: rgba(239,68,68,0.12); color: var(--danger); }
+    .act-delete     { background: rgba(239,68,68,0.18); color: var(--danger); font-weight: 800; }
     .admin-av {
       width: 42px; height: 42px; border-radius: 50%;
       color: white; font-size: 15px; font-weight: 800;
@@ -565,6 +566,7 @@
     .admin-act-btn:active { transform: scale(0.95); }
     .act-activate   { background: rgba(34,197,94,0.12);  color: var(--success); }
     .act-deactivate { background: rgba(239,68,68,0.12);  color: var(--danger);  }
+    .act-delete     { background: rgba(239,68,68,0.18);  color: var(--danger); font-weight: 800; }
     .admin-av {
       width: 42px; height: 42px; border-radius: 50%;
       color: white; font-size: 15px; font-weight: 800;
@@ -2298,6 +2300,9 @@ function renderAdminList(type) {
       sub     = `${clientName} \u2022 ${item.numTrials||5} trials`;
     }
 
+    const deleteBtn = (type === 'goals' && AUTH.role === 'admin')
+      ? `<button class="admin-act-btn act-delete" onclick="deleteGoal(${idx})">Delete</button>`
+      : '';
     div.innerHTML = `
       <div class="admin-item-left">${preview}</div>
       <div class="admin-item-body">
@@ -2307,6 +2312,7 @@ function renderAdminList(type) {
       <div class="admin-item-actions">
         <button class="admin-act-btn" onclick="openEditModal('${type}',${idx})">Edit</button>
         <button class="admin-act-btn ${inactive?'act-activate':'act-deactivate'}" onclick="toggleEntityStatus('${type}',${idx})">${inactive?'Activate':'Disable'}</button>
+        ${deleteBtn}
       </div>
     `;
     container.appendChild(div);
@@ -2593,6 +2599,22 @@ function saveEntity() {
     const description = document.getElementById('ef-description').value.trim();
     const numTrials   = document.getElementById('ef-numTrials').value || '5';
     if (!clientIds || !code || !description) { toast('At least one client, code, and description required', 'err'); return; }
+    // Duplicate code check — globally unique, case-insensitive
+    const codeUpper = code.toUpperCase();
+    const isDup = (raw.goals || []).some(function(g) {
+      // Skip the goal currently being edited (identified by clientId + code)
+      if (editModalItem && g.clientId === editModalItem.clientId && g.code === editModalItem.code) return false;
+      return (g.code || '').toUpperCase() === codeUpper;
+    });
+    if (isDup) {
+      const codeInput = document.getElementById('ef-code');
+      codeInput.style.borderColor = 'var(--danger)';
+      codeInput.style.boxShadow   = '0 0 0 2px rgba(239,68,68,0.25)';
+      toast('Goal code ' + code + ' already exists. Please use a unique code.', 'err');
+      return;
+    }
+    document.getElementById('ef-code').style.borderColor = '';
+    document.getElementById('ef-code').style.boxShadow   = '';
     updated = Object.assign({}, editModalItem || {}, { clientId, clientIds, code, description, numTrials,
       status: editModalItem ? (editModalItem.status||'active') : 'active' });
   }
@@ -2620,6 +2642,49 @@ function toggleEntityStatus(type, idx) {
     list[idx].status = (list[idx].status === 'inactive') ? 'active' : 'inactive';
     persistConfig(raw);
   }
+}
+
+async function deleteGoal(idx) {
+  const raw  = JSON.parse(JSON.stringify(RAW_CONFIG || DEFAULT_CONFIG));
+  const list = raw.goals || [];
+  const goal = list[idx];
+  if (!goal) return;
+
+  if (!confirm('Are you sure you want to permanently delete goal ' + goal.code + ' \u2014 ' + goal.description + '? This action cannot be undone.')) return;
+
+  // Check for recorded session data in client Trial Data sheets
+  if (GAS_URL !== 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') {
+    const clients = (raw.clients || []).filter(function(c) { return (c.status || 'active') !== 'inactive'; });
+    try {
+      document.getElementById('loading-lbl').textContent = 'Checking goal usage\u2026';
+      document.getElementById('loading').classList.add('active');
+      const resp = await fetch(GAS_URL, {
+        method: 'POST', headers: { 'Content-Type': 'text/plain' }, redirect: 'follow',
+        body: JSON.stringify({ action: 'checkGoalUsage', goalCode: goal.code, clients: clients })
+      });
+      const data = await resp.json();
+      document.getElementById('loading').classList.remove('active');
+      document.getElementById('loading-lbl').textContent = 'Submitting session\u2026';
+      if (!data.success) { toast('Error checking goal usage: ' + (data.error || 'error'), 'err'); return; }
+      if (data.used) {
+        const s = data.sessionCount === 1 ? '' : 's';
+        toast('Cannot delete goal ' + goal.code + ' \u2014 it has recorded session data in ' + data.sessionCount + ' session' + s + '. You can disable it instead.', 'err');
+        return;
+      }
+    } catch(e) {
+      document.getElementById('loading').classList.remove('active');
+      document.getElementById('loading-lbl').textContent = 'Submitting session\u2026';
+      toast('Error checking goal usage \u2014 check connection', 'err');
+      return;
+    }
+  }
+
+  // No data found — safe to delete
+  list.splice(idx, 1);
+  raw.goals = list;
+  const userName = AUTH.user ? (AUTH.user.name || AUTH.user.email) : 'admin';
+  logAuditEvent('goal_deleted', AUTH.user ? AUTH.user.email : 'admin', '', 'Goal ' + goal.code + ' - ' + goal.description + ' deleted by ' + userName);
+  persistConfig(raw);
 }
 
 async function persistConfig(raw) {
