@@ -17,7 +17,8 @@ var BQ_PROJECT     = 'rt-aba-tracker';
 var BQ_DATASET     = 'aba_tracker';
 var BQ_ADMIN_SHEET = '1VPBADMXvhOww_52O1n2CieTsQB6XCotLt6XdAQsq0ik';
 var BQ_AUDIT_SHEET = '1tf98iS18vV08mQtPV9Vq6hQVkEp6Qg-ebUwHkeRlwaQ';
-var BQ_BATCH_SIZE  = 500; // rows per streaming insertAll call
+// BQ_BATCH_SIZE is unused now that we use CSV load jobs instead of streaming insertAll
+var BQ_BATCH_SIZE  = 500;
 
 // Analytics columns appended to Behavior Data tab
 var BQ_BEHAV_ANALYTICS = [
@@ -661,43 +662,89 @@ function bqEnsureDataset() {
 }
 
 /**
- * Delete table if it exists, recreate with schema, then stream all rows.
- * This achieves WRITE_TRUNCATE semantics.
+ * Sync rows to a BigQuery table using a CSV load job (WRITE_TRUNCATE).
+ * Works on the BigQuery free tier — does NOT use streaming insertAll.
+ * Creates the table if it does not exist; replaces all data if it does.
  */
 function bqSyncTable(tableId, rows) {
-  // Delete if exists (ignore error if absent)
-  try {
-    BigQuery.Tables.remove(BQ_PROJECT, BQ_DATASET, tableId);
-    Utilities.sleep(1500);
-  } catch (e) { /* table did not exist */ }
-
-  // Create with explicit schema
   var schema = bqCreateTableSchema(tableId);
-  BigQuery.Tables.insert(
-    {
-      tableReference: { projectId: BQ_PROJECT, datasetId: BQ_DATASET, tableId: tableId },
-      schema:         schema
-    },
-    BQ_PROJECT,
-    BQ_DATASET
-  );
 
-  if (!rows || !rows.length) return;
+  // Extract ordered field names from the schema definition
+  var fieldNames = [];
+  for (var fi = 0; fi < schema.fields.length; fi++) {
+    fieldNames.push(schema.fields[fi].name);
+  }
 
-  // Stream in batches
-  for (var i = 0; i < rows.length; i += BQ_BATCH_SIZE) {
-    var batchRows = [];
-    var end = Math.min(i + BQ_BATCH_SIZE, rows.length);
-    for (var j = i; j < end; j++) {
-      batchRows.push({ insertId: String(j), json: rows[j] });
+  // Build CSV blob (header row + data rows)
+  var csvBlob = bqRowsToCSVBlob(rows, fieldNames);
+
+  // Submit load job — WRITE_TRUNCATE handles both create-if-not-exists and replace
+  var job = {
+    configuration: {
+      load: {
+        destinationTable: { projectId: BQ_PROJECT, datasetId: BQ_DATASET, tableId: tableId },
+        sourceFormat:     'CSV',
+        writeDisposition: 'WRITE_TRUNCATE',
+        skipLeadingRows:  1,
+        schema:           schema,
+        autodetect:       false
+      }
     }
-    var insertAllData = { rows: batchRows };
-    var resp = BigQuery.Tabledata.insertAll(insertAllData, BQ_PROJECT, BQ_DATASET, tableId);
-    if (resp && resp.insertErrors && resp.insertErrors.length) {
-      throw new Error('insertAll error in ' + tableId + ': ' +
-        JSON.stringify(resp.insertErrors[0]));
+  };
+
+  var jobResult = BigQuery.Jobs.insert(job, BQ_PROJECT, csvBlob);
+  bqWaitForJob(jobResult.jobReference.jobId);
+}
+
+/**
+ * Convert an array of row objects to a CSV Blob using the provided field order.
+ * Values containing commas, double-quotes, or newlines are wrapped in double-quotes
+ * with internal double-quotes escaped as "".
+ */
+function bqRowsToCSVBlob(rows, fieldNames) {
+  var lines = [fieldNames.join(',')]; // header
+
+  for (var i = 0; i < rows.length; i++) {
+    var csvRow = [];
+    for (var j = 0; j < fieldNames.length; j++) {
+      var val = rows[i][fieldNames[j]];
+      if (val === null || val === undefined) {
+        val = '';
+      } else if (typeof val === 'boolean') {
+        val = val ? 'true' : 'false';
+      } else {
+        val = String(val);
+      }
+      // Wrap in quotes if the value contains a comma, quote, CR, or LF
+      if (val.indexOf(',') >= 0 || val.indexOf('"') >= 0 ||
+          val.indexOf('\n') >= 0 || val.indexOf('\r') >= 0) {
+        val = '"' + val.replace(/"/g, '""') + '"';
+      }
+      csvRow.push(val);
+    }
+    lines.push(csvRow.join(','));
+  }
+
+  return Utilities.newBlob(lines.join('\n'), 'application/octet-stream');
+}
+
+/**
+ * Poll a BigQuery job until it reaches DONE state (or times out).
+ * Throws if the job reports an error or does not complete within ~3 minutes.
+ */
+function bqWaitForJob(jobId) {
+  var maxAttempts = 60; // 60 × 3 s = 3-minute ceiling
+  for (var attempt = 0; attempt < maxAttempts; attempt++) {
+    Utilities.sleep(3000);
+    var job = BigQuery.Jobs.get(BQ_PROJECT, jobId);
+    if (job.status.state === 'DONE') {
+      if (job.status.errorResult) {
+        throw new Error('BQ load job failed (' + jobId + '): ' + job.status.errorResult.message);
+      }
+      return; // success
     }
   }
+  throw new Error('BQ load job timed out after ' + maxAttempts + ' polls: ' + jobId);
 }
 
 
