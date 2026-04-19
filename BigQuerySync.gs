@@ -632,14 +632,31 @@ function bqReadMasteryRows(clientSS, client) {
  * Ensure the BQ dataset exists; create it if not.
  */
 function bqEnsureDataset() {
+  // Try to GET the dataset first. If it succeeds, the dataset already exists — done.
+  // Only attempt INSERT if the GET returns a 404 (dataset genuinely not found).
+  // This works even without datasets.insert permission, as long as the dataset exists.
+  var exists = false;
   try {
     BigQuery.Datasets.get(BQ_PROJECT, BQ_DATASET);
-  } catch (e) {
-    BigQuery.Datasets.insert(
-      { datasetReference: { projectId: BQ_PROJECT, datasetId: BQ_DATASET } },
-      BQ_PROJECT
-    );
-    Utilities.sleep(2000); // wait for dataset creation to propagate
+    exists = true;
+  } catch (getErr) {
+    // Check if it's a 404 (not found). Apps Script wraps HTTP errors in the message.
+    var msg = String(getErr.message || '').toLowerCase();
+    if (msg.indexOf('404') >= 0 || msg.indexOf('not found') >= 0) {
+      // Dataset truly does not exist — try to create it
+      try {
+        BigQuery.Datasets.insert(
+          { datasetReference: { projectId: BQ_PROJECT, datasetId: BQ_DATASET } },
+          BQ_PROJECT
+        );
+        Utilities.sleep(2000); // wait for creation to propagate
+      } catch (insertErr) {
+        throw new Error('Dataset not found and creation failed: ' + insertErr.message);
+      }
+    } else {
+      // GET failed for a reason other than 404 (e.g. permission denied on GET itself)
+      throw new Error('Could not verify dataset existence: ' + getErr.message);
+    }
   }
 }
 
