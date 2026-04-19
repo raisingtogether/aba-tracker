@@ -17,7 +17,7 @@ var BQ_PROJECT     = 'rt-aba-tracker';
 var BQ_DATASET     = 'aba_tracker';
 var BQ_ADMIN_SHEET = '1VPBADMXvhOww_52O1n2CieTsQB6XCotLt6XdAQsq0ik';
 var BQ_AUDIT_SHEET = '1tf98iS18vV08mQtPV9Vq6hQVkEp6Qg-ebUwHkeRlwaQ';
-// BQ_BATCH_SIZE is unused now that we use CSV load jobs instead of streaming insertAll
+// BQ_BATCH_SIZE is unused now that we use NDJSON load jobs instead of streaming insertAll
 var BQ_BATCH_SIZE  = 500;
 
 // Analytics columns appended to Behavior Data tab
@@ -662,69 +662,57 @@ function bqEnsureDataset() {
 }
 
 /**
- * Sync rows to a BigQuery table using a CSV load job (WRITE_TRUNCATE).
+ * Sync rows to a BigQuery table using a NEWLINE_DELIMITED_JSON load job (WRITE_TRUNCATE).
+ * JSON format avoids all CSV escaping issues with free-text fields (notes, reasons, etc.).
  * Works on the BigQuery free tier — does NOT use streaming insertAll.
  * Creates the table if it does not exist; replaces all data if it does.
  */
 function bqSyncTable(tableId, rows) {
   var schema = bqCreateTableSchema(tableId);
 
-  // Extract ordered field names from the schema definition
-  var fieldNames = [];
-  for (var fi = 0; fi < schema.fields.length; fi++) {
-    fieldNames.push(schema.fields[fi].name);
-  }
-
-  // Build CSV blob (header row + data rows)
-  var csvBlob = bqRowsToCSVBlob(rows, fieldNames);
+  // Build newline-delimited JSON blob
+  var ndjBlob = bqRowsToNDJSONBlob(rows);
 
   // Submit load job — WRITE_TRUNCATE handles both create-if-not-exists and replace
   var job = {
     configuration: {
       load: {
         destinationTable: { projectId: BQ_PROJECT, datasetId: BQ_DATASET, tableId: tableId },
-        sourceFormat:     'CSV',
+        sourceFormat:     'NEWLINE_DELIMITED_JSON',
         writeDisposition: 'WRITE_TRUNCATE',
-        skipLeadingRows:  1,
         schema:           schema,
         autodetect:       false
       }
     }
   };
 
-  var jobResult = BigQuery.Jobs.insert(job, BQ_PROJECT, csvBlob);
+  var jobResult = BigQuery.Jobs.insert(job, BQ_PROJECT, ndjBlob);
   bqWaitForJob(jobResult.jobReference.jobId);
 }
 
 /**
- * Convert an array of row objects to a CSV Blob using the provided field order.
- * Values containing commas, double-quotes, or newlines are wrapped in double-quotes
- * with internal double-quotes escaped as "".
+ * Convert an array of row objects to a newline-delimited JSON Blob.
+ * Each row is JSON.stringify()'d on its own line — no CSV escaping needed,
+ * so free-text fields with commas, quotes, or newlines are handled correctly.
+ * Null/undefined values are omitted from each JSON object (BQ treats missing
+ * fields as NULL for NULLABLE columns).
  */
-function bqRowsToCSVBlob(rows, fieldNames) {
-  var lines = [fieldNames.join(',')]; // header
-
+function bqRowsToNDJSONBlob(rows) {
+  var lines = [];
   for (var i = 0; i < rows.length; i++) {
-    var csvRow = [];
-    for (var j = 0; j < fieldNames.length; j++) {
-      var val = rows[i][fieldNames[j]];
-      if (val === null || val === undefined) {
-        val = '';
-      } else if (typeof val === 'boolean') {
-        val = val ? 'true' : 'false';
-      } else {
-        val = String(val);
+    // Build a clean object: skip null/undefined so BQ sees them as NULL
+    var obj = {};
+    var row = rows[i];
+    for (var key in row) {
+      if (row.hasOwnProperty(key)) {
+        var v = row[key];
+        if (v !== null && v !== undefined) {
+          obj[key] = v;
+        }
       }
-      // Wrap in quotes if the value contains a comma, quote, CR, or LF
-      if (val.indexOf(',') >= 0 || val.indexOf('"') >= 0 ||
-          val.indexOf('\n') >= 0 || val.indexOf('\r') >= 0) {
-        val = '"' + val.replace(/"/g, '""') + '"';
-      }
-      csvRow.push(val);
     }
-    lines.push(csvRow.join(','));
+    lines.push(JSON.stringify(obj));
   }
-
   return Utilities.newBlob(lines.join('\n'), 'application/octet-stream');
 }
 
