@@ -55,6 +55,10 @@ function doPost(e) {
       var reportEntries = getMasteryReport(data.year, data.month, data.clients);
       result = { success: true, entries: reportEntries, clientCount: (data.clients || []).length };
 
+    } else if (data.action === 'getBillingReport') {
+      var billingRows = getBillingReport(data.clientId, data.weekStart, data.clients);
+      result = { success: true, rows: billingRows };
+
     } else {
       processSession(data);
       result = { success: true };
@@ -430,7 +434,7 @@ function saveConfig(cfg) {
     objectsToSheet(ss, 'Authorizations',
       ['clientId', 'payerType', 'insuranceCompany', 'authorizationNumber',
        'billingCode', 'authorizedHours', 'startDate', 'endDate',
-       'coInsurance', 'stepUpProgram', 'status'],
+       'coInsurance', 'stepUpProgram', 'status', 'unitRate', 'hourlyRate'],
       cfg.authorizations);
 
   if (cfg.admins !== undefined)
@@ -525,7 +529,9 @@ function writeSessionLog(ss, d) {
   ];
   // New end-time adjustment columns — appended at END only
   var adjustHeaders = ['Adjusted End Time', 'End Time Adjustment Reason'];
-  var allHeaders = baseHeaders.concat(analyticsHeaders, adjustHeaders);
+  // Manual entry tracking columns — appended at END
+  var manualHeaders = ['manualEntry', 'enteredBy'];
+  var allHeaders = baseHeaders.concat(analyticsHeaders, adjustHeaders, manualHeaders);
 
   var sheet = getOrCreateSheet(ss, 'Time In Time Out', allHeaders);
   ensureSheetColumns(sheet, allHeaders);
@@ -555,7 +561,10 @@ function writeSessionLog(ss, d) {
     d.dateISO             || '',
     // End-time adjustment columns (new — at end)
     d.adjustedEndTime           || '',
-    d.endTimeAdjustmentReason   || ''
+    d.endTimeAdjustmentReason   || '',
+    // Manual entry tracking (new — at end)
+    d.manualEntry ? true : false,
+    d.enteredBy                 || ''
   ]);
 }
 
@@ -1040,4 +1049,118 @@ function getMasteryReport(year, month, clients) {
     }
   }
   return entries;
+}
+
+
+// ── WEEKLY BILLING REPORT ───────────────────────────────────────────────
+
+/**
+ * Aggregate session rows from Time In Time Out for a Mon-Sun week,
+ * matched against insurance authorization rates from the admin sheet.
+ * clientId: specific client id, or 'all'
+ * weekStart: ISO date string (Monday)
+ * clients: [{ id, name, sheetId }]
+ * Returns array of row objects for the frontend billing report.
+ */
+function getBillingReport(clientId, weekStart, clients) {
+  if (!clients || !clients.length) return [];
+
+  var startDate = new Date(weekStart);
+  startDate.setUTCHours(0, 0, 0, 0);
+  var endDate = new Date(startDate);
+  endDate.setDate(endDate.getDate() + 7);
+
+  // Read authorizations once from admin sheet
+  var adminSS = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var auths = sheetToObjects(adminSS, 'Authorizations');
+
+  var rows = [];
+
+  for (var ci = 0; ci < clients.length; ci++) {
+    var client = clients[ci];
+    if (clientId !== 'all' && client.id !== clientId) continue;
+    if (!client.sheetId) continue;
+
+    try {
+      var ss    = SpreadsheetApp.openById(client.sheetId);
+      var sheet = ss.getSheetByName('Time In Time Out');
+      if (!sheet) continue;
+      var data = sheet.getDataRange().getValues();
+      if (data.length < 2) continue;
+
+      var hdrs = data[0];
+      var colMap = {};
+      for (var hi = 0; hi < hdrs.length; hi++) {
+        colMap[String(hdrs[hi]).trim()] = hi;
+      }
+
+      var dateIdx     = colMap['Date']            !== undefined ? colMap['Date']            : -1;
+      var therapistIdx = colMap['Therapist']      !== undefined ? colMap['Therapist']       : -1;
+      var billingIdx  = colMap['Billing Code']    !== undefined ? colMap['Billing Code']    : -1;
+      var sessTypeIdx = colMap['Type of Session'] !== undefined ? colMap['Type of Session'] : -1;
+      var durationIdx = colMap['Duration (min)']  !== undefined ? colMap['Duration (min)']  : -1;
+      var dateISOIdx  = colMap['dateISO']          !== undefined ? colMap['dateISO']          : -1;
+
+      if (dateIdx < 0 || durationIdx < 0) continue;
+
+      for (var ri = 1; ri < data.length; ri++) {
+        var row     = data[ri];
+        var rowDate = new Date(row[dateIdx]);
+        if (rowDate < startDate || rowDate >= endDate) continue;
+
+        var bCode    = billingIdx  >= 0 ? String(row[billingIdx]   || '').trim() : '';
+        var duration = parseFloat(row[durationIdx]) || 0;
+        var therapist = therapistIdx >= 0 ? String(row[therapistIdx] || '').trim() : '';
+        var sessType  = sessTypeIdx  >= 0 ? String(row[sessTypeIdx]  || '').trim() : '';
+
+        var dateISO = dateISOIdx >= 0 ? toDateISO(row[dateISOIdx]) : '';
+        if (!dateISO) {
+          dateISO = Utilities.formatDate(rowDate, 'UTC', 'yyyy-MM-dd');
+        }
+
+        // Match authorization for this client + billing code
+        var matchAuth = null;
+        for (var ai = 0; ai < auths.length; ai++) {
+          var a = auths[ai];
+          if (a.clientId === client.id &&
+              String(a.billingCode || '').trim() === bCode &&
+              (a.status || 'active') !== 'inactive') {
+            matchAuth = a;
+            break;
+          }
+        }
+
+        var unitRate   = matchAuth ? (parseFloat(matchAuth.unitRate)   || 0) : 0;
+        var hourlyRate = matchAuth ? (parseFloat(matchAuth.hourlyRate)  || 0) : 0;
+        var insCompany = matchAuth ? (matchAuth.insuranceCompany        || '') : '';
+
+        var hours    = Math.round(duration / 60 * 100) / 100;
+        var billable = hourlyRate > 0 ? Math.round(hours * hourlyRate * 100) / 100 : 0;
+
+        rows.push({
+          date:             dateISO,
+          clientName:       client.name,
+          clientId:         client.id,
+          therapist:        therapist,
+          billingCode:      bCode,
+          sessionType:      sessType,
+          durationMin:      duration,
+          hours:            hours,
+          insuranceCompany: insCompany,
+          unitRate:         unitRate,
+          hourlyRate:       hourlyRate,
+          billable:         billable
+        });
+      }
+    } catch(e) {
+      // Skip inaccessible sheets
+    }
+  }
+
+  // Sort by date ascending
+  rows.sort(function(a, b) {
+    return a.date < b.date ? -1 : a.date > b.date ? 1 : 0;
+  });
+
+  return rows;
 }

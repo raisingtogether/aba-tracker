@@ -1034,6 +1034,8 @@ FOCUS FOR NEXT SESSION: Outline priorities and goals for the next session"
         <button class="admin-tab-btn admin-only-tab" id="atab-payroll" onclick="showAdminTab('payroll')">Payroll</button>
         <button class="admin-tab-btn admin-only-tab" id="atab-admins" onclick="showAdminTab('admins')">Admins</button>
         <button class="admin-tab-btn admin-only-tab" id="atab-mastery" onclick="showAdminTab('mastery')">Mastery</button>
+        <button class="admin-tab-btn admin-only-tab" id="atab-billing" onclick="showAdminTab('billing')">Billing</button>
+        <button class="admin-tab-btn admin-only-tab" id="atab-manual" onclick="showAdminTab('manual')">Manual Entry</button>
   </div>
   <div class="content" style="padding-bottom:0" id="admin-list"></div>
   <div class="admin-add-bar" id="admin-add-bar">
@@ -2218,7 +2220,7 @@ function checkPin() {
 
 function showAdminTab(tab) {
   const role = AUTH.role || 'collector';
-  const bcbaBlocked = ['payroll','admins','authorizations','settings','therapists','clients','billing','mastery'];
+  const bcbaBlocked = ['payroll','admins','authorizations','settings','therapists','clients','billing','mastery','manual'];
   if (role === 'bcba' && bcbaBlocked.indexOf(tab) >= 0) {
     toast('Access restricted for BCBA role', 'err'); return;
   }
@@ -2229,7 +2231,7 @@ function showAdminTab(tab) {
   document.querySelectorAll('.admin-tab-btn').forEach(b => b.classList.remove('active'));
   const tabEl = document.getElementById('atab-' + tab);
   if (tabEl) tabEl.classList.add('active');
-  const noAddBar = ['settings','authorizations','payroll','admins','mastery'];
+  const noAddBar = ['settings','authorizations','payroll','admins','mastery','billing','manual'];
   document.getElementById('admin-add-bar').style.display = noAddBar.indexOf(tab) >= 0 ? 'none' : '';
   renderAdminList(tab);
 }
@@ -2243,6 +2245,8 @@ function renderAdminList(type) {
   if (type === 'payroll')        { renderPayrollTab(container);        return; }
   if (type === 'admins')         { renderAdminsTab(container);         return; }
   if (type === 'mastery')        { renderMasteryReportTab(container);  return; }
+  if (type === 'billing')        { renderBillingReportTab(container);  return; }
+  if (type === 'manual')         { renderManualEntryTab(container);    return; }
 
   if (type === 'settings') {
     renderSettingsTab(container);
@@ -2507,6 +2511,8 @@ function saveEntity() {
       endDate:             document.getElementById('auth-end').value,
       coInsurance:         document.getElementById('auth-coins').value.trim(),
       stepUpProgram:       document.getElementById('auth-stepup').value.trim(),
+      unitRate:            document.getElementById('auth-unitrate').value.trim(),
+      hourlyRate:          document.getElementById('auth-hourlyrate').value.trim(),
       status:              'active'
     };
     if (!entry.clientId) { toast('Client required', 'err'); return; }
@@ -3742,7 +3748,9 @@ function openEditAuthModal(clientId) {
     '<div class="form-group"><label class="form-lbl">Start Date (optional)</label><input class="form-ctrl" id="auth-start" type="date" value="' + (first.startDate||'') + '"></div>' +
     '<div class="form-group"><label class="form-lbl">End Date (optional)</label><input class="form-ctrl" id="auth-end" type="date" value="' + (first.endDate||'') + '"></div>' +
     '<div class="form-group"><label class="form-lbl">Co-insurance Amount (optional)</label><input class="form-ctrl" id="auth-coins" value="' + (first.coInsurance||'') + '"></div>' +
-    '<div class="form-group"><label class="form-lbl">Step Up Program (optional)</label><input class="form-ctrl" id="auth-stepup" value="' + (first.stepUpProgram||'') + '"></div>';
+    '<div class="form-group"><label class="form-lbl">Step Up Program (optional)</label><input class="form-ctrl" id="auth-stepup" value="' + (first.stepUpProgram||'') + '"></div>' +
+    '<div class="form-group"><label class="form-lbl">Unit Rate / 15-min unit ($) (optional)</label><input class="form-ctrl" id="auth-unitrate" type="number" step="0.01" min="0" value="' + (first.unitRate||'') + '" placeholder="e.g. 18.50" oninput="authAutoHourly()"></div>' +
+    '<div class="form-group"><label class="form-lbl">Hourly Rate ($) (optional — auto-fills as unit rate × 4)</label><input class="form-ctrl" id="auth-hourlyrate" type="number" step="0.01" min="0" value="' + (first.hourlyRate||'') + '" placeholder="e.g. 74.00"></div>';
 
   editModalType = 'authorizations';
   editModalItem = first.clientId ? first : null;
@@ -4028,6 +4036,655 @@ if ('serviceWorker' in navigator) {
 
 
 // ─── START ────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════
+// FEATURE 6 HELPER — auto-fill hourly rate when unit rate changes
+// ══════════════════════════════════════════════════════════════════════
+function authAutoHourly() {
+  var ur = parseFloat(document.getElementById('auth-unitrate').value) || 0;
+  var hrEl = document.getElementById('auth-hourlyrate');
+  if (ur > 0 && hrEl && !hrEl.value) {
+    hrEl.value = (ur * 4).toFixed(2);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// FEATURE 4 — MANUAL SESSION ENTRY (Admin only)
+// ══════════════════════════════════════════════════════════════════════
+var _meState = null;
+
+function _meReset() {
+  _meState = { behaviors: {}, trials: {}, abc: [], abcSeq: 0, durationMin: 0, tantrumCount: 0 };
+}
+
+function renderManualEntryTab(container) {
+  if (!_meState) _meReset();
+  var raw       = RAW_CONFIG || DEFAULT_CONFIG;
+  var clients   = (raw.clients   || []).filter(function(c) { return (c.status||'active') !== 'inactive'; });
+  var therapists = (raw.therapists || []).filter(function(t) { return (t.status||'active') !== 'inactive'; });
+
+  var today     = new Date();
+  var yesterday = new Date(today); yesterday.setDate(today.getDate() - 1);
+  var todayStr  = today.toISOString().substring(0,10);
+  var yestStr   = yesterday.toISOString().substring(0,10);
+
+  var clientOpts = '<option value="">— Select client —</option>' +
+    clients.map(function(c) { return '<option value="' + c.id + '">' + c.name + '</option>'; }).join('');
+  var therapistOpts = '<option value="">— Select therapist —</option>' +
+    therapists.map(function(t) { return '<option value="' + t.id + '">' + t.name + '</option>'; }).join('');
+  var sessTypes = ['1:1 with client','Supervision','Parent Training'];
+  var sessTypeOpts = sessTypes.map(function(s) { return '<option value="' + s + '">' + s + '</option>'; }).join('');
+  var locations = ['Home','School','Community'];
+  var locationOpts = locations.map(function(l) { return '<option value="' + l + '">' + l + '</option>'; }).join('');
+
+  container.innerHTML =
+    '<div class="settings-section">' +
+    '<div class="settings-hdr">Add Manual Session</div>' +
+    '<p style="font-size:13px;color:var(--g600);margin-bottom:16px">Available for today and yesterday only. Data is saved identically to a live session.</p>' +
+    '<div class="form-group"><label class="form-lbl">Client *</label>' +
+    '<select class="form-ctrl" id="me-client" onchange="meUpdateClient()">' + clientOpts + '</select></div>' +
+    '<div class="form-group"><label class="form-lbl">Therapist *</label>' +
+    '<select class="form-ctrl" id="me-therapist" onchange="meUpdateBillingCode()">' + therapistOpts + '</select></div>' +
+    '<div class="form-group"><label class="form-lbl">Date * (today or yesterday only)</label>' +
+    '<input class="form-ctrl" id="me-date" type="date" min="' + yestStr + '" max="' + todayStr + '" value="' + todayStr + '"></div>' +
+    '<div class="form-group"><label class="form-lbl">Session Type *</label>' +
+    '<select class="form-ctrl" id="me-sess-type" onchange="meUpdateBillingCode()">' + sessTypeOpts + '</select></div>' +
+    '<div class="form-group"><label class="form-lbl">Location *</label>' +
+    '<select class="form-ctrl" id="me-location">' + locationOpts + '</select></div>' +
+    '<div class="form-group"><label class="form-lbl">Billing Code (auto-filled)</label>' +
+    '<input class="form-ctrl" id="me-billing-code" readonly placeholder="Select therapist + session type"></div>' +
+    '<div style="display:flex;gap:12px">' +
+    '<div class="form-group" style="flex:1"><label class="form-lbl">Time In *</label>' +
+    '<input class="form-ctrl" id="me-time-in" type="time" onchange="meCalcDuration()"></div>' +
+    '<div class="form-group" style="flex:1"><label class="form-lbl">Time Out *</label>' +
+    '<input class="form-ctrl" id="me-time-out" type="time" onchange="meCalcDuration()"></div>' +
+    '</div>' +
+    '<div class="form-group"><label class="form-lbl">Duration (auto-calculated)</label>' +
+    '<input class="form-ctrl" id="me-duration" readonly placeholder="Enter times above"></div>' +
+    '</div>' +
+    '<div class="settings-section" style="margin-top:8px">' +
+    '<div class="settings-hdr">Behaviors</div>' +
+    '<div id="me-behaviors-wrap"><div class="empty-msg">Select a client to see behaviors.</div></div>' +
+    '</div>' +
+    '<div class="settings-section" style="margin-top:8px">' +
+    '<div class="settings-hdr">Goals / Trials</div>' +
+    '<div id="me-trials-wrap"><div class="empty-msg">Select a client to see goals.</div></div>' +
+    '</div>' +
+    '<div class="settings-section" style="margin-top:8px">' +
+    '<div class="settings-hdr" style="display:flex;align-items:center;gap:12px">ABC Incidents ' +
+    '<button class="btn btn-ghost" style="padding:5px 12px;font-size:12px" onclick="meAddABC()">+ Add</button></div>' +
+    '<div id="me-abc-wrap"></div>' +
+    '</div>' +
+    '<div class="settings-section" style="margin-top:8px">' +
+    '<div class="settings-hdr">Session Notes * (150 words minimum)</div>' +
+    '<textarea class="form-ctrl" id="me-notes" rows="10" oninput="meUpdateWordCount()"></textarea>' +
+    '<div class="word-count" id="me-word-count">0 / 150 words</div>' +
+    '</div>' +
+    '<div style="padding:16px 0 48px">' +
+    '<div class="pin-error" id="me-error" style="margin-bottom:12px"></div>' +
+    '<button class="btn btn-primary" id="me-submit-btn" onclick="submitManualSession()" disabled>Submit Manual Session &#10003;</button>' +
+    '</div>';
+
+  // Set notes placeholder using existing template constants
+  var notesEl = document.getElementById('me-notes');
+  if (notesEl && typeof NOTES_TEMPLATE_HEADERS !== 'undefined') {
+    notesEl.placeholder = NOTES_TEMPLATE_HEADERS.map(function(h, i) {
+      return h + '\n' + (NOTES_TEMPLATE_FULL[i] || '');
+    }).join('\n\n');
+  }
+
+  // Pre-select first options
+  if (clients.length)    { document.getElementById('me-client').value    = clients[0].id;    meUpdateClient(); }
+  if (therapists.length) { document.getElementById('me-therapist').value = therapists[0].id; meUpdateBillingCode(); }
+}
+
+function meUpdateClient() {
+  var clientId  = document.getElementById('me-client').value;
+  var clientObj = null;
+  for (var i = 0; i < CFG.CLIENTS.length; i++) { if (CFG.CLIENTS[i].id === clientId) { clientObj = CFG.CLIENTS[i]; break; } }
+  _meState.behaviors = {};
+  _meState.trials    = {};
+  if (clientObj) {
+    (clientObj.behaviors || []).forEach(function(b) { _meState.behaviors[b.key] = 0; });
+    (clientObj.goals     || []).forEach(function(g) {
+      _meState.trials[g.code] = Array(g.numTrials || 5).fill(null);
+    });
+  }
+  meBuildBehaviors();
+  meBuildTrials();
+  meUpdateBillingCode();
+}
+
+function meUpdateBillingCode() {
+  var therapistId = document.getElementById('me-therapist').value;
+  var sessType    = document.getElementById('me-sess-type').value;
+  var billingEl   = document.getElementById('me-billing-code');
+  if (!billingEl) return;
+  var raw = RAW_CONFIG || DEFAULT_CONFIG;
+  var therapist = null;
+  (raw.therapists || []).forEach(function(t) { if (t.id === therapistId) therapist = t; });
+  var profile    = therapist ? (therapist.profile || 'RBT') : 'RBT';
+  var code       = CFG.BILLING_MATRIX[profile + '|' + sessType] || '';
+  billingEl.value = code;
+}
+
+function meCalcDuration() {
+  var timeIn  = document.getElementById('me-time-in').value;
+  var timeOut = document.getElementById('me-time-out').value;
+  var durEl   = document.getElementById('me-duration');
+  if (!timeIn || !timeOut) { if (durEl) durEl.value = ''; return; }
+  var inParts  = timeIn.split(':').map(Number);
+  var outParts = timeOut.split(':').map(Number);
+  var inMin    = inParts[0] * 60 + inParts[1];
+  var outMin   = outParts[0] * 60 + outParts[1];
+  var diff     = outMin - inMin;
+  if (diff <= 0) { if (durEl) durEl.value = 'Time Out must be after Time In'; _meState.durationMin = 0; return; }
+  _meState.durationMin = diff;
+  var h = Math.floor(diff / 60); var m = diff % 60;
+  if (durEl) durEl.value = (h > 0 ? h + 'h ' : '') + m + 'm (' + diff + ' min)';
+}
+
+function meBuildBehaviors() {
+  var wrap = document.getElementById('me-behaviors-wrap');
+  if (!wrap) return;
+  var clientId  = document.getElementById('me-client').value;
+  var clientObj = null;
+  for (var i = 0; i < CFG.CLIENTS.length; i++) { if (CFG.CLIENTS[i].id === clientId) { clientObj = CFG.CLIENTS[i]; break; } }
+  var behaviors = clientObj ? (clientObj.behaviors || []) : [];
+  if (!behaviors.length) { wrap.innerHTML = '<div class="empty-msg">No behaviors configured for this client.</div>'; return; }
+  var html = '<div style="display:flex;flex-wrap:wrap;gap:12px">';
+  behaviors.forEach(function(b) {
+    var val = _meState.behaviors[b.key] || 0;
+    html += '<div style="background:var(--white);border-radius:12px;padding:12px;min-width:130px;text-align:center">' +
+      '<div style="font-size:12px;font-weight:800;color:' + b.color + ';margin-bottom:8px">' + b.label + '</div>' +
+      '<div style="display:flex;align-items:center;justify-content:center;gap:8px">' +
+      '<button class="ctr-btn minus" onclick="meChangeBehavior(\'' + b.key + '\',-1)">&#8722;</button>' +
+      '<span id="me-cnt-' + b.key + '" style="font-size:24px;font-weight:900;min-width:32px">' + val + '</span>' +
+      '<button class="ctr-btn plus" style="background:' + b.color + '" onclick="meChangeBehavior(\'' + b.key + '\',1)">+</button>' +
+      '</div></div>';
+  });
+  html += '</div>';
+  wrap.innerHTML = html;
+}
+
+function meChangeBehavior(key, delta) {
+  var cur  = _meState.behaviors[key] || 0;
+  var next = Math.max(0, cur + delta);
+  _meState.behaviors[key] = next;
+  var el = document.getElementById('me-cnt-' + key);
+  if (el) el.textContent = next;
+}
+
+function meBuildTrials() {
+  var wrap = document.getElementById('me-trials-wrap');
+  if (!wrap) return;
+  var clientId  = document.getElementById('me-client').value;
+  var clientObj = null;
+  for (var i = 0; i < CFG.CLIENTS.length; i++) { if (CFG.CLIENTS[i].id === clientId) { clientObj = CFG.CLIENTS[i]; break; } }
+  var goals = clientObj ? (clientObj.goals || []) : [];
+  if (!goals.length) { wrap.innerHTML = '<div class="empty-msg">No goals configured for this client.</div>'; return; }
+
+  goals.forEach(function(g) {
+    if (!_meState.trials[g.code]) _meState.trials[g.code] = Array(g.numTrials || 5).fill(null);
+  });
+
+  var html = '';
+  goals.forEach(function(g) {
+    var n      = g.numTrials || 5;
+    var trials = _meState.trials[g.code];
+    html += '<div class="goal-card" style="margin-bottom:12px"><div class="goal-hdr">' +
+      '<span class="goal-code">' + g.code + '</span>' +
+      '<span class="goal-name">' + g.name + '</span>' +
+      '<span class="goal-pct" id="me-pct-' + g.code + '">&#8212;</span></div><div class="trial-btns">';
+    for (var i = 0; i < n; i++) {
+      var val = trials[i];
+      html += '<div class="trial-slot"><div class="trial-slot-num">T' + (i+1) + '</div>' +
+        '<button class="trial-btn' + (val === true  ? ' correct'   : '') + '" id="me-tr-' + g.code + '-' + i + '-c" onclick="meTrial(\'' + g.code + '\',' + i + ',true)">\u2713</button>' +
+        '<button class="trial-btn' + (val === false ? ' incorrect' : '') + '" id="me-tr-' + g.code + '-' + i + '-x" onclick="meTrial(\'' + g.code + '\',' + i + ',false)">\u2717</button>' +
+        '</div>';
+    }
+    html += '</div></div>';
+  });
+  wrap.innerHTML = html;
+  goals.forEach(function(g) { mePctCalc(g.code); });
+}
+
+function meTrial(code, idx, value) {
+  if (!_meState.trials[code]) return;
+  var cur  = _meState.trials[code][idx];
+  var next = (cur === value) ? null : value;
+  _meState.trials[code][idx] = next;
+  var cBtn = document.getElementById('me-tr-' + code + '-' + idx + '-c');
+  var xBtn = document.getElementById('me-tr-' + code + '-' + idx + '-x');
+  if (cBtn) cBtn.classList.toggle('correct',   next === true);
+  if (xBtn) xBtn.classList.toggle('incorrect', next === false);
+  mePctCalc(code);
+}
+
+function mePctCalc(code) {
+  var answered = (_meState.trials[code] || []).filter(function(x) { return x !== null; });
+  var el = document.getElementById('me-pct-' + code);
+  if (!el) return;
+  if (!answered.length) { el.textContent = '\u2014'; el.style.color = 'var(--g400)'; return; }
+  var pct = Math.round(answered.filter(function(x) { return x === true; }).length / answered.length * 100);
+  el.textContent = pct + '%';
+  el.style.color = pct >= 80 ? 'var(--success)' : pct >= 50 ? 'var(--secondary)' : 'var(--danger)';
+}
+
+function meAddABC() {
+  _meState.abcSeq++;
+  _meState.abc.push({ id: _meState.abcSeq, behavior:'', setting:'', antecedent:'', consequence:'', fn:'', time:'' });
+  meRenderABC();
+}
+
+function meDeleteABC(id) {
+  _meState.abc = _meState.abc.filter(function(a) { return a.id !== id; });
+  meRenderABC();
+}
+
+function meSetABCField(id, field, val, btn) {
+  var inc = null;
+  _meState.abc.forEach(function(a) { if (a.id === id) inc = a; });
+  if (!inc) return;
+  inc[field] = val;
+  if (btn) {
+    var pills = btn.closest('.pill-group').querySelectorAll('.pill');
+    for (var i = 0; i < pills.length; i++) pills[i].classList.remove('sel');
+    btn.classList.add('sel');
+  }
+}
+
+function meSetABCText(id, field, val) {
+  _meState.abc.forEach(function(a) { if (a.id === id) a[field] = val; });
+}
+
+function meRenderABC() {
+  var wrap = document.getElementById('me-abc-wrap');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  _meState.abc.forEach(function(inc, idx) {
+    var card = document.createElement('div');
+    card.className = 'abc-card';
+    var bPills = CFG.ABC_BEHAVIORS.map(function(b) {
+      return '<button class="pill' + (inc.behavior === b ? ' sel' : '') + '" onclick="meSetABCField(' + inc.id + ',\'behavior\',\'' + esc(b) + '\',this)">' + b + '</button>';
+    }).join('');
+    var sPills = CFG.ABC_SETTINGS.map(function(s) {
+      return '<button class="pill' + (inc.setting === s ? ' sel' : '') + '" onclick="meSetABCField(' + inc.id + ',\'setting\',\'' + esc(s) + '\',this)">' + s + '</button>';
+    }).join('');
+    var fPills = CFG.ABC_FUNCTIONS.map(function(f) {
+      return '<button class="pill' + (inc.fn === f ? ' sel' : '') + '" onclick="meSetABCField(' + inc.id + ',\'fn\',\'' + esc(f) + '\',this)">' + f + '</button>';
+    }).join('');
+    card.innerHTML =
+      '<div class="abc-card-hdr"><div class="abc-num">Incident ' + (idx+1) + '</div>' +
+      '<button class="abc-del" onclick="meDeleteABC(' + inc.id + ')">&#10005;</button></div>' +
+      '<div class="form-group" style="margin-bottom:13px"><div class="form-lbl">Behavior</div><div class="pill-group">' + bPills + '</div></div>' +
+      '<div class="form-group" style="margin-bottom:13px"><div class="form-lbl">Setting</div><div class="pill-group">' + sPills + '</div></div>' +
+      '<div class="form-group" style="margin-bottom:13px"><div class="form-lbl">Antecedent</div>' +
+      '<textarea class="form-ctrl" rows="2" placeholder="What happened before?" oninput="meSetABCText(' + inc.id + ',\'antecedent\',this.value)">' + (inc.antecedent||'') + '</textarea></div>' +
+      '<div class="form-group" style="margin-bottom:13px"><div class="form-lbl">Consequence</div>' +
+      '<textarea class="form-ctrl" rows="2" placeholder="What happened after?" oninput="meSetABCText(' + inc.id + ',\'consequence\',this.value)">' + (inc.consequence||'') + '</textarea></div>' +
+      '<div class="form-group" style="margin-bottom:0"><div class="form-lbl">Hypothesized Function</div><div class="pill-group">' + fPills + '</div></div>';
+    wrap.appendChild(card);
+  });
+}
+
+function meUpdateWordCount() {
+  var text  = document.getElementById('me-notes').value;
+  var count = countWords(text);
+  var el    = document.getElementById('me-word-count');
+  var btn   = document.getElementById('me-submit-btn');
+  if (el) { el.textContent = count + ' / ' + NOTES_MIN_WORDS + ' words'; el.classList.toggle('met', count >= NOTES_MIN_WORDS); }
+  if (btn) btn.disabled = count < NOTES_MIN_WORDS;
+}
+
+async function submitManualSession() {
+  var clientId    = document.getElementById('me-client').value;
+  var therapistId = document.getElementById('me-therapist').value;
+  var date        = document.getElementById('me-date').value;
+  var sessType    = document.getElementById('me-sess-type').value;
+  var location    = document.getElementById('me-location').value;
+  var timeIn      = document.getElementById('me-time-in').value;
+  var timeOut     = document.getElementById('me-time-out').value;
+  var notes       = document.getElementById('me-notes').value;
+  var errEl       = document.getElementById('me-error');
+  var submitBtn   = document.getElementById('me-submit-btn');
+  errEl.style.color = 'var(--danger)';
+  errEl.textContent = '';
+
+  if (!clientId)    { errEl.textContent = 'Please select a client.';           return; }
+  if (!therapistId) { errEl.textContent = 'Please select a therapist.';        return; }
+  if (!date)        { errEl.textContent = 'Please select a date.';             return; }
+  if (!timeIn || !timeOut) { errEl.textContent = 'Please enter Time In and Time Out.'; return; }
+
+  // Date must be today or yesterday
+  var today     = new Date(); today.setHours(23,59,59,999);
+  var yesterday = new Date(); yesterday.setDate(yesterday.getDate()-1); yesterday.setHours(0,0,0,0);
+  var selDate   = new Date(date + 'T12:00:00');
+  if (selDate < yesterday || selDate > today) { errEl.textContent = 'Date must be today or yesterday only.'; return; }
+
+  // Validate times
+  var inParts  = timeIn.split(':').map(Number);
+  var outParts = timeOut.split(':').map(Number);
+  var inMin    = inParts[0]*60 + inParts[1];
+  var outMin   = outParts[0]*60 + outParts[1];
+  if (outMin <= inMin) { errEl.textContent = 'Time Out must be after Time In.'; return; }
+  var durationMin = outMin - inMin;
+
+  // Validate notes word count
+  if (countWords(notes) < NOTES_MIN_WORDS) {
+    errEl.textContent = 'Please write at least ' + NOTES_MIN_WORDS + ' content words in the notes.'; return;
+  }
+
+  // Look up client + therapist
+  var raw = RAW_CONFIG || DEFAULT_CONFIG;
+  var client = null; var therapist = null;
+  (raw.clients    || []).forEach(function(c) { if (c.id === clientId)    client    = c; });
+  (raw.therapists || []).forEach(function(t) { if (t.id === therapistId) therapist = t; });
+  if (!client)    { errEl.textContent = 'Client not found.';    return; }
+  if (!therapist) { errEl.textContent = 'Therapist not found.'; return; }
+  if (!client.sheetId) { errEl.textContent = 'Client has no Sheet ID configured.'; return; }
+
+  // Format time strings
+  var fmtHM = function(h, m) {
+    var ap = h >= 12 ? 'PM' : 'AM'; var h12 = h % 12 || 12;
+    return h12 + ':' + (m < 10 ? '0' : '') + m + ' ' + ap;
+  };
+  var timeInStr  = fmtHM(inParts[0],  inParts[1]);
+  var timeOutStr = fmtHM(outParts[0], outParts[1]);
+
+  // Billing code
+  var profile    = therapist.profile || 'RBT';
+  var billingCode = CFG.BILLING_MATRIX[profile + '|' + sessType] || '';
+
+  // Behavior data from ME state
+  var clientObj = null;
+  for (var i = 0; i < CFG.CLIENTS.length; i++) { if (CFG.CLIENTS[i].id === clientId) { clientObj = CFG.CLIENTS[i]; break; } }
+  var clientBehaviors = clientObj ? (clientObj.behaviors || []) : [];
+  var behaviorKeys    = clientBehaviors.map(function(b) { return b.key; });
+  var behaviorLabels  = clientBehaviors.map(function(b) { return b.label; });
+  var behaviorData    = {};
+  clientBehaviors.forEach(function(b) { behaviorData[b.key] = _meState.behaviors[b.key] || 0; });
+  behaviorData.tantrumFrequency = _meState.tantrumCount || 0;
+  behaviorData.tantrumTotalMin  = 0;
+
+  // Trial data from ME state
+  var clientGoals = clientObj ? (clientObj.goals || []) : [];
+  var trialData = clientGoals.map(function(g) {
+    var t = _meState.trials[g.code] || [];
+    var answered = t.filter(function(x) { return x !== null; });
+    var pct = answered.length ? Math.round(t.filter(function(x) { return x === true; }).length / answered.length * 100) : null;
+    return {
+      goalCode: g.code, goalName: g.name,
+      trials: t.map(function(v) { return v === true ? '\u2713' : v === false ? '\u2717' : ''; }),
+      percentage: pct
+    };
+  });
+
+  // Date display string
+  var dObj    = new Date(date + 'T12:00:00');
+  var months  = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  var dateStr = months[dObj.getMonth()] + ' ' + dObj.getDate() + ', ' + dObj.getFullYear();
+
+  var subId       = generateUUID();
+  var coreStr     = JSON.stringify({ therapist: therapist.name, client: client.name, date: dateStr, timeIn: timeInStr, timeOut: timeOutStr });
+  var submittedAt = new Date().toISOString();
+
+  var payload = {
+    action:           'saveSession',
+    sheetId:          client.sheetId,
+    clientName:       client.name,
+    clientId:         client.id,
+    therapist:        therapist.name,
+    therapistInitials: therapist.initials || '',
+    therapistProfile: profile,
+    therapistEmail:   therapist.email || '',
+    date:             dateStr,
+    dateISO:          date,
+    sessionType:      sessType,
+    location:         location,
+    timeIn:           timeInStr,
+    timeOut:          timeOutStr,
+    durationMin:      durationMin,
+    billingCode:      billingCode,
+    supervisionOccurred: false,
+    notes:            notes,
+    appStartTime:     timeInStr,
+    actualStartTime:  timeInStr,
+    lateStartReason:  '',
+    adjustedEndTime:  '',
+    endTimeAdjustmentReason: '',
+    behaviorKeys:     behaviorKeys,
+    behaviorLabels:   behaviorLabels,
+    behaviorData:     behaviorData,
+    trialData:        trialData,
+    abcData: _meState.abc.map(function(inc) {
+      return { behavior: inc.behavior, setting: inc.setting, antecedent: inc.antecedent,
+               consequence: inc.consequence, hypothesizedFunction: inc.fn, time: inc.time || '' };
+    }),
+    submissionId: subId,
+    payloadHash:  simpleHash(coreStr + subId),
+    submittedBy:  AUTH.user ? AUTH.user.email : '',
+    isDraft:      false,
+    submittedAt:  submittedAt,
+    manualEntry:  true,
+    enteredBy:    AUTH.user ? AUTH.user.email : ''
+  };
+
+  submitBtn.disabled = true;
+  submitBtn.textContent = 'Submitting\u2026';
+
+  if (GAS_URL === 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') {
+    console.log('\uD83D\uDCCB Manual session payload (demo):', JSON.stringify(payload, null, 2));
+    errEl.style.color = 'var(--success)';
+    errEl.textContent = 'Manual session saved successfully (demo mode)';
+    _meReset();
+    submitBtn.textContent = 'Submit Manual Session \u2713';
+    return;
+  }
+
+  try {
+    var resp = await fetch(GAS_URL, { method:'POST', headers:{'Content-Type':'text/plain'}, redirect:'follow', body: JSON.stringify(payload) });
+    var data = await resp.json();
+    if (data.success) {
+      EventBus.emit('session:manualEntry', { clientName: client.name, date: date, enteredBy: AUTH.user ? AUTH.user.email : '' });
+      logAuditEvent('session_submit', AUTH.user ? AUTH.user.email : '', client.name, 'Manual entry ' + dateStr + ' ' + durationMin + 'min');
+      errEl.style.color = 'var(--success)';
+      errEl.textContent = 'Manual session saved successfully';
+      _meReset();
+      setTimeout(function() { renderManualEntryTab(document.getElementById('admin-list')); }, 1800);
+    } else {
+      errEl.textContent = 'Submit failed: ' + (data.error || 'Unknown error');
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Submit Manual Session \u2713';
+    }
+  } catch(e) {
+    errEl.textContent = 'Network error \u2014 check connection';
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Submit Manual Session \u2713';
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// FEATURE 7 — WEEKLY INSURANCE BILLING REPORT (Admin only)
+// ══════════════════════════════════════════════════════════════════════
+var _billingWeekStart    = null;
+var _billingReportCache  = null;
+
+function billingGetWeekStart(date) {
+  var d   = new Date(date);
+  var day = d.getDay();
+  var diff = (day === 0) ? -6 : 1 - day;
+  d.setDate(d.getDate() + diff);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function billingUpdateWeekDisplay() {
+  if (!_billingWeekStart) return;
+  var weekEnd = new Date(_billingWeekStart);
+  weekEnd.setDate(weekEnd.getDate() + 6);
+  var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  var label  = months[_billingWeekStart.getMonth()] + ' ' + _billingWeekStart.getDate() +
+    ' \u2013 ' + months[weekEnd.getMonth()] + ' ' + weekEnd.getDate() + ', ' + weekEnd.getFullYear();
+  var el = document.getElementById('billing-week-label');
+  if (el) el.textContent = label;
+}
+
+function billingPrevWeek() {
+  if (!_billingWeekStart) return;
+  _billingWeekStart = new Date(_billingWeekStart);
+  _billingWeekStart.setDate(_billingWeekStart.getDate() - 7);
+  billingUpdateWeekDisplay();
+}
+
+function billingNextWeek() {
+  if (!_billingWeekStart) return;
+  _billingWeekStart = new Date(_billingWeekStart);
+  _billingWeekStart.setDate(_billingWeekStart.getDate() + 7);
+  billingUpdateWeekDisplay();
+}
+
+function renderBillingReportTab(container) {
+  var raw     = RAW_CONFIG || DEFAULT_CONFIG;
+  var clients = (raw.clients || []).filter(function(c) { return (c.status||'active') !== 'inactive'; });
+  if (!_billingWeekStart) _billingWeekStart = billingGetWeekStart(new Date());
+
+  var clientOpts = '<option value="all">All Clients</option>';
+  clients.forEach(function(c) { clientOpts += '<option value="' + c.id + '">' + c.name + '</option>'; });
+
+  container.innerHTML =
+    '<div class="settings-section">' +
+    '<div class="settings-hdr">Weekly Insurance Billing Report</div>' +
+    '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px">' +
+    '<select class="form-ctrl" id="billing-client-sel" style="flex:1;min-width:140px">' + clientOpts + '</select>' +
+    '<button class="admin-act-btn" onclick="billingPrevWeek()" title="Previous week">&laquo;</button>' +
+    '<span id="billing-week-label" style="font-size:13px;font-weight:700;color:var(--g800);min-width:180px;text-align:center"></span>' +
+    '<button class="admin-act-btn" onclick="billingNextWeek()" title="Next week">&raquo;</button>' +
+    '</div>' +
+    '<div style="display:flex;gap:8px;margin-bottom:16px">' +
+    '<button class="btn btn-primary" style="padding:12px 16px;font-size:13px;width:auto" onclick="loadBillingReport()">Load Report</button>' +
+    '<button class="btn btn-ghost"   style="padding:12px 16px;font-size:13px;width:auto" onclick="exportBillingReportCSV()">Export CSV</button>' +
+    '</div>' +
+    '<div id="billing-report-body"><div class="empty-msg">Select a week and click Load Report.</div></div>' +
+    '</div>';
+
+  billingUpdateWeekDisplay();
+}
+
+async function loadBillingReport() {
+  if (!_billingWeekStart) return;
+  var raw      = RAW_CONFIG || DEFAULT_CONFIG;
+  var clientId = document.getElementById('billing-client-sel').value;
+  var clients  = (raw.clients || []).map(function(c) { return { id: c.id, name: c.name, sheetId: c.sheetId }; });
+  var body     = document.getElementById('billing-report-body');
+  if (!body) return;
+  body.innerHTML = '<div class="empty-msg">Loading\u2026</div>';
+
+  if (GAS_URL === 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') {
+    body.innerHTML = '<div class="empty-msg">Demo mode \u2014 no billing data available.</div>';
+    return;
+  }
+
+  try {
+    var resp = await fetch(GAS_URL, {
+      method:'POST', headers:{'Content-Type':'text/plain'}, redirect:'follow',
+      body: JSON.stringify({ action:'getBillingReport', clientId: clientId, weekStart: _billingWeekStart.toISOString(), clients: clients })
+    });
+    var data = await resp.json();
+    if (data.success) {
+      _billingReportCache = { rows: data.rows || [], clientId: clientId };
+      renderBillingReportResults(data.rows || []);
+      EventBus.emit('report:billingGenerated', { clientId: clientId, weekStart: _billingWeekStart.toISOString(), rowCount: (data.rows || []).length });
+    } else {
+      body.innerHTML = '<div class="empty-msg">Failed: ' + (data.error || 'Unknown error') + '</div>';
+    }
+  } catch(e) {
+    body.innerHTML = '<div class="empty-msg">Error: ' + e.message + '</div>';
+  }
+}
+
+function renderBillingReportResults(rows) {
+  var body = document.getElementById('billing-report-body');
+  if (!body) return;
+  if (!rows.length) { body.innerHTML = '<div class="empty-msg">No sessions found for this period.</div>'; return; }
+
+  var html = '<div style="overflow-x:auto"><table class="payroll-table" style="min-width:700px">' +
+    '<thead><tr><th>Date</th><th>Client</th><th>Therapist</th><th>Code</th><th>Session Type</th>' +
+    '<th>Hours</th><th>Insurance</th><th>Unit Rate</th><th>Hourly Rate</th><th>Billable</th></tr></thead><tbody>';
+
+  var byCode = {};
+  var grandTotal = 0;
+
+  rows.forEach(function(r) {
+    var billable = r.billable || 0;
+    grandTotal += billable;
+    var code = r.billingCode || '\u2014';
+    if (!byCode[code]) byCode[code] = { hours: 0, billable: 0 };
+    byCode[code].hours   += r.hours || 0;
+    byCode[code].billable += billable;
+
+    html += '<tr>' +
+      '<td>' + (r.date || '') + '</td>' +
+      '<td>' + (r.clientName || '') + '</td>' +
+      '<td>' + (r.therapist || '') + '</td>' +
+      '<td>' + code + '</td>' +
+      '<td>' + (r.sessionType || '') + '</td>' +
+      '<td>' + (r.hours || 0).toFixed(2) + '</td>' +
+      '<td>' + (r.insuranceCompany || '\u2014') + '</td>' +
+      '<td>' + (r.unitRate   ? '$' + r.unitRate.toFixed(2)   : '\u2014') + '</td>' +
+      '<td>' + (r.hourlyRate ? '$' + r.hourlyRate.toFixed(2) : '\u2014') + '</td>' +
+      '<td class="payroll-total">' + (billable ? '$' + billable.toFixed(2) : '\u2014') + '</td>' +
+      '</tr>';
+  });
+
+  html += '</tbody></table></div>';
+
+  // Summary section
+  html += '<div style="margin-top:16px;background:var(--g100);border-radius:12px;padding:14px">' +
+    '<div style="font-size:13px;font-weight:800;color:var(--g800);margin-bottom:10px">Summary by Billing Code</div>';
+  Object.keys(byCode).forEach(function(code) {
+    var s = byCode[code];
+    html += '<div style="display:flex;justify-content:space-between;font-size:13px;padding:4px 0;border-bottom:1px solid var(--g200)">' +
+      '<span><strong>' + code + '</strong> \u2014 ' + s.hours.toFixed(2) + 'h</span>' +
+      '<span>' + (s.billable ? '$' + s.billable.toFixed(2) : '\u2014') + '</span></div>';
+  });
+  html += '<div style="display:flex;justify-content:space-between;font-size:14px;font-weight:900;color:var(--g800);padding-top:10px">' +
+    '<span>Grand Total</span><span class="payroll-total">$' + grandTotal.toFixed(2) + '</span></div></div>';
+
+  body.innerHTML = html;
+}
+
+function exportBillingReportCSV() {
+  if (!_billingReportCache || !(_billingReportCache.rows || []).length) {
+    toast('No billing data to export \u2014 load a report first', 'err'); return;
+  }
+  var rows = _billingReportCache.rows;
+  function csvQ(v) { return '"' + String(v || '').replace(/"/g, '""') + '"'; }
+  var weekEl    = document.getElementById('billing-week-label');
+  var weekLabel = weekEl ? weekEl.textContent : '';
+  var lines = [];
+  lines.push(csvQ('Week') + ',' + csvQ(weekLabel));
+  lines.push('');
+  lines.push([csvQ('Date'),csvQ('Client'),csvQ('Therapist'),csvQ('Billing Code'),
+    csvQ('Session Type'),csvQ('Hours'),csvQ('Insurance Company'),
+    csvQ('Unit Rate'),csvQ('Hourly Rate'),csvQ('Billable Amount')].join(','));
+  rows.forEach(function(r) {
+    lines.push([
+      csvQ(r.date), csvQ(r.clientName), csvQ(r.therapist), csvQ(r.billingCode),
+      csvQ(r.sessionType), csvQ((r.hours||0).toFixed(2)), csvQ(r.insuranceCompany),
+      csvQ(r.unitRate   ? '$'+r.unitRate.toFixed(2)   : ''),
+      csvQ(r.hourlyRate ? '$'+r.hourlyRate.toFixed(2) : ''),
+      csvQ(r.billable   ? '$'+r.billable.toFixed(2)   : '')
+    ].join(','));
+  });
+  var blob = new Blob([lines.join('\n')], { type:'text/csv' });
+  var url  = URL.createObjectURL(blob);
+  var a    = document.createElement('a');
+  a.href = url;
+  a.download = 'billing_' + weekLabel.replace(/[^a-z0-9]/gi, '_') + '.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 init();
 
 </script>
