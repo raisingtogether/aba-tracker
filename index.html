@@ -2197,6 +2197,11 @@ let adminItems = [];
 let editModalType = null;
 let editModalItem = null;
 
+// ─── AUTHORIZATION MODAL STATE ────────────────────────────────────────
+var _authCodeRows   = [];   // [{ rid, code, hours, unitRate, hourlyRate }]
+var _authEditGroup  = null; // { clientId, authorizationNumber } or null for new
+var _authRowCounter = 0;
+
 function openAdmin() {
   const role = AUTH.role || 'collector';
   if (role !== 'admin' && role !== 'bcba') {
@@ -2505,26 +2510,34 @@ function saveEntity() {
   let updated;
 
   if (type === 'authorizations') {
-    const list = raw.authorizations || [];
-    const entry = {
-      clientId:            document.getElementById('auth-clientId').value,
-      payerType:           document.getElementById('auth-payerType').value,
-      insuranceCompany:    document.getElementById('auth-company').value.trim(),
-      authorizationNumber: document.getElementById('auth-authNum').value.trim(),
-      billingCode:         document.getElementById('auth-code').value.trim(),
-      authorizedHours:     document.getElementById('auth-hours').value.trim(),
-      startDate:           document.getElementById('auth-start').value,
-      endDate:             document.getElementById('auth-end').value,
-      coInsurance:         document.getElementById('auth-coins').value.trim(),
-      stepUpProgram:       document.getElementById('auth-stepup').value.trim(),
-      unitRate:            document.getElementById('auth-unitrate').value.trim(),
-      hourlyRate:          document.getElementById('auth-hourlyrate').value.trim(),
-      status:              'active'
-    };
-    if (!entry.clientId) { toast('Client required', 'err'); return; }
-    const filtered = list.filter(a => a.clientId !== entry.clientId);
-    filtered.push(entry);
-    raw.authorizations = filtered;
+    const cid     = document.getElementById('auth-clientId').value;
+    const payer   = document.getElementById('auth-payerType').value;
+    const company = document.getElementById('auth-company').value.trim();
+    const authNum = document.getElementById('auth-authNum').value.trim();
+    const start   = document.getElementById('auth-start').value;
+    const end     = document.getElementById('auth-end').value;
+    const coins   = document.getElementById('auth-coins').value.trim();
+    const stepup  = document.getElementById('auth-stepup').value.trim();
+    if (!cid) { toast('Client required', 'err'); return; }
+    const validRows = _authCodeRows.filter(r => r.code.trim());
+    if (!validRows.length) { toast('At least one billing code required', 'err'); return; }
+    // Remove previous rows for this authorization group, add new ones
+    const prevClientId = _authEditGroup ? _authEditGroup.clientId : null;
+    const prevAuthNum  = _authEditGroup ? (_authEditGroup.authorizationNumber || '') : '';
+    const kept = (raw.authorizations || []).filter(a => {
+      if (!prevClientId) return true;
+      return !(a.clientId === prevClientId && (a.authorizationNumber || '') === prevAuthNum);
+    });
+    validRows.forEach(r => {
+      kept.push({
+        clientId: cid, payerType: payer, insuranceCompany: company,
+        authorizationNumber: authNum, billingCode: r.code.trim(),
+        authorizedHours: r.hours, unitRate: r.unitRate, hourlyRate: r.hourlyRate,
+        startDate: start, endDate: end, coInsurance: coins,
+        stepUpProgram: stepup, status: 'active'
+      });
+    });
+    raw.authorizations = kept;
     closeEditModal();
     persistConfig(raw);
     return;
@@ -3719,108 +3732,274 @@ function exportMasteryReportCSV() {
 
 // ── AUTHORIZATIONS TAB ───────────────────────────────────────────────
 function renderAuthorizationsTab(container) {
-  const raw   = RAW_CONFIG || DEFAULT_CONFIG;
-  const auths = (raw.authorizations || []).filter(a => (a.status || 'active') !== 'inactive');
+  const raw    = RAW_CONFIG || DEFAULT_CONFIG;
+  const active = (raw.authorizations || []).filter(a => (a.status || 'active') !== 'inactive');
 
   container.innerHTML = '<div style="padding:0 0 12px"><button class="btn btn-ghost" style="padding:12px" onclick="openAddAuthModal()">+ Add Authorization</button></div>';
 
-  if (!auths.length) {
+  if (!active.length) {
     container.innerHTML += '<div class="empty-msg">No authorizations configured.</div>';
     return;
   }
 
-  // Group by clientId
-  const byClient = {};
-  auths.forEach(a => {
-    if (!byClient[a.clientId]) byClient[a.clientId] = [];
-    byClient[a.clientId].push(a);
+  // Group by clientId + authorizationNumber (one card per auth group)
+  const groups = [];
+  const gMap   = {};
+  active.forEach(a => {
+    const gkey = (a.clientId || '') + '|||' + (a.authorizationNumber || '');
+    if (!gMap[gkey]) {
+      gMap[gkey] = { clientId: a.clientId, authorizationNumber: a.authorizationNumber || '', shared: a, rows: [] };
+      groups.push(gMap[gkey]);
+    }
+    gMap[gkey].rows.push(a);
   });
 
-  Object.keys(byClient).forEach(clientId => {
-    const client = (raw.clients || []).find(c => c.id === clientId);
-    const cName  = client ? client.name : clientId;
-    const rows   = byClient[clientId];
-    const payer  = rows[0].payerType || '';
+  groups.forEach((g, gi) => {
+    const client  = (raw.clients || []).find(c => c.id === g.clientId) || {};
+    const cName   = client.name || g.clientId;
+    const sh      = g.shared;
+    const isAdmin = AUTH.role === 'admin';
 
-    // Only show dashboard if billing data available
-    const hasBillingData = rows.some(r => r.billingCode && r.authorizedHours);
-
-    let html2 = '<div class="auth-card"><div class="auth-card-ttl">' + cName + ' <span style="font-size:11px;color:var(--g400);font-weight:600">' + payer + '</span></div>';
-
-    if (hasBillingData) {
-      // Per-code progress bars
-      const codeRows = rows.filter(r => r.billingCode && r.authorizedHours);
-      let totalAuth = 0, totalConsumed = 0;
-      codeRows.forEach(r => {
-        const auth     = parseFloat(r.authorizedHours) || 0;
-        const consumed = parseFloat(r.hoursConsumed)   || 0;
-        const pct      = auth > 0 ? Math.min(100, consumed / auth * 100) : 0;
-        const cls      = pct >= 90 ? 'red' : pct >= 75 ? 'yellow' : 'green';
-        totalAuth += auth; totalConsumed += consumed;
-        html2 += '<div style="margin-bottom:10px">' +
-          '<div style="font-size:12px;font-weight:800;color:var(--g800);margin-bottom:4px">' + r.billingCode + '</div>' +
-          '<div class="auth-progress"><div class="auth-progress-bar ' + cls + '" style="width:' + pct.toFixed(1) + '%"></div></div>' +
-          '<div class="auth-stat"><span>' + consumed.toFixed(1) + 'h used</span><span>' + (auth - consumed).toFixed(1) + 'h remaining / ' + auth + 'h auth</span></div>' +
-          (pct >= 90 ? '<div class="auth-alert">&#9888; Less than 10% remaining</div>' : '') + '</div>';
-      });
-      // Summary line
-      const totalPct = totalAuth > 0 ? (totalConsumed / totalAuth * 100) : 0;
-      html2 += '<div style="border-top:2px solid var(--g100);padding-top:10px;font-size:13px;font-weight:800;color:var(--g800)">Total: ' + totalConsumed.toFixed(1) + 'h / ' + totalAuth + 'h</div>';
-
-      // Expiry check
-      const expStr = rows[0].endDate;
-      if (expStr) {
-        const exp  = new Date(expStr);
-        const days = Math.round((exp - new Date()) / 86400000);
-        if (days <= 45) {
-          html2 += '<div class="auth-expire-warn">&#9200; Auth expires in ' + days + ' days (' + expStr + ')</div>';
-        }
+    // Expiry alert
+    let expiryHtml = '';
+    if (sh.endDate) {
+      const exp  = new Date(sh.endDate);
+      const days = Math.round((exp - new Date()) / 86400000);
+      if (days <= 45) {
+        expiryHtml = '<div class="auth-expire-warn">\u23f0 Auth expires in ' + days + ' day' + (days === 1 ? '' : 's') + ' (' + sh.endDate + ')</div>';
       }
-    } else {
-      html2 += '<div style="font-size:13px;color:var(--g400);font-weight:600">Payer: ' + payer + '</div>';
     }
 
-    html2 += '<div style="margin-top:10px"><button class="admin-act-btn" onclick="openEditAuthModal(\'' + clientId + '\')">Edit</button></div>';
-    html2 += '</div>';
-    container.innerHTML += html2;
+    // Billing codes table body — consumed hours filled async
+    let tbodyHtml = '';
+    g.rows.forEach(row => {
+      const auth  = parseFloat(row.authorizedHours) || 0;
+      const code  = row.billingCode || '';
+      const rowId = 'ar-' + (g.clientId || '').replace(/\W/g, '') + '-' + code.replace(/\W/g, '');
+      tbodyHtml +=
+        '<tr>' +
+        '<td style="font-weight:800;padding:5px 6px">'   + escAttr(code || '\u2014') + '</td>' +
+        '<td style="text-align:right;padding:5px 6px">'  + auth + 'h</td>' +
+        '<td style="text-align:right;padding:5px 6px">'  + (row.unitRate   ? '$' + row.unitRate   : '\u2014') + '</td>' +
+        '<td style="text-align:right;padding:5px 6px">'  + (row.hourlyRate ? '$' + row.hourlyRate : '\u2014') + '</td>' +
+        '<td id="cons-' + rowId + '" style="text-align:right;padding:5px 6px;color:var(--g400)">...</td>' +
+        '<td id="rem-'  + rowId + '" style="text-align:right;padding:5px 6px;color:var(--g400)">...</td>' +
+        '<td style="padding:5px 6px;min-width:80px">' +
+          '<div class="auth-progress"><div class="auth-progress-bar green" id="bar-' + rowId + '" style="width:0%"></div></div>' +
+          '<div id="pct-' + rowId + '" style="font-size:10px;text-align:right;color:var(--g400);margin-top:1px">0%</div>' +
+        '</td>' +
+        '</tr>';
+    });
+
+    const editArgs  = "'" + esc(g.clientId) + "','" + esc(g.authorizationNumber) + "'";
+    const deleteBtn = isAdmin
+      ? '<button class="admin-act-btn act-delete" onclick="deleteAuthGroup(\'' + esc(g.clientId) + '\',\'' + esc(g.authorizationNumber) + '\')">Delete</button>'
+      : '';
+
+    const cardHtml =
+      '<div class="auth-card">' +
+      '<div class="auth-card-ttl">' + escAttr(cName) +
+        ' <span style="font-size:11px;color:var(--g400);font-weight:600">' + escAttr(sh.payerType || '') + '</span>' +
+      '</div>' +
+      (sh.insuranceCompany ? '<div style="font-size:13px;font-weight:700;color:var(--g600);margin-bottom:2px">' + escAttr(sh.insuranceCompany) + '</div>' : '') +
+      (sh.authorizationNumber ? '<div style="font-size:12px;color:var(--g400);font-weight:600;margin-bottom:4px">Auth #' + escAttr(sh.authorizationNumber) + '</div>' : '') +
+      ((sh.startDate || sh.endDate) ? '<div style="font-size:12px;color:var(--g400);font-weight:600;margin-bottom:4px">' + (sh.startDate || '') + ' \u2013 ' + (sh.endDate || '') + '</div>' : '') +
+      (sh.coInsurance ? '<div style="font-size:12px;color:var(--g600);font-weight:600;margin-bottom:4px">Co-ins: ' + escAttr(sh.coInsurance) + '</div>' : '') +
+      (sh.payerType === 'Step Up' && sh.stepUpProgram ? '<div style="font-size:12px;color:var(--g600);font-weight:600;margin-bottom:4px">Step Up: ' + escAttr(sh.stepUpProgram) + '</div>' : '') +
+      expiryHtml +
+      '<div style="overflow-x:auto;margin:8px 0 4px">' +
+        '<table style="width:100%;border-collapse:collapse;font-size:12px">' +
+          '<thead><tr style="color:var(--g400);font-weight:700;border-bottom:2px solid var(--g200)">' +
+            '<th style="text-align:left;padding:4px 6px">Code</th>' +
+            '<th style="text-align:right;padding:4px 6px">Auth Hrs</th>' +
+            '<th style="text-align:right;padding:4px 6px">Unit $</th>' +
+            '<th style="text-align:right;padding:4px 6px">Hourly $</th>' +
+            '<th style="text-align:right;padding:4px 6px">Used</th>' +
+            '<th style="text-align:right;padding:4px 6px">Remaining</th>' +
+            '<th style="padding:4px 6px">Progress</th>' +
+          '</tr></thead>' +
+          '<tbody>' + tbodyHtml + '</tbody>' +
+        '</table>' +
+      '</div>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">' +
+        '<button class="admin-act-btn" onclick="openEditAuthModal(' + editArgs + ')">Edit</button>' +
+        deleteBtn +
+      '</div>' +
+      '</div>';
+    container.innerHTML += cardHtml;
+
+    // Async: fill consumed hours for each billing code row
+    (function(grp, sheetId) { loadAuthConsumedHours(grp, sheetId); })(g, client.sheetId || '');
   });
 }
 
-function openAddAuthModal() { openEditAuthModal(null); }
+// Async: fetch consumed hours per billing code from GAS (date-range filtered)
+async function loadAuthConsumedHours(group, sheetId) {
+  if (!sheetId || GAS_URL === 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') return;
+  const sh = group.shared;
+  for (var ri = 0; ri < group.rows.length; ri++) {
+    const row  = group.rows[ri];
+    const code = row.billingCode || '';
+    if (!code) continue;
+    const rowId  = 'ar-' + (group.clientId || '').replace(/\W/g, '') + '-' + code.replace(/\W/g, '');
+    const consEl = document.getElementById('cons-' + rowId);
+    const remEl  = document.getElementById('rem-'  + rowId);
+    const barEl  = document.getElementById('bar-'  + rowId);
+    const pctEl  = document.getElementById('pct-'  + rowId);
+    if (!consEl) continue;
+    try {
+      const resp = await fetch(GAS_URL, {
+        method: 'POST', headers: { 'Content-Type': 'text/plain' }, redirect: 'follow',
+        body: JSON.stringify({ action: 'getConsumedHours', billingCode: code, sheetId: sheetId,
+          startDate: sh.startDate || '', endDate: sh.endDate || '' })
+      });
+      const data = await resp.json();
+      if (!data.success) continue;
+      const consumed  = data.consumed || 0;
+      const auth      = parseFloat(row.authorizedHours) || 0;
+      const remaining = Math.max(0, auth - consumed);
+      const pct       = auth > 0 ? Math.min(100, consumed / auth * 100) : 0;
+      const cls       = pct >= 90 ? 'red' : pct >= 75 ? 'yellow' : 'green';
+      if (consEl) consEl.textContent = consumed.toFixed(1) + 'h';
+      if (remEl)  remEl.textContent  = remaining.toFixed(1) + 'h';
+      if (barEl)  { barEl.className = 'auth-progress-bar ' + cls; barEl.style.width = pct.toFixed(1) + '%'; }
+      if (pctEl)  pctEl.textContent = pct.toFixed(0) + '%';
+    } catch(e) { /* skip */ }
+  }
+}
 
-function openEditAuthModal(clientId) {
+function deleteAuthGroup(clientId, authorizationNumber) {
+  const raw = JSON.parse(JSON.stringify(RAW_CONFIG || DEFAULT_CONFIG));
+  const client = (raw.clients || []).find(c => c.id === clientId) || {};
+  if (!confirm('Are you sure you want to permanently delete the authorization for ' +
+      (client.name || clientId) + ' (Auth #' + (authorizationNumber || 'N/A') +
+      ')? All billing codes in this authorization will be removed. This cannot be undone.')) return;
+  raw.authorizations = (raw.authorizations || []).filter(a =>
+    !(a.clientId === clientId && (a.authorizationNumber || '') === (authorizationNumber || ''))
+  );
+  persistConfig(raw);
+}
+
+function openAddAuthModal() { openEditAuthModal(null, null); }
+
+function openEditAuthModal(clientId, authorizationNumber) {
   const raw   = RAW_CONFIG || DEFAULT_CONFIG;
   const auths = raw.authorizations || [];
-  const existing = clientId ? auths.filter(a => a.clientId === clientId) : [];
-  const first    = existing[0] || {};
+
+  // Find rows for this authorization group
+  const existing = (clientId !== null && clientId !== undefined)
+    ? auths.filter(a => a.clientId === clientId && (a.authorizationNumber || '') === (authorizationNumber || ''))
+    : [];
+  const sh = existing[0] || {};
+
+  // Initialize state
+  _authEditGroup = (clientId !== null && clientId !== undefined)
+    ? { clientId: clientId, authorizationNumber: authorizationNumber || '' }
+    : null;
+  _authCodeRows = existing.map(r => ({
+    rid:        ++_authRowCounter,
+    code:       r.billingCode     || '',
+    hours:      r.authorizedHours || '',
+    unitRate:   r.unitRate        || '',
+    hourlyRate: r.hourlyRate      || ''
+  }));
+  if (!_authCodeRows.length) {
+    _authCodeRows.push({ rid: ++_authRowCounter, code: '', hours: '', unitRate: '', hourlyRate: '' });
+  }
 
   const clientOpts = (raw.clients || []).map(c =>
-    '<option value="' + c.id + '"' + (c.id === clientId ? ' selected' : '') + '>' + c.name + '</option>'
+    '<option value="' + escAttr(c.id) + '"' + (c.id === clientId ? ' selected' : '') + '>' + escAttr(c.name) + '</option>'
   ).join('');
-
-  const payerTypes = ['Insurance','Step Up','Private Pay'];
-  const payerOpts  = payerTypes.map(p =>
-    '<option value="' + p + '"' + (first.payerType === p ? ' selected' : '') + '>' + p + '</option>'
+  const payerOpts = ['Insurance','Step Up','Private Pay'].map(p =>
+    '<option value="' + p + '"' + (sh.payerType === p ? ' selected' : '') + '>' + p + '</option>'
   ).join('');
 
   document.getElementById('edit-form-body').innerHTML =
-    '<div class="form-group"><label class="form-lbl">Client</label><select class="form-ctrl" id="auth-clientId">' + clientOpts + '</select></div>' +
-    '<div class="form-group"><label class="form-lbl">Payer Type</label><select class="form-ctrl" id="auth-payerType">' + payerOpts + '</select></div>' +
-    '<div class="form-group"><label class="form-lbl">Insurance Company (optional)</label><input class="form-ctrl" id="auth-company" value="' + (first.insuranceCompany||'') + '"></div>' +
-    '<div class="form-group"><label class="form-lbl">Authorization Number (optional)</label><input class="form-ctrl" id="auth-authNum" value="' + (first.authorizationNumber||'') + '"></div>' +
-    '<div class="form-group"><label class="form-lbl">Billing Code (optional)</label><input class="form-ctrl" id="auth-code" value="' + (first.billingCode||'') + '"></div>' +
-    '<div class="form-group"><label class="form-lbl">Authorized Hours (optional)</label><input class="form-ctrl" id="auth-hours" type="number" value="' + (first.authorizedHours||'') + '"></div>' +
-    '<div class="form-group"><label class="form-lbl">Start Date (optional)</label><input class="form-ctrl" id="auth-start" type="date" value="' + (first.startDate||'') + '"></div>' +
-    '<div class="form-group"><label class="form-lbl">End Date (optional)</label><input class="form-ctrl" id="auth-end" type="date" value="' + (first.endDate||'') + '"></div>' +
-    '<div class="form-group"><label class="form-lbl">Co-insurance Amount (optional)</label><input class="form-ctrl" id="auth-coins" value="' + (first.coInsurance||'') + '"></div>' +
-    '<div class="form-group"><label class="form-lbl">Step Up Program (optional)</label><input class="form-ctrl" id="auth-stepup" value="' + (first.stepUpProgram||'') + '"></div>' +
-    '<div class="form-group"><label class="form-lbl">Unit Rate / 15-min unit ($) (optional)</label><input class="form-ctrl" id="auth-unitrate" type="number" step="0.01" min="0" value="' + (first.unitRate||'') + '" placeholder="e.g. 18.50" oninput="authAutoHourly()"></div>' +
-    '<div class="form-group"><label class="form-lbl">Hourly Rate ($) (optional — auto-fills as unit rate × 4)</label><input class="form-ctrl" id="auth-hourlyrate" type="number" step="0.01" min="0" value="' + (first.hourlyRate||'') + '" placeholder="e.g. 74.00"></div>';
+    '<div class="form-group"><label class="form-lbl">Client</label>' +
+      '<select class="form-ctrl" id="auth-clientId">' + clientOpts + '</select></div>' +
+    '<div class="form-group"><label class="form-lbl">Payer Type</label>' +
+      '<select class="form-ctrl" id="auth-payerType">' + payerOpts + '</select></div>' +
+    '<div class="form-group"><label class="form-lbl">Insurance Company (optional)</label>' +
+      '<input class="form-ctrl" id="auth-company" value="' + escAttr(sh.insuranceCompany || '') + '"></div>' +
+    '<div class="form-group"><label class="form-lbl">Authorization Number (optional)</label>' +
+      '<input class="form-ctrl" id="auth-authNum" value="' + escAttr(sh.authorizationNumber || '') + '"></div>' +
+    '<div class="form-group"><label class="form-lbl">Start Date (optional)</label>' +
+      '<input class="form-ctrl" id="auth-start" type="date" value="' + escAttr(sh.startDate || '') + '"></div>' +
+    '<div class="form-group"><label class="form-lbl">End Date (optional)</label>' +
+      '<input class="form-ctrl" id="auth-end" type="date" value="' + escAttr(sh.endDate || '') + '"></div>' +
+    '<div class="form-group"><label class="form-lbl">Co-insurance Amount (optional)</label>' +
+      '<input class="form-ctrl" id="auth-coins" value="' + escAttr(sh.coInsurance || '') + '"></div>' +
+    '<div class="form-group"><label class="form-lbl">Step Up Program (optional)</label>' +
+      '<input class="form-ctrl" id="auth-stepup" value="' + escAttr(sh.stepUpProgram || '') + '"></div>' +
+    '<div class="form-group">' +
+      '<label class="form-lbl" style="margin-bottom:8px">Billing Codes</label>' +
+      '<datalist id="auth-code-opts">' +
+        '<option value="97151"><option value="97152"><option value="97153">' +
+        '<option value="97154"><option value="97155"><option value="97156">' +
+        '<option value="97157"><option value="97158"><option value="0362T"><option value="0373T">' +
+      '</datalist>' +
+      '<div style="font-size:11px;color:var(--g400);font-weight:600;margin-bottom:6px">' +
+        'Code \u00b7 Auth Hrs \u00b7 Unit $/15-min \u00b7 Hourly $</div>' +
+      '<div id="auth-codes-list"></div>' +
+      '<button type="button" class="admin-act-btn" style="margin-top:8px" onclick="authAddCodeRow()">+ Add Billing Code</button>' +
+    '</div>';
 
   editModalType = 'authorizations';
-  editModalItem = first.clientId ? first : null;
-  document.getElementById('modal-edit-title').textContent = clientId ? 'Edit Authorization' : 'Add Authorization';
+  editModalItem = sh.clientId ? sh : null;
+  document.getElementById('modal-edit-title').textContent = (clientId !== null && clientId !== undefined) ? 'Edit Authorization' : 'Add Authorization';
+  authRenderCodeRows();
   document.getElementById('modal-edit').classList.add('active');
+}
+
+function authRenderCodeRows() {
+  const container = document.getElementById('auth-codes-list');
+  if (!container) return;
+  let html = '';
+  _authCodeRows.forEach(function(r) {
+    html +=
+      '<div style="display:grid;grid-template-columns:1fr 64px 64px 64px 30px;gap:4px;align-items:center;margin-bottom:6px">' +
+        '<input class="form-ctrl" style="padding:7px;font-size:13px" list="auth-code-opts" placeholder="Code"' +
+          ' value="' + escAttr(r.code) + '" oninput="authRowUpdate(' + r.rid + ',\'code\',this.value)">' +
+        '<input class="form-ctrl" style="padding:7px;font-size:13px" type="number" min="0" step="0.5" placeholder="Hrs"' +
+          ' value="' + escAttr(r.hours) + '" oninput="authRowUpdate(' + r.rid + ',\'hours\',this.value)">' +
+        '<input class="form-ctrl" style="padding:7px;font-size:13px" type="number" min="0" step="0.01" placeholder="Unit$"' +
+          ' value="' + escAttr(r.unitRate) + '" oninput="authRowUnitRate(' + r.rid + ',this.value)">' +
+        '<input class="form-ctrl" style="padding:7px;font-size:13px" type="number" min="0" step="0.01" placeholder="Hrly$"' +
+          ' value="' + escAttr(r.hourlyRate) + '" id="ahr-' + r.rid + '" oninput="authRowUpdate(' + r.rid + ',\'hourlyRate\',this.value)">' +
+        '<button type="button" style="background:rgba(239,68,68,0.12);color:var(--danger);border:none;border-radius:6px;' +
+          'padding:6px 7px;cursor:pointer;font-weight:800;font-size:13px;line-height:1" onclick="authRemoveCodeRow(' + r.rid + ')">\u2715</button>' +
+      '</div>';
+  });
+  if (!html) html = '<div style="color:var(--g400);font-size:13px;font-weight:600">No billing codes. Tap + Add Billing Code.</div>';
+  container.innerHTML = html;
+}
+
+function authAddCodeRow() {
+  _authCodeRows.push({ rid: ++_authRowCounter, code: '', hours: '', unitRate: '', hourlyRate: '' });
+  authRenderCodeRows();
+}
+
+function authRemoveCodeRow(rid) {
+  if (_authCodeRows.length <= 1) { toast('At least one billing code row required', 'err'); return; }
+  _authCodeRows = _authCodeRows.filter(r => r.rid !== rid);
+  authRenderCodeRows();
+}
+
+function authRowUpdate(rid, field, value) {
+  const r = _authCodeRows.find(r => r.rid === rid);
+  if (r) r[field] = value;
+}
+
+function authRowUnitRate(rid, value) {
+  const r = _authCodeRows.find(r => r.rid === rid);
+  if (!r) return;
+  r.unitRate = value;
+  const hr = parseFloat(value) * 4;
+  if (!isNaN(hr) && hr > 0) {
+    r.hourlyRate = hr.toFixed(2);
+    const el = document.getElementById('ahr-' + rid);
+    if (el) el.value = r.hourlyRate;
+  }
 }
 
 

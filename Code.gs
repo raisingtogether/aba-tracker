@@ -37,7 +37,7 @@ function doPost(e) {
       result = { success: true, hours: hours };
 
     } else if (data.action === 'getConsumedHours') {
-      var consumed = getConsumedHours(data.billingCode, data.sheetId);
+      var consumed = getConsumedHours(data.billingCode, data.sheetId, data.startDate, data.endDate);
       result = { success: true, consumed: consumed };
 
     } else if (data.action === 'getBiweeklyHours') {
@@ -293,7 +293,7 @@ function getWeeklyHours(therapistName, weekStart, clients) {
  * Sum minutes billed under billingCode in the given client sheet.
  * Returns hours (float).
  */
-function getConsumedHours(billingCode, sheetId) {
+function getConsumedHours(billingCode, sheetId, startDate, endDate) {
   if (!sheetId || !billingCode) return 0;
   try {
     var ss    = SpreadsheetApp.openById(sheetId);
@@ -303,21 +303,44 @@ function getConsumedHours(billingCode, sheetId) {
     if (rows.length < 2) return 0;
 
     var headers = rows[0];
-    var billingCol = -1, durationCol = -1;
+    var billingCol = -1, durationCol = -1, dateCol = -1, dateISOCol = -1;
     for (var hi = 0; hi < headers.length; hi++) {
       var h = String(headers[hi]).trim().toLowerCase();
       if (h === 'billing code')   billingCol  = hi;
       if (h === 'duration (min)') durationCol = hi;
+      if (h === 'date')           dateCol     = hi;
+      if (h === 'dateiso')        dateISOCol  = hi;
     }
     if (billingCol < 0 || durationCol < 0) return 0;
+
+    // Parse optional date range
+    var rangeStart = startDate ? new Date(startDate) : null;
+    var rangeEnd   = endDate   ? new Date(endDate)   : null;
+    if (rangeEnd) rangeEnd.setDate(rangeEnd.getDate() + 1); // make end inclusive
 
     var totalMin = 0;
     for (var ri = 1; ri < rows.length; ri++) {
       var row     = rows[ri];
       var rowCode = String(row[billingCol] || '').trim();
-      if (rowCode === billingCode) {
-        totalMin += parseFloat(row[durationCol]) || 0;
+      if (rowCode !== billingCode) continue;
+
+      // Date range filter (only applied if startDate or endDate provided)
+      if (rangeStart || rangeEnd) {
+        var rowDateStr = '';
+        if (dateISOCol >= 0) {
+          rowDateStr = toDateISO(row[dateISOCol]);
+        }
+        if (!rowDateStr && dateCol >= 0) {
+          rowDateStr = toDateISO(row[dateCol]);
+        }
+        if (rowDateStr) {
+          var rowDate = new Date(rowDateStr);
+          if (rangeStart && rowDate < rangeStart) continue;
+          if (rangeEnd   && rowDate >= rangeEnd)  continue;
+        }
       }
+
+      totalMin += parseFloat(row[durationCol]) || 0;
     }
     return totalMin / 60;
   } catch (e) {
