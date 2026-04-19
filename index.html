@@ -2721,20 +2721,22 @@ function resetInactivityTimer() {
   document.getElementById('inactivity-warning').classList.remove('show');
   clearTimeout(_inactWarnTimer);
   clearTimeout(_inactTimer);
-  _inactWarnTimer = setTimeout(() => {
+  _inactWarnTimer = setTimeout(function() {
     document.getElementById('inactivity-warning').classList.add('show');
   }, INACTIVITY_WARN_MS);
-  _inactTimer = setTimeout(() => logoutUser('inactivity'), INACTIVITY_MS);
+  _inactTimer = setTimeout(function() { logoutUser('inactivity'); }, INACTIVITY_MS);
 }
 
 function startInactivityTimer() {
-  _ACT_EVENTS.forEach(ev => document.addEventListener(ev, resetInactivityTimer, { passive: true }));
+  // Always stop first to prevent duplicate listeners if called more than once
+  stopInactivityTimer();
+  _ACT_EVENTS.forEach(function(ev) { document.addEventListener(ev, resetInactivityTimer, { passive: true }); });
   resetInactivityTimer();
 }
 
 function stopInactivityTimer() {
   clearTimeout(_inactWarnTimer); clearTimeout(_inactTimer);
-  _ACT_EVENTS.forEach(ev => document.removeEventListener(ev, resetInactivityTimer));
+  _ACT_EVENTS.forEach(function(ev) { document.removeEventListener(ev, resetInactivityTimer); });
   document.getElementById('inactivity-warning').classList.remove('show');
 }
 
@@ -2848,7 +2850,7 @@ async function confirmReauth() {
   if (ok) {
     _reauthFailCount = 0;
     document.getElementById('reauth-overlay').classList.remove('show');
-    resetInactivityTimer();
+    startInactivityTimer();  // re-adds event listeners removed by stopInactivityTimer in showReauthOverlay
     logAuditEvent('reauth_success', AUTH.user ? AUTH.user.email : '', '', '');
   } else {
     _reauthFailCount++;
@@ -3000,12 +3002,13 @@ function saveSessionForReauth() {
       timeInDateISO:       S.timeInDate ? S.timeInDate.toISOString() : null,
       appStartTime:        S.appStartTime || '',
       actualStartTime:     S.actualStartTime || '',
-      lateStartReason:     S.lateStartReason || '',
-      sessStartTs:         S.sessStartTs || 0,
-      clientId:            S.client.id || '',
-      therapistId:         S.therapist ? (S.therapist.id || '') : '',
-      abcIdSeq:            abcIdSeq,
-      isReauth:            true
+      lateStartReason:      S.lateStartReason || '',
+      sessStartTs:          S.sessStartTs || 0,
+      supervisionOccurred:  S.supervisionOccurred || false,
+      clientId:             S.client.id || '',
+      therapistId:          S.therapist ? (S.therapist.id || '') : '',
+      abcIdSeq:             abcIdSeq,
+      isReauth:             true
     };
     sessionStorage.setItem('pendingReauth', JSON.stringify(snap));
   } catch(e) {
@@ -3260,7 +3263,8 @@ function restoreSessionAfterReauth() {
     S.client      = client;
     S.therapist   = therapist || S.therapist;
     S.behaviors   = snap.behaviors || {};
-    S.trials      = snap.trials    || {};
+    // Save the trial snapshot BEFORE calling buildTrials(), which resets S.trials to empty arrays
+    var restoredTrials = snap.trials || {};
     S.abc         = snap.abc       || [];
     S.notes       = snap.notes     || '';
     S.sessType    = snap.sessType  || null;
@@ -3268,17 +3272,18 @@ function restoreSessionAfterReauth() {
     S.dateStr     = snap.dateStr   || null;
     S.timeIn      = snap.timeIn    || null;
     S.timeInDate  = snap.timeInDateISO ? new Date(snap.timeInDateISO) : new Date();
-    S.appStartTime    = snap.appStartTime    || null;
-    S.actualStartTime = snap.actualStartTime || null;
-    S.lateStartReason = snap.lateStartReason || '';
+    S.appStartTime       = snap.appStartTime    || null;
+    S.actualStartTime    = snap.actualStartTime || null;
+    S.lateStartReason    = snap.lateStartReason || '';
+    S.supervisionOccurred = snap.supervisionOccurred || false;
     S.sessStartTs = snap.sessStartTs || Date.now();
     abcIdSeq = snap.abcIdSeq || 0;
 
     // Restore tantrum counts (no running timer after redirect)
     S.tantrum = {
-      count: snap.tantrum ? (snap.tantrum.count || 0) : 0,
+      count:    snap.tantrum ? (snap.tantrum.count    || 0) : 0,
       totalSec: snap.tantrum ? (snap.tantrum.totalSec || 0) : 0,
-      curSec: snap.tantrum ? (snap.tantrum.curSec || 0) : 0,
+      curSec:   snap.tantrum ? (snap.tantrum.curSec   || 0) : 0,
       running: false, interval: null, startTs: null
     };
 
@@ -3290,21 +3295,25 @@ function restoreSessionAfterReauth() {
     document.getElementById('bar-therapist').textContent = S.therapist ? S.therapist.name : '';
 
     buildBehaviorGrid();
-    // Restore behavior counts
+    // Restore behavior counts into the freshly-built grid
     var bKeys = Object.keys(S.behaviors);
     for (var bi = 0; bi < bKeys.length; bi++) {
       var bEl = document.getElementById('cnt-' + bKeys[bi]);
       if (bEl) bEl.textContent = S.behaviors[bKeys[bi]] || 0;
     }
 
+    // buildTrials() resets S.trials to empty arrays — restore the snapshot AFTER the call
     buildTrials();
-    // Restore trial states
-    var gKeys = Object.keys(S.trials);
+    S.trials = restoredTrials;
+
+    // Restore trial ✓/✗ marks and recalculate percentages
+    var gKeys = Object.keys(restoredTrials);
     for (var gi = 0; gi < gKeys.length; gi++) {
-      var gcode = gKeys[gi];
-      var trials = S.trials[gcode];
+      var gcode  = gKeys[gi];
+      var trials = restoredTrials[gcode];
+      if (!trials) continue;
       for (var tidx = 0; tidx < trials.length; tidx++) {
-        var val = trials[tidx];
+        var val  = trials[tidx];
         var cBtn = document.getElementById('tr-' + gcode + '-' + tidx + '-c');
         var xBtn = document.getElementById('tr-' + gcode + '-' + tidx + '-x');
         if (cBtn) cBtn.classList.toggle('correct',   val === true);
@@ -3312,6 +3321,10 @@ function restoreSessionAfterReauth() {
       }
       calcPct(gcode);
     }
+
+    // Restore notes textarea content
+    var notesEl = document.getElementById('session-notes');
+    if (notesEl) { notesEl.value = S.notes; updateWordCount(); }
 
     renderABCList();
     switchTab('behaviors');
