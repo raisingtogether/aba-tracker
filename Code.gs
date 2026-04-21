@@ -63,6 +63,10 @@ function doPost(e) {
       var usageResult = checkGoalUsage(data.goalCode, data.clients);
       result = { success: true, used: usageResult.used, sessionCount: usageResult.sessionCount, clients: usageResult.clients };
 
+    } else if (data.action === 'cleanDuplicateMasteries') {
+      var cleanResult = cleanDuplicateMasteries(data.clients);
+      result = { success: true, removed: cleanResult.removed, details: cleanResult.details };
+
     } else {
       processSession(data);
       result = { success: true };
@@ -913,7 +917,7 @@ function checkGoalMastery(ss, clientId, clientName, therapistName, therapistEmai
     result.goals[code] = allMastered;
     if (allMastered) {
       // Check if this mastery is already recorded in Mastery Log
-      if (!isMasteryLogged(ss, 'goal', code, today)) {
+      if (!isMasteryLogged(ss, 'goal', code)) {
         var scoresStr = scores.join(', ') + '%';
         writeMasteryLog(ss, 'goal', code, '', today, scoresStr, therapistName, therapistEmail, clientName, clientId);
         result.newMasteries.push({ type: 'goal', code: code, description: '', masteryDate: today, lastScores: scoresStr });
@@ -958,7 +962,7 @@ function checkBehaviorMastery(ss, clientId, clientName, therapistName, therapist
     }
     result.behaviors[key] = allMastered;
     if (allMastered) {
-      if (!isMasteryLogged(ss, 'behavior', key, today)) {
+      if (!isMasteryLogged(ss, 'behavior', key)) {
         var scoresStr = scores.join(', ');
         writeMasteryLog(ss, 'behavior', key, label, today, scoresStr, therapistName, therapistEmail, clientName, clientId);
         result.newMasteries.push({ type: 'behavior', code: key, description: label, masteryDate: today, lastScores: scoresStr });
@@ -980,25 +984,25 @@ function toDateISO(val) {
   return String(val).trim();
 }
 
-function isMasteryLogged(ss, type, code, dateISO) {
+// Checks if a mastery entry already exists for this type+code in this client's sheet.
+// Intentionally does NOT filter by date — once mastered, never log again.
+function isMasteryLogged(ss, type, code) {
   var sheet = ss.getSheetByName('Mastery Log');
   if (!sheet) return false;
   var data = sheet.getDataRange().getValues();
   if (data.length < 2) return false;
   var headers = data[0];
-  var typeCol = -1, codeCol = -1, dateCol = -1;
+  var typeCol = -1, codeCol = -1;
   for (var hi = 0; hi < headers.length; hi++) {
     var h = String(headers[hi]).trim();
-    if (h === 'type')     typeCol = hi;
-    if (h === 'code')     codeCol = hi;
-    if (h === 'dateISO')  dateCol = hi;
+    if (h === 'type') typeCol = hi;
+    if (h === 'code') codeCol = hi;
   }
-  if (typeCol < 0 || codeCol < 0 || dateCol < 0) return false;
+  if (typeCol < 0 || codeCol < 0) return false;
   for (var ri = 1; ri < data.length; ri++) {
     var row = data[ri];
     if (String(row[typeCol]).trim() === type &&
-        String(row[codeCol]).trim() === code &&
-        toDateISO(row[dateCol]) === dateISO) {
+        String(row[codeCol]).trim() === code) {
       return true;
     }
   }
@@ -1029,6 +1033,7 @@ function writeMasteryLog(ss, type, code, description, masteryDate, lastScores, t
 function getMasteryReport(year, month, clients) {
   if (!clients || !clients.length) return [];
   var entries = [];
+  var seen    = {};  // dedup key: clientId|type|code
   var monthStr = String(month).length < 2 ? ('0' + month) : String(month);
   var prefix   = year + '-' + monthStr;
 
@@ -1051,6 +1056,13 @@ function getMasteryReport(year, month, clients) {
 
       for (var ri = 1; ri < data.length; ri++) {
         var row = data[ri];
+        var entryType = String(row[colMap['type']] || '').trim();
+        var entryCode = String(row[colMap['code']] || '').trim();
+
+        // Deduplicate: skip if we already have an entry for this client+type+code
+        var dedupKey = (client.id || '') + '|' + entryType + '|' + entryCode;
+        if (seen[dedupKey]) continue;
+
         // Normalize dateISO — Google Sheets may store ISO strings as Date objects
         var dateISO = toDateISO(colMap['dateISO'] !== undefined ? row[colMap['dateISO']] : '');
         // Fall back to masteryDate column if dateISO is missing
@@ -1059,11 +1071,13 @@ function getMasteryReport(year, month, clients) {
         }
         if (!dateISO || dateISO.indexOf(prefix) !== 0) continue;
         var masteryDateVal = colMap['masteryDate'] !== undefined ? toDateISO(row[colMap['masteryDate']]) : dateISO;
+
+        seen[dedupKey] = true;
         entries.push({
           clientId:      client.id || '',
           clientName:    client.name || '',
-          type:          String(row[colMap['type']]          || '').trim(),
-          code:          String(row[colMap['code']]          || '').trim(),
+          type:          entryType,
+          code:          entryCode,
           description:   String(row[colMap['description']]   || '').trim(),
           masteryDate:   masteryDateVal,
           lastScores:    String(row[colMap['lastScores']]    || '').trim(),
@@ -1076,6 +1090,71 @@ function getMasteryReport(year, month, clients) {
     }
   }
   return entries;
+}
+
+
+// ── MASTERY DUPLICATE CLEANUP ───────────────────────────────────────────
+
+/**
+ * One-time cleanup: remove duplicate Mastery Log entries across all client sheets.
+ * For each client, groups rows by (type + code). Keeps the FIRST occurrence
+ * (lowest row index = earliest logged). Deletes all later duplicates.
+ * clients: [{ id, name, sheetId }]
+ * Returns { removed: <total count>, details: [{ clientName, removed }] }
+ */
+function cleanDuplicateMasteries(clients) {
+  var totalRemoved = 0;
+  var details = [];
+  if (!clients || !clients.length) return { removed: 0, details: [] };
+
+  for (var ci = 0; ci < clients.length; ci++) {
+    var client = clients[ci];
+    if (!client.sheetId) continue;
+    try {
+      var ss    = SpreadsheetApp.openById(client.sheetId);
+      var sheet = ss.getSheetByName('Mastery Log');
+      if (!sheet) continue;
+      var data = sheet.getDataRange().getValues();
+      if (data.length < 2) continue;
+
+      var headers = data[0];
+      var typeCol = -1, codeCol = -1;
+      for (var hi = 0; hi < headers.length; hi++) {
+        var h = String(headers[hi]).trim();
+        if (h === 'type') typeCol = hi;
+        if (h === 'code') codeCol = hi;
+      }
+      if (typeCol < 0 || codeCol < 0) continue;
+
+      // Identify which rows (1-based sheet row) are duplicates
+      var seen = {};
+      var rowsToDelete = []; // 1-based sheet row indices, collected in order
+      for (var ri = 1; ri < data.length; ri++) {
+        var row  = data[ri];
+        var key  = String(row[typeCol] || '').trim() + '|' + String(row[codeCol] || '').trim();
+        if (!key || key === '|') continue; // skip blank rows
+        if (seen[key]) {
+          rowsToDelete.push(ri + 1); // +1 because sheet rows are 1-based
+        } else {
+          seen[key] = true;
+        }
+      }
+
+      // Delete from bottom to top so row indices stay valid
+      for (var di = rowsToDelete.length - 1; di >= 0; di--) {
+        sheet.deleteRow(rowsToDelete[di]);
+      }
+
+      var removed = rowsToDelete.length;
+      totalRemoved += removed;
+      if (removed > 0) {
+        details.push({ clientName: client.name || client.id, removed: removed });
+      }
+    } catch(e) {
+      // Skip inaccessible sheets; don't abort the whole cleanup
+    }
+  }
+  return { removed: totalRemoved, details: details };
 }
 
 
