@@ -1336,6 +1336,14 @@ async function init() {
     await handleGoogleOAuthReturn();
     return;
   }
+  // In standalone PWA: check for cached Google token from a prior browser sign-in
+  if (isStandalonePWA()) {
+    var cachedToken = getAuthTokenCache();
+    if (cachedToken) {
+      await handleGoogleOAuthReturn(cachedToken);
+      return;
+    }
+  }
   // Now show privacy or login
   if (!localStorage.getItem('privacyAccepted')) {
     goTo('privacy');
@@ -2786,8 +2794,8 @@ function toast(msg, type) {
 
 // ── CONSTANTS ────────────────────────────────────────────────────────
 const GOOGLE_CLIENT_ID     = '145308926221-3kvhum1t0goo9s97kbtrqo98nq4vn09s.apps.googleusercontent.com';
-const INACTIVITY_MS        = 30 * 60 * 1000;  // 30 min
-const INACTIVITY_WARN_MS   = 27 * 60 * 1000;  // 27 min warn
+const INACTIVITY_MS        = 60 * 60 * 1000;  // 60 min
+const INACTIVITY_WARN_MS   = 57 * 60 * 1000;  // 57 min warn
 const BACKGROUND_REAUTH_MS =  5 * 60 * 1000;  //  5 min background
 const MAX_LOGIN_ATTEMPTS   = 5;
 const LOCKOUT_MS           = 30 * 60 * 1000;
@@ -2796,6 +2804,34 @@ const DEFAULT_WEEKLY_LIMIT = 30;
 
 // ── AUTH STATE ───────────────────────────────────────────────────────
 let AUTH = { user: null, tier: null }; // tier: 1=admin/BCBA, 2=RBT
+
+// ── PWA STANDALONE HELPERS ───────────────────────────────────────────
+function isStandalonePWA() {
+  return !!(window.navigator.standalone ||
+    (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches));
+}
+
+function saveAuthTokenCache(token) {
+  try {
+    localStorage.setItem('googleAuthCache', JSON.stringify({
+      token: token,
+      expiry: Date.now() + 24 * 60 * 60 * 1000  // 24-hour max
+    }));
+  } catch(e) {}
+}
+
+function getAuthTokenCache() {
+  try {
+    var raw = localStorage.getItem('googleAuthCache');
+    if (!raw) return null;
+    var obj = JSON.parse(raw);
+    if (!obj || !obj.token || Date.now() > obj.expiry) {
+      localStorage.removeItem('googleAuthCache');
+      return null;
+    }
+    return obj.token;
+  } catch(e) { return null; }
+}
 
 // ── INACTIVITY TIMER ─────────────────────────────────────────────────
 let _inactWarnTimer = null, _inactTimer = null;
@@ -2965,7 +3001,7 @@ function logoutUser(reason) {
   S.therapist = null; S.client = null;
   CFG.THERAPISTS = []; CFG.CLIENTS = []; CFG.BEHAVIORS = [];
   // Remove PHI from localStorage (keep adminPin, privacyAccepted)
-  const keepKeys = ['adminPin', 'privacyAccepted', 'auditLog'];
+  const keepKeys = ['adminPin', 'privacyAccepted', 'auditLog', 'googleAuthCache'];
   Object.keys(localStorage).forEach(k => {
     if (!keepKeys.includes(k) && !k.startsWith('loginAttempts_')) {
       localStorage.removeItem(k);
@@ -3109,28 +3145,38 @@ function startGoogleSignIn() {
   if (GOOGLE_CLIENT_ID === 'YOUR_GOOGLE_CLIENT_ID_HERE') {
     toast('Google Sign-In not configured', 'err'); return;
   }
-  const redirectUri = window.location.origin + window.location.pathname;
-  const url = 'https://accounts.google.com/o/oauth2/v2/auth' +
+  var redirectUri = window.location.origin + window.location.pathname;
+  var url = 'https://accounts.google.com/o/oauth2/v2/auth' +
     '?client_id='     + encodeURIComponent(GOOGLE_CLIENT_ID) +
     '&redirect_uri='  + encodeURIComponent(redirectUri) +
     '&response_type=token' +
     '&scope='         + encodeURIComponent('email profile') +
     '&prompt=select_account';
-  window.location.href = url;
+  if (isStandalonePWA()) {
+    // In standalone (home screen) mode, OAuth redirects break the PWA context.
+    // Open in a regular browser tab instead. After sign-in, the browser tab
+    // writes the token to localStorage; user returns to the app and it auto-signs in.
+    window.open(url, '_blank');
+    toast('Sign in the browser window, then return here', 'info');
+  } else {
+    window.location.href = url;
+  }
 }
 
-async function handleGoogleOAuthReturn() {
-  // Parse ALL hash params with URLSearchParams (handles any order, encoded values)
-  const hash = window.location.hash;
-  if (!hash) return;
-  const params = new URLSearchParams(hash.replace(/^#/, ''));
-  const token  = params.get('access_token');
-  console.log('[Auth] URL hash keys:', Array.from(params.keys()));
-  console.log('[Auth] access_token present:', !!token);
-  if (!token) return;
-
-  // Clean token from address bar immediately
-  history.replaceState(null, '', window.location.pathname);
+async function handleGoogleOAuthReturn(preToken) {
+  var token = preToken || null;
+  if (!token) {
+    // Parse ALL hash params with URLSearchParams (handles any order, encoded values)
+    const hash = window.location.hash;
+    if (!hash) return;
+    const params = new URLSearchParams(hash.replace(/^#/, ''));
+    token = params.get('access_token');
+    console.log('[Auth] URL hash keys:', Array.from(params.keys()));
+    console.log('[Auth] access_token present:', !!token);
+    if (!token) return;
+    // Clean token from address bar immediately
+    history.replaceState(null, '', window.location.pathname);
+  }
 
   // Show loading indicator
   goTo('loading');
@@ -3140,12 +3186,21 @@ async function handleGoogleOAuthReturn() {
     const resp = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
       headers: { 'Authorization': 'Bearer ' + token }
     });
-    if (!resp.ok) { toast('Sign-in failed: could not verify token', 'err'); goTo('login'); return; }
+    if (!resp.ok) {
+      localStorage.removeItem('googleAuthCache');
+      toast('Sign-in failed: could not verify token', 'err'); goTo('login'); return;
+    }
     const info  = await resp.json();
     const email = String(info.email || '').toLowerCase();
     const name  = info.name || email;
 
-    if (!email) { toast('Sign-in failed: no email returned', 'err'); goTo('login'); return; }
+    if (!email) {
+      localStorage.removeItem('googleAuthCache');
+      toast('Sign-in failed: no email returned', 'err'); goTo('login'); return;
+    }
+
+    // Cache the valid token so PWA standalone can silently re-auth on next open
+    saveAuthTokenCache(token);
 
     const raw = RAW_CONFIG || DEFAULT_CONFIG;
 
@@ -3218,10 +3273,12 @@ async function handleGoogleOAuthReturn() {
       return;
     }
 
+    localStorage.removeItem('googleAuthCache');
     toast('Access denied \u2014 not in user list', 'err');
     logAuditEvent('failed_login', email, '', 'Email not in user list');
     goTo('login');
   } catch(e) {
+    localStorage.removeItem('googleAuthCache');
     toast('Sign-in failed: ' + e.message, 'err');
     goTo('login');
   }
@@ -4277,6 +4334,16 @@ async function verifyTOTPSetup() {
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js').catch(()=>{}); });
 }
+
+// ─── PWA STANDALONE: CHECK CACHED TOKEN ON RETURN ─────────────────────
+// When user signs in via browser tab (opened from standalone PWA), they
+// return to the PWA and this fires — picks up the cached token automatically.
+document.addEventListener('visibilitychange', function() {
+  if (document.visibilityState === 'visible' && isStandalonePWA() && !AUTH.user) {
+    var tok = getAuthTokenCache();
+    if (tok) { handleGoogleOAuthReturn(tok); }
+  }
+});
 
 
 // ─── START ────────────────────────────────────────────────────────────
