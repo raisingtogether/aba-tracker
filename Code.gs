@@ -67,6 +67,11 @@ function doPost(e) {
       var cleanResult = cleanDuplicateMasteries(data.clients);
       result = { success: true, removed: cleanResult.removed, details: cleanResult.details };
 
+    } else if (data.action === 'migrateHistoricalData') {
+      var migResult = migrateHistoricalData(data.dryRun !== false);
+      result = { success: true, dryRun: migResult.dryRun, summary: migResult.summary,
+        checked: migResult.checked, fixed: migResult.fixed };
+
     } else {
       processSession(data);
       result = { success: true };
@@ -557,6 +562,7 @@ function writeBehaviorData(ss, d) {
   if (colMap['submittedAt']    !== undefined) { row[colMap['submittedAt']]    = d.submittedAt    || new Date().toISOString(); }
   if (colMap['dateISO']        !== undefined) { row[colMap['dateISO']]        = d.dateISO        || ''; }
 
+  validateRowAlignment('Behavior Data', actualHeaders, row);
   sheet.appendRow(row);
 }
 
@@ -580,45 +586,52 @@ function writeSessionLog(ss, d) {
     'clientName', 'clientId', 'therapistEmail',
     'isDraft', 'payloadHash', 'submittedAt', 'dateISO'
   ];
-  // New end-time adjustment columns — appended at END only
   var adjustHeaders = ['Adjusted End Time', 'End Time Adjustment Reason'];
-  // Manual entry tracking columns — appended at END
   var manualHeaders = ['manualEntry', 'enteredBy'];
   var allHeaders = baseHeaders.concat(analyticsHeaders, adjustHeaders, manualHeaders);
 
   var sheet = getOrCreateSheet(ss, 'Time In Time Out', allHeaders);
   ensureSheetColumns(sheet, allHeaders);
 
-  sheet.appendRow([
-    // Base columns (unchanged)
-    d.date,
-    d.billingCode         || '',
-    d.sessionType         || '',
-    d.timeIn              || '',
-    d.timeOut             || '',
-    d.durationMin         || 0,
-    d.location            || '',
-    d.therapist           || '',
-    d.appStartTime        || '',
-    d.actualStartTime     || '',
-    d.lateStartReason     || '',
-    d.submissionId        || '',
-    d.notes               || '',
-    // Analytics columns
-    d.clientName          || '',
-    d.clientId            || '',
-    d.therapistEmail      || d.submittedBy || '',
-    d.isDraft ? true : false,
-    d.payloadHash         || '',
-    d.submittedAt         || new Date().toISOString(),
-    d.dateISO             || '',
-    // End-time adjustment columns (new — at end)
-    d.adjustedEndTime           || '',
-    d.endTimeAdjustmentReason   || '',
-    // Manual entry tracking (new — at end)
-    d.manualEntry ? true : false,
-    d.enteredBy                 || ''
-  ]);
+  // Read ACTUAL header row — source of truth for column positions
+  var lastCol = sheet.getLastColumn();
+  var actualHeaders = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  var colMap = {};
+  for (var hi = 0; hi < actualHeaders.length; hi++) {
+    var h = String(actualHeaders[hi]).trim();
+    if (h && colMap[h] === undefined) colMap[h] = hi;
+  }
+
+  var row = [];
+  for (var ri = 0; ri < lastCol; ri++) row.push('');
+
+  if (colMap['Date']               !== undefined) row[colMap['Date']]               = d.date;
+  if (colMap['Billing Code']       !== undefined) row[colMap['Billing Code']]       = d.billingCode    || '';
+  if (colMap['Type of Session']    !== undefined) row[colMap['Type of Session']]    = d.sessionType    || '';
+  if (colMap['Time In']            !== undefined) row[colMap['Time In']]            = d.timeIn         || '';
+  if (colMap['Time Out']           !== undefined) row[colMap['Time Out']]           = d.timeOut        || '';
+  if (colMap['Duration (min)']     !== undefined) row[colMap['Duration (min)']]     = d.durationMin    || 0;
+  if (colMap['Location']           !== undefined) row[colMap['Location']]           = d.location       || '';
+  if (colMap['Therapist']          !== undefined) row[colMap['Therapist']]          = d.therapist      || '';
+  if (colMap['App Start Time']     !== undefined) row[colMap['App Start Time']]     = d.appStartTime   || '';
+  if (colMap['Actual Start Time']  !== undefined) row[colMap['Actual Start Time']]  = d.actualStartTime || '';
+  if (colMap['Late Start Reason']  !== undefined) row[colMap['Late Start Reason']]  = d.lateStartReason || '';
+  if (colMap['Submission ID']      !== undefined) row[colMap['Submission ID']]      = d.submissionId   || '';
+  if (colMap['Notes']              !== undefined) row[colMap['Notes']]              = d.notes          || '';
+  if (colMap['clientName']         !== undefined) row[colMap['clientName']]         = d.clientName     || '';
+  if (colMap['clientId']           !== undefined) row[colMap['clientId']]           = d.clientId       || '';
+  if (colMap['therapistEmail']     !== undefined) row[colMap['therapistEmail']]     = d.therapistEmail || d.submittedBy || '';
+  if (colMap['isDraft']            !== undefined) row[colMap['isDraft']]            = d.isDraft ? true : false;
+  if (colMap['payloadHash']        !== undefined) row[colMap['payloadHash']]        = d.payloadHash    || '';
+  if (colMap['submittedAt']        !== undefined) row[colMap['submittedAt']]        = d.submittedAt    || new Date().toISOString();
+  if (colMap['dateISO']            !== undefined) row[colMap['dateISO']]            = d.dateISO        || '';
+  if (colMap['Adjusted End Time']        !== undefined) row[colMap['Adjusted End Time']]        = d.adjustedEndTime          || '';
+  if (colMap['End Time Adjustment Reason'] !== undefined) row[colMap['End Time Adjustment Reason']] = d.endTimeAdjustmentReason || '';
+  if (colMap['manualEntry']        !== undefined) row[colMap['manualEntry']]        = d.manualEntry ? true : false;
+  if (colMap['enteredBy']          !== undefined) row[colMap['enteredBy']]          = d.enteredBy      || '';
+
+  validateRowAlignment('Time In Time Out', actualHeaders, row);
+  sheet.appendRow(row);
 }
 
 /**
@@ -721,6 +734,7 @@ function writeTrialData(ss, d) {
   if (colMap['dateISO']         !== undefined) { row[colMap['dateISO']]         = d.dateISO        || ''; }
   if (colMap['Percent Correct'] !== undefined) { row[colMap['Percent Correct']] = percentCorrectJSON; }
 
+  validateRowAlignment('Trial Data', actualHeaders, row);
   sheet.appendRow(row);
 }
 
@@ -750,31 +764,109 @@ function writeABCData(ss, d) {
   var sheet = getOrCreateSheet(ss, 'ABC Data', allHeaders);
   ensureSheetColumns(sheet, allHeaders);
 
+  // Read ACTUAL header row — source of truth for column positions
+  var lastCol = sheet.getLastColumn();
+  var actualHeaders = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  var colMap = {};
+  for (var hi = 0; hi < actualHeaders.length; hi++) {
+    var h = String(actualHeaders[hi]).trim();
+    if (h && colMap[h] === undefined) colMap[h] = hi;
+  }
+
   for (var i = 0; i < d.abcData.length; i++) {
     var inc = d.abcData[i];
-    sheet.appendRow([
-      // Base columns (unchanged)
-      d.date,
-      d.therapistInitials      || '',
-      inc.setting              || '',
-      inc.antecedent           || '',
-      inc.behavior             || '',
-      inc.consequence          || '',
-      inc.hypothesizedFunction || '',
-      // Analytics columns
-      inc.time                 || '',
-      d.submissionId           || '',
-      d.clientName             || '',
-      d.clientId               || '',
-      d.therapist              || '',
-      d.therapistEmail         || d.submittedBy || '',
-      d.sessionType            || '',
-      d.billingCode            || '',
-      d.isDraft ? true : false,
-      d.payloadHash            || '',
-      d.submittedAt            || new Date().toISOString(),
-      d.dateISO                || ''
-    ]);
+    var row = [];
+    for (var ri = 0; ri < lastCol; ri++) row.push('');
+
+    if (colMap['Date']                   !== undefined) row[colMap['Date']]                   = d.date;
+    if (colMap['Initials']               !== undefined) row[colMap['Initials']]               = d.therapistInitials      || '';
+    if (colMap['Setting']                !== undefined) row[colMap['Setting']]                = inc.setting              || '';
+    if (colMap['Antecedent']             !== undefined) row[colMap['Antecedent']]             = inc.antecedent           || '';
+    if (colMap['Behavior']               !== undefined) row[colMap['Behavior']]               = inc.behavior             || '';
+    if (colMap['Consequence']            !== undefined) row[colMap['Consequence']]            = inc.consequence          || '';
+    if (colMap['Hypothesized Function']  !== undefined) row[colMap['Hypothesized Function']]  = inc.hypothesizedFunction || '';
+    if (colMap['Time']                   !== undefined) row[colMap['Time']]                   = inc.time                 || '';
+    if (colMap['submissionId']           !== undefined) row[colMap['submissionId']]           = d.submissionId           || '';
+    if (colMap['clientName']             !== undefined) row[colMap['clientName']]             = d.clientName             || '';
+    if (colMap['clientId']              !== undefined) row[colMap['clientId']]               = d.clientId               || '';
+    if (colMap['therapistName']          !== undefined) row[colMap['therapistName']]          = d.therapist              || '';
+    if (colMap['therapistEmail']         !== undefined) row[colMap['therapistEmail']]         = d.therapistEmail || d.submittedBy || '';
+    if (colMap['sessionType']            !== undefined) row[colMap['sessionType']]            = d.sessionType            || '';
+    if (colMap['billingCode']            !== undefined) row[colMap['billingCode']]            = d.billingCode            || '';
+    if (colMap['isDraft']                !== undefined) row[colMap['isDraft']]                = d.isDraft ? true : false;
+    if (colMap['payloadHash']            !== undefined) row[colMap['payloadHash']]            = d.payloadHash            || '';
+    if (colMap['submittedAt']            !== undefined) row[colMap['submittedAt']]            = d.submittedAt            || new Date().toISOString();
+    if (colMap['dateISO']                !== undefined) row[colMap['dateISO']]                = d.dateISO                || '';
+
+    validateRowAlignment('ABC Data', actualHeaders, row);
+    sheet.appendRow(row);
+  }
+}
+
+
+// ── ROW ALIGNMENT VALIDATION ──────────────────────────────────────────
+
+/**
+ * Permanent safety net — called before every sheet.appendRow().
+ * Checks that:
+ *   1. row.length === headers.length (no truncation or overflow)
+ *   2. Every known analytics column carries the expected value type
+ *      (submissionId must look like a UUID or be empty; never a plain number)
+ *   3. No UUID-format value lands outside the submissionId column
+ *
+ * Writes a warning to the Audit Log on any violation — does NOT throw,
+ * so a validation failure never blocks a session submission.
+ * Returns true if aligned, false if a problem was detected.
+ */
+function validateRowAlignment(tabName, headers, row) {
+  try {
+    var ok = true;
+    var warnings = [];
+
+    // Build colMap for this validation pass
+    var colMap = {};
+    for (var hi = 0; hi < headers.length; hi++) {
+      var h = String(headers[hi]).trim();
+      if (h && colMap[h] === undefined) colMap[h] = hi;
+    }
+
+    // Check 1: row length matches header length
+    if (row.length !== headers.length) {
+      warnings.push('row length ' + row.length + ' != header length ' + headers.length);
+      ok = false;
+    }
+
+    // Check 2: submissionId column must hold a UUID or be empty — not a plain number
+    var sidCol = colMap['submissionId'];
+    if (sidCol !== undefined && sidCol < row.length) {
+      var sidVal = String(row[sidCol] || '').trim();
+      if (sidVal !== '' && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sidVal)) {
+        warnings.push('submissionId col has non-UUID value: ' + sidVal.substring(0, 30));
+        ok = false;
+      }
+    }
+
+    // Check 3: no UUID-format value in a column other than submissionId
+    for (var ri = 0; ri < row.length; ri++) {
+      if (ri === sidCol) continue;
+      var cellVal = String(row[ri] || '').trim();
+      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cellVal)) {
+        var hdr = ri < headers.length ? String(headers[ri]) : 'col' + ri;
+        warnings.push('UUID found in wrong column "' + hdr + '" (col ' + ri + ')');
+        ok = false;
+      }
+    }
+
+    if (!ok) {
+      var msg = '[validateRowAlignment] ' + tabName + ': ' + warnings.join('; ');
+      Logger.log('WARNING: ' + msg);
+      writeAuditLog(new Date().toISOString(), 'system', 'alignment_warning', '', msg);
+    }
+    return ok;
+  } catch (e) {
+    // Validation errors must never disrupt session submission
+    Logger.log('[validateRowAlignment] error: ' + e.message);
+    return true;
   }
 }
 
@@ -1207,6 +1299,358 @@ function cleanDuplicateMasteries(clients) {
     }
   }
   return { removed: totalRemoved, details: details };
+}
+
+
+// ── HISTORICAL DATA MIGRATION ───────────────────────────────────────────
+
+/**
+ * migrateHistoricalData(dryRun)
+ *
+ * One-time fix for column misalignment in all client data sheets.
+ * Misalignment occurred when new behaviors/goals were added after analytics
+ * columns already existed: ensureSheetColumns appended new columns at the far
+ * right, but the row-build code used a fixed allHeaders order (data before
+ * analytics), causing values to land in wrong column positions.
+ *
+ * dryRun=true (default): log what would change, write nothing.
+ * dryRun=false: create backups, apply corrections, log to Audit Log.
+ *
+ * Run from Apps Script editor:
+ *   migrateHistoricalData(true);   // dry run
+ *   migrateHistoricalData(false);  // live
+ */
+function migrateHistoricalData(dryRun) {
+  var isDryRun = (dryRun !== false); // default true — safe by default
+  var ts = new Date().toISOString();
+  var logLines = [];
+  var totalChecked = 0;
+  var totalFixed   = 0;
+
+  function log(msg) {
+    Logger.log(msg);
+    logLines.push(msg);
+  }
+
+  log('=== migrateHistoricalData ' + (isDryRun ? '[DRY RUN]' : '[LIVE]') +
+      ' started ' + ts + ' ===');
+
+  var adminSS = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var clients  = sheetToObjects(adminSS, 'Clients');
+  log('Clients found: ' + clients.length);
+
+  var tabNames = ['Behavior Data', 'Trial Data', 'ABC Data', 'Time In Time Out'];
+
+  for (var ci = 0; ci < clients.length; ci++) {
+    var client = clients[ci];
+    if (!client.sheetId || String(client.status || 'active') === 'inactive') {
+      log('SKIP ' + (client.name || client.id) + ': no sheetId or inactive');
+      continue;
+    }
+    log('--- ' + client.name + ' ---');
+    var ss;
+    try {
+      ss = SpreadsheetApp.openById(client.sheetId);
+    } catch (e) {
+      log('  ERROR opening sheet: ' + e.message);
+      continue;
+    }
+    for (var ti = 0; ti < tabNames.length; ti++) {
+      var r = _mig_processTab(ss, client.name, tabNames[ti], isDryRun, log);
+      totalChecked += r.checked;
+      totalFixed   += r.fixed;
+    }
+  }
+
+  var summary = (isDryRun ? '[DRY RUN] ' : '') +
+    'checked=' + totalChecked + ' fixed=' + totalFixed;
+  log('=== DONE: ' + summary + ' ===');
+
+  if (!isDryRun) {
+    writeAuditLog(ts, 'system', 'data_migration', '', summary);
+  }
+  return { dryRun: isDryRun, summary: summary, checked: totalChecked, fixed: totalFixed };
+}
+
+
+function _mig_processTab(ss, clientName, tabName, isDryRun, log) {
+  var result = { checked: 0, fixed: 0 };
+  var sheet = ss.getSheetByName(tabName);
+  if (!sheet) { log('  ' + tabName + ': not found'); return result; }
+
+  var allData = sheet.getDataRange().getValues();
+  if (allData.length < 2) { log('  ' + tabName + ': no data rows'); return result; }
+
+  var headers = allData[0];
+  var colMap  = _mig_buildColMap(headers);
+
+  var corrections = []; // [{ sheetRow, oldRow, newRow }]
+
+  for (var ri = 1; ri < allData.length; ri++) {
+    var rowData = allData[ri];
+    // Skip blank rows
+    var blank = true;
+    for (var bi = 0; bi < rowData.length; bi++) {
+      if (rowData[bi] !== '' && rowData[bi] !== null && rowData[bi] !== undefined) {
+        blank = false; break;
+      }
+    }
+    if (blank) continue;
+    result.checked++;
+
+    var fixedRow = null;
+
+    if (tabName === 'Behavior Data') {
+      fixedRow = _mig_fixBehaviorRow(headers, colMap, rowData);
+    } else if (tabName === 'Trial Data') {
+      fixedRow = _mig_fixTrialRow(headers, colMap, rowData);
+    }
+
+    if (!fixedRow) {
+      // No alignment fix needed; try data quality fixes only
+      var copy    = rowData.slice(0);
+      var changed = _mig_fixDataQuality(colMap, copy);
+      if (changed) fixedRow = copy;
+    } else {
+      // Alignment fix applied; also run data quality fixes
+      _mig_fixDataQuality(colMap, fixedRow);
+    }
+
+    if (fixedRow) {
+      var sheetRow = ri + 1; // +1 because allData[0]=header=row1, allData[1]=row2
+      corrections.push({ sheetRow: sheetRow, oldRow: rowData, newRow: fixedRow });
+      result.fixed++;
+      log('  ' + tabName + ' row ' + sheetRow + ': ' +
+          _mig_diffSummary(headers, rowData, fixedRow));
+    }
+  }
+
+  if (!corrections.length) {
+    log('  ' + tabName + ': all ' + result.checked + ' rows OK');
+    return result;
+  }
+
+  log('  ' + tabName + ': ' + corrections.length + '/' + result.checked + ' rows need fixing');
+
+  if (isDryRun) {
+    log('  ' + tabName + ': [DRY RUN] — no changes written');
+    return result;
+  }
+
+  // Create backup before first write
+  _mig_backupTab(ss, tabName, log);
+
+  var numCols = headers.length;
+  for (var ki = 0; ki < corrections.length; ki++) {
+    var corr     = corrections[ki];
+    var writeRow = corr.newRow.slice(0, numCols);
+    while (writeRow.length < numCols) writeRow.push('');
+    sheet.getRange(corr.sheetRow, 1, 1, numCols).setValues([writeRow]);
+  }
+  log('  ' + tabName + ': wrote ' + corrections.length + ' corrections');
+  return result;
+}
+
+
+function _mig_backupTab(ss, tabName, log) {
+  try {
+    var sheet = ss.getSheetByName(tabName);
+    if (!sheet) return;
+    var backupName = tabName + ' BACKUP';
+    if (ss.getSheetByName(backupName)) {
+      log('  Backup already exists: ' + backupName + ' (kept existing)');
+      return;
+    }
+    var backup = sheet.copyTo(ss);
+    backup.setName(backupName);
+    log('  Created backup: ' + backupName);
+  } catch (e) {
+    log('  WARNING: backup failed for ' + tabName + ': ' + e.message);
+  }
+}
+
+
+function _mig_buildColMap(headers) {
+  var m = {};
+  for (var i = 0; i < headers.length; i++) {
+    var h = String(headers[i]).trim();
+    if (h && m[h] === undefined) m[h] = i;
+  }
+  return m;
+}
+
+
+function _mig_isUUID(val) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    .test(String(val || '').trim());
+}
+
+
+function _mig_findUUID(rowData) {
+  for (var i = 0; i < rowData.length; i++) {
+    if (_mig_isUUID(rowData[i])) return i;
+  }
+  return -1;
+}
+
+
+/**
+ * Fix Behavior Data row alignment.
+ *
+ * Sheet header structure (immutable existing cols):
+ *   [base(3)] [originalBehaviors(S-5)] [TantrumFreq(S-2)] [TantrumTotal(S-1)]
+ *   [analytics(S..S+9)] [newBehaviors appended after analytics]
+ *
+ * Misaligned row was written as allHeaders order:
+ *   [base] [allBehaviors(inc new)] [tantrum] [analytics]
+ *   ↑ new behaviors appear BEFORE tantrum, pushing tantrum+analytics right by shift positions
+ *
+ * S = colMap['submissionId'], P = position UUID was found in row data.
+ * shift = P - S = number of new behavior columns.
+ */
+function _mig_fixBehaviorRow(headers, colMap, rowData) {
+  var S = colMap['submissionId'];
+  if (S === undefined) return null;
+  var P = _mig_findUUID(rowData);
+  if (P < 0 || P === S || P < S) return null;
+
+  var shift         = P - S;
+  var analyticsCount = 10; // submissionId..dateISO
+
+  // Tantrum must be at S-2, S-1 (invariant of the schema)
+  if (colMap['Tantrum Frequency'] !== S - 2 ||
+      colMap['Tantrum Total (Min)'] !== S - 1) return null;
+
+  var totalCols = headers.length;
+  var newRow = [];
+  for (var i = 0; i < totalCols; i++) newRow.push('');
+
+  // Original behavior data (base + original behaviors): row[0..S-3] → same positions
+  for (var oi = 0; oi <= S - 3; oi++) {
+    if (oi < rowData.length) newRow[oi] = rowData[oi];
+  }
+
+  // Tantrum: was at row[P-2], row[P-1] → goes to col S-2, S-1
+  if (P - 2 < rowData.length) newRow[S - 2] = rowData[P - 2];
+  if (P - 1 < rowData.length) newRow[S - 1] = rowData[P - 1];
+
+  // Analytics block: row[P..P+9] → cols S..S+9
+  for (var ai = 0; ai < analyticsCount; ai++) {
+    if (P + ai < rowData.length && S + ai < totalCols) {
+      newRow[S + ai] = rowData[P + ai];
+    }
+  }
+
+  // New behavior values: row[S-2..P-3] (count=shift) → cols S+analyticsCount..S+analyticsCount+shift-1
+  for (var ni = 0; ni < shift; ni++) {
+    var srcIdx = (S - 2) + ni;
+    var dstIdx = S + analyticsCount + ni;
+    if (srcIdx < rowData.length && dstIdx < totalCols) {
+      newRow[dstIdx] = rowData[srcIdx];
+    }
+  }
+
+  return newRow;
+}
+
+
+/**
+ * Fix Trial Data row alignment.
+ *
+ * Sheet header structure:
+ *   [base(3)] [originalGoals] [analytics(S..S+10)] [newGoals appended after analytics]
+ *
+ * Misaligned row was written in allHeaders order:
+ *   [base] [allGoals(inc new)] [analytics]
+ *   ↑ new goal columns appear BEFORE analytics, pushing analytics right by shift positions
+ */
+function _mig_fixTrialRow(headers, colMap, rowData) {
+  var S = colMap['submissionId'];
+  if (S === undefined) return null;
+  var P = _mig_findUUID(rowData);
+  if (P < 0 || P === S || P < S) return null;
+
+  var shift         = P - S;
+  var analyticsCount = 11; // submissionId..Percent Correct
+
+  var totalCols = headers.length;
+  var newRow = [];
+  for (var i = 0; i < totalCols; i++) newRow.push('');
+
+  // Original goal data: row[0..S-1] → same sheet positions (correct)
+  for (var oi = 0; oi < S; oi++) {
+    if (oi < rowData.length) newRow[oi] = rowData[oi];
+  }
+
+  // Analytics block: row[P..P+10] → cols S..S+10
+  for (var ai = 0; ai < analyticsCount; ai++) {
+    if (P + ai < rowData.length && S + ai < totalCols) {
+      newRow[S + ai] = rowData[P + ai];
+    }
+  }
+
+  // New goal data: row[S..P-1] (count=shift) → cols S+analyticsCount..S+analyticsCount+shift-1
+  for (var ni = 0; ni < shift; ni++) {
+    var srcIdx = S + ni;
+    var dstIdx = S + analyticsCount + ni;
+    if (srcIdx < rowData.length && dstIdx < totalCols) {
+      newRow[dstIdx] = rowData[srcIdx];
+    }
+  }
+
+  // Carry any remaining orphaned values beyond analytics (extra appended data)
+  for (var ex = P + analyticsCount; ex < rowData.length; ex++) {
+    var exDst = S + analyticsCount + shift + (ex - (P + analyticsCount));
+    if (exDst < totalCols) newRow[exDst] = rowData[ex];
+  }
+
+  return newRow;
+}
+
+
+/**
+ * In-place data quality fixes. Returns true if any change was made.
+ * - isDraft: "FALSE"/"TRUE" string → boolean
+ * - dateISO: empty → derive from Date column value
+ */
+function _mig_fixDataQuality(colMap, row) {
+  var changed = false;
+
+  var isDraftCol = colMap['isDraft'];
+  if (isDraftCol !== undefined && isDraftCol < row.length) {
+    var dv = row[isDraftCol];
+    if (dv === 'FALSE' || dv === 'false') { row[isDraftCol] = false; changed = true; }
+    else if (dv === 'TRUE' || dv === 'true') { row[isDraftCol] = true; changed = true; }
+  }
+
+  var dateISOCol = colMap['dateISO'];
+  if (dateISOCol !== undefined && dateISOCol < row.length) {
+    var diso = String(row[dateISOCol] || '').trim();
+    if (!diso || diso === '0') {
+      var dateCol = (colMap['Date'] !== undefined) ? colMap['Date'] : colMap['date'];
+      if (dateCol !== undefined && dateCol < row.length && row[dateCol]) {
+        var derived = toDateISO(row[dateCol]);
+        if (derived) { row[dateISOCol] = derived; changed = true; }
+      }
+    }
+  }
+
+  return changed;
+}
+
+
+function _mig_diffSummary(headers, oldRow, newRow) {
+  var diffs = [];
+  var len = Math.max(oldRow.length, newRow.length);
+  for (var i = 0; i < len; i++) {
+    var ov = (i < oldRow.length) ? oldRow[i] : '';
+    var nv = (i < newRow.length) ? newRow[i] : '';
+    if (String(ov) !== String(nv)) {
+      var hdr = (i < headers.length) ? String(headers[i]) : 'col' + i;
+      diffs.push(hdr + ':[' + String(ov).substring(0, 20) + ']→[' + String(nv).substring(0, 20) + ']');
+    }
+  }
+  return diffs.length + ' changes: ' + diffs.slice(0, 4).join('; ') + (diffs.length > 4 ? '…' : '');
 }
 
 
