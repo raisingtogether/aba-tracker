@@ -517,23 +517,45 @@ function writeBehaviorData(ss, d) {
   var sheet = getOrCreateSheet(ss, 'Behavior Data', allHeaders);
   ensureSheetColumns(sheet, allHeaders);
 
-  var row = [d.date, d.therapist, d.location];
-  for (var i = 0; i < keys.length; i++) {
-    row.push(typeof bd[keys[i]] === 'number' ? bd[keys[i]] : (bd[keys[i]] || 0));
+  // Read ACTUAL header row — the sheet is the source of truth for column positions.
+  // ensureSheetColumns() only appends missing columns at the far right, so if a new
+  // behavior was added after analytics columns already existed, it will be to the RIGHT
+  // of analytics. Building the row from allHeaders order would misalign values.
+  var lastCol = sheet.getLastColumn();
+  var actualHeaders = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  var colMap = {};
+  for (var hi = 0; hi < actualHeaders.length; hi++) {
+    var h = String(actualHeaders[hi]).trim();
+    if (h && colMap[h] === undefined) { colMap[h] = hi; }
   }
-  row.push(bd.tantrumFrequency || 0);
-  row.push(bd.tantrumTotalMin  || 0);
-  // Analytics columns
-  row.push(d.submissionId   || '');
-  row.push(d.clientName     || '');
-  row.push(d.clientId       || '');
-  row.push(d.therapistEmail || d.submittedBy || '');
-  row.push(d.sessionType    || '');
-  row.push(d.billingCode    || '');
-  row.push(d.isDraft ? true : false);
-  row.push(d.payloadHash    || '');
-  row.push(d.submittedAt    || new Date().toISOString());
-  row.push(d.dateISO        || '');
+
+  // Build row sized to actual header count, default ''/0 per cell
+  var row = [];
+  for (var ri = 0; ri < lastCol; ri++) { row.push(''); }
+
+  if (colMap['Date']      !== undefined) { row[colMap['Date']]      = d.date; }
+  if (colMap['Therapist'] !== undefined) { row[colMap['Therapist']] = d.therapist; }
+  if (colMap['Setting']   !== undefined) { row[colMap['Setting']]   = d.location; }
+
+  for (var bi = 0; bi < keys.length; bi++) {
+    var lbl = labels[bi];
+    if (colMap[lbl] !== undefined) {
+      row[colMap[lbl]] = typeof bd[keys[bi]] === 'number' ? bd[keys[bi]] : (bd[keys[bi]] || 0);
+    }
+  }
+  if (colMap['Tantrum Frequency']   !== undefined) { row[colMap['Tantrum Frequency']]   = bd.tantrumFrequency || 0; }
+  if (colMap['Tantrum Total (Min)'] !== undefined) { row[colMap['Tantrum Total (Min)']] = bd.tantrumTotalMin  || 0; }
+
+  if (colMap['submissionId']   !== undefined) { row[colMap['submissionId']]   = d.submissionId   || ''; }
+  if (colMap['clientName']     !== undefined) { row[colMap['clientName']]     = d.clientName     || ''; }
+  if (colMap['clientId']       !== undefined) { row[colMap['clientId']]       = d.clientId       || ''; }
+  if (colMap['therapistEmail'] !== undefined) { row[colMap['therapistEmail']] = d.therapistEmail || d.submittedBy || ''; }
+  if (colMap['sessionType']    !== undefined) { row[colMap['sessionType']]    = d.sessionType    || ''; }
+  if (colMap['billingCode']    !== undefined) { row[colMap['billingCode']]    = d.billingCode    || ''; }
+  if (colMap['isDraft']        !== undefined) { row[colMap['isDraft']]        = d.isDraft ? true : false; }
+  if (colMap['payloadHash']    !== undefined) { row[colMap['payloadHash']]    = d.payloadHash    || ''; }
+  if (colMap['submittedAt']    !== undefined) { row[colMap['submittedAt']]    = d.submittedAt    || new Date().toISOString(); }
+  if (colMap['dateISO']        !== undefined) { row[colMap['dateISO']]        = d.dateISO        || ''; }
 
   sheet.appendRow(row);
 }
@@ -633,7 +655,7 @@ function writeTrialData(ss, d) {
   var allHeaders = baseHeaders.concat(goalHeaders, analyticsHeaders);
 
   var sheet = getOrCreateSheet(ss, 'Trial Data', allHeaders);
-  ensureSheetColumns(sheet, analyticsHeaders);
+  ensureSheetColumns(sheet, allHeaders); // was analyticsHeaders — fixed to ensure goal columns too
 
   // Build numeric percentages map for the Percent Correct column
   var pctMap = {};
@@ -645,29 +667,59 @@ function writeTrialData(ss, d) {
   }
   var percentCorrectJSON = JSON.stringify(pctMap);
 
-  var row = [d.date, d.location, d.therapist];
-  for (var gi2 = 0; gi2 < d.trialData.length; gi2++) {
-    var g2     = d.trialData[gi2];
-    var trials = g2.trials || [];
-    var pct    = (g2.percentage !== null && g2.percentage !== undefined) ? g2.percentage + '%' : '';
-    row.push(g2.goalCode);
-    for (var ti2 = 0; ti2 < trials.length; ti2++) {
-      row.push(trials[ti2]);
-    }
-    row.push(pct);
+  // Read ACTUAL header row — source of truth for column positions.
+  // New goal or analytics columns may have been appended in different order
+  // than allHeaders if goals changed between sessions.
+  var lastCol = sheet.getLastColumn();
+  var actualHeaders = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+
+  // Build a map of unique headers (first occurrence wins).
+  // Trial N and % repeat per goal — we address those relative to each goal code column.
+  var colMap = {};
+  for (var hi2 = 0; hi2 < actualHeaders.length; hi2++) {
+    var h2 = String(actualHeaders[hi2]).trim();
+    if (h2 && colMap[h2] === undefined) { colMap[h2] = hi2; }
   }
+
+  // Build row sized to actual header count
+  var row = [];
+  for (var ri2 = 0; ri2 < lastCol; ri2++) { row.push(''); }
+
+  if (colMap['Date']      !== undefined) { row[colMap['Date']]      = d.date; }
+  if (colMap['Setting']   !== undefined) { row[colMap['Setting']]   = d.location; }
+  if (colMap['Therapist'] !== undefined) { row[colMap['Therapist']] = d.therapist; }
+
+  // For each goal: find its goal-code column by scanning for an exact match,
+  // then write trial values and % in the immediately following columns.
+  for (var gi2 = 0; gi2 < d.trialData.length; gi2++) {
+    var g2 = d.trialData[gi2];
+    var goalCol = -1;
+    for (var hj = 0; hj < actualHeaders.length; hj++) {
+      if (String(actualHeaders[hj]).trim() === String(g2.goalCode).trim()) { goalCol = hj; break; }
+    }
+    if (goalCol < 0) { continue; } // goal column not present in sheet — skip safely
+    row[goalCol] = g2.goalCode;
+    var trials = g2.trials || [];
+    for (var ti2 = 0; ti2 < trials.length; ti2++) {
+      if (goalCol + 1 + ti2 < row.length) { row[goalCol + 1 + ti2] = trials[ti2]; }
+    }
+    var pct    = (g2.percentage !== null && g2.percentage !== undefined) ? g2.percentage + '%' : '';
+    var pctPos = goalCol + 1 + trials.length;
+    if (pctPos < row.length) { row[pctPos] = pct; }
+  }
+
   // Analytics columns
-  row.push(d.submissionId   || '');
-  row.push(d.clientName     || '');
-  row.push(d.clientId       || '');
-  row.push(d.therapistEmail || d.submittedBy || '');
-  row.push(d.sessionType    || '');
-  row.push(d.billingCode    || '');
-  row.push(d.isDraft ? true : false);
-  row.push(d.payloadHash    || '');
-  row.push(d.submittedAt    || new Date().toISOString());
-  row.push(d.dateISO        || '');
-  row.push(percentCorrectJSON);
+  if (colMap['submissionId']    !== undefined) { row[colMap['submissionId']]    = d.submissionId   || ''; }
+  if (colMap['clientName']      !== undefined) { row[colMap['clientName']]      = d.clientName     || ''; }
+  if (colMap['clientId']        !== undefined) { row[colMap['clientId']]        = d.clientId       || ''; }
+  if (colMap['therapistEmail']  !== undefined) { row[colMap['therapistEmail']]  = d.therapistEmail || d.submittedBy || ''; }
+  if (colMap['sessionType']     !== undefined) { row[colMap['sessionType']]     = d.sessionType    || ''; }
+  if (colMap['billingCode']     !== undefined) { row[colMap['billingCode']]     = d.billingCode    || ''; }
+  if (colMap['isDraft']         !== undefined) { row[colMap['isDraft']]         = d.isDraft ? true : false; }
+  if (colMap['payloadHash']     !== undefined) { row[colMap['payloadHash']]     = d.payloadHash    || ''; }
+  if (colMap['submittedAt']     !== undefined) { row[colMap['submittedAt']]     = d.submittedAt    || new Date().toISOString(); }
+  if (colMap['dateISO']         !== undefined) { row[colMap['dateISO']]         = d.dateISO        || ''; }
+  if (colMap['Percent Correct'] !== undefined) { row[colMap['Percent Correct']] = percentCorrectJSON; }
 
   sheet.appendRow(row);
 }

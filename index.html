@@ -2643,7 +2643,9 @@ function saveEntity() {
   const list = raw[type] || [];
   let idx = -1;
   if (editModalItem) {
-    if (type === 'goals')      idx = list.findIndex(x => x.clientId===editModalItem.clientId && x.code===editModalItem.code);
+    // Goals: find by code only (globally unique). Do NOT match on clientId — it changes
+    // when a goal is reassigned to different clients, causing a duplicate entry bug.
+    if (type === 'goals')      idx = list.findIndex(x => x.code === editModalItem.code);
     else if (type==='behaviors') idx = list.findIndex(x => x.key===editModalItem.key);
     else                       idx = list.findIndex(x => x.id===editModalItem.id);
   }
