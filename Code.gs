@@ -512,25 +512,63 @@ function processSession(d) {
  *   sessionType | billingCode | isDraft | payloadHash | submittedAt | dateISO
  */
 function writeBehaviorData(ss, d) {
-  var keys   = d.behaviorKeys   || ['aggression','whining','ingestingInedibles','elopement','taskRefusal','outOfArea','sib'];
-  var labels = d.behaviorLabels || ['Aggression','Whining','Ingesting Inedibles','Elopement','Task Refusal','Out of Area','SIB'];
-  var bd     = d.behaviorData || {};
+  var rawKeys   = d.behaviorKeys   || [];
+  var rawLabels = d.behaviorLabels || [];
+  var bd        = d.behaviorData   || {};
+  var clientId  = d.clientId       || '';
+
+  // Filter behavior keys/labels to only those assigned to this client.
+  // Source of truth: Behaviors tab in RT Admin sheet.
+  // A behavior with empty clientIds applies to all clients.
+  var adminSS   = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var allBehavs = sheetToObjects(adminSS, 'Behaviors');
+  var assignedKeys = {};
+  for (var ai = 0; ai < allBehavs.length; ai++) {
+    var bv   = allBehavs[ai];
+    var bKey = String(bv.key || '').trim();
+    var cids = String(bv.clientIds || '').trim();
+    if (!bKey) continue;
+    if (!cids) {
+      assignedKeys[bKey] = true; // empty clientIds = all clients
+    } else {
+      var cidArr = cids.split(',');
+      for (var ci = 0; ci < cidArr.length; ci++) {
+        if (cidArr[ci].trim() === clientId) { assignedKeys[bKey] = true; break; }
+      }
+    }
+  }
+  var keys   = [];
+  var labels = [];
+  for (var fi = 0; fi < rawKeys.length; fi++) {
+    if (assignedKeys[rawKeys[fi]]) {
+      keys.push(rawKeys[fi]);
+      labels.push(rawLabels[fi]);
+    }
+  }
 
   var analyticsHeaders = [
     'submissionId', 'clientName', 'clientId', 'therapistEmail',
     'sessionType', 'billingCode', 'isDraft', 'payloadHash', 'submittedAt', 'dateISO'
   ];
+  var analyticsSet = {};
+  for (var asi = 0; asi < analyticsHeaders.length; asi++) {
+    analyticsSet[analyticsHeaders[asi]] = true;
+  }
+
   var allHeaders = ['Date', 'Therapist', 'Setting']
     .concat(labels, ['Tantrum Frequency', 'Tantrum Total (Min)'])
     .concat(analyticsHeaders);
 
   var sheet = getOrCreateSheet(ss, 'Behavior Data', allHeaders);
-  ensureSheetColumns(sheet, allHeaders);
 
-  // Read ACTUAL header row — the sheet is the source of truth for column positions.
-  // ensureSheetColumns() only appends missing columns at the far right, so if a new
-  // behavior was added after analytics columns already existed, it will be to the RIGHT
-  // of analytics. Building the row from allHeaders order would misalign values.
+  // For existing sheets: insert new behavior/tantrum cols BEFORE the first
+  // analytics column (so they stay in the logical data section, not after analytics).
+  // Then append any missing analytics cols at the far right.
+  var nonAnalyticsCols = labels.concat(['Tantrum Frequency', 'Tantrum Total (Min)']);
+  _ensureColumnsBefore(sheet, nonAnalyticsCols, analyticsSet);
+  ensureSheetColumns(sheet, analyticsHeaders);
+
+  // Read ACTUAL header row — source of truth for column positions after all inserts.
   var lastCol = sheet.getLastColumn();
   var actualHeaders = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
   var colMap = {};
@@ -539,7 +577,7 @@ function writeBehaviorData(ss, d) {
     if (h && colMap[h] === undefined) { colMap[h] = hi; }
   }
 
-  // Build row sized to actual header count, default ''/0 per cell
+  // Build row sized to actual header count, default '' per cell
   var row = [];
   for (var ri = 0; ri < lastCol; ri++) { row.push(''); }
 
@@ -557,7 +595,7 @@ function writeBehaviorData(ss, d) {
   if (colMap['Tantrum Total (Min)'] !== undefined) { row[colMap['Tantrum Total (Min)']] = bd.tantrumTotalMin  || 0; }
 
   if (colMap['submissionId']   !== undefined) { row[colMap['submissionId']]   = d.submissionId   || ''; }
-  if (colMap['clientName']     !== undefined) { row[colMap["clientName"]]     = resolveClientName(d); }
+  if (colMap['clientName']     !== undefined) { row[colMap['clientName']]     = resolveClientName(d); }
   if (colMap['clientId']       !== undefined) { row[colMap['clientId']]       = d.clientId       || ''; }
   if (colMap['therapistEmail'] !== undefined) { row[colMap['therapistEmail']] = d.therapistEmail || d.submittedBy || ''; }
   if (colMap['sessionType']    !== undefined) { row[colMap['sessionType']]    = d.sessionType    || ''; }
@@ -962,6 +1000,51 @@ function ensureSheetColumns(sheet, headers) {
   r2.setFontWeight('bold');
   r2.setBackground('#00A7C7');
   r2.setFontColor('#FFFFFF');
+}
+
+/**
+ * Ensure columns in newCols exist in the sheet.
+ * Missing columns are inserted immediately BEFORE the first column whose
+ * header appears in stopColsMap (plain object used as a set).
+ * If no stop column is found in the sheet, missing cols are appended at the end.
+ * Existing columns are never moved or removed.
+ * Used by writeBehaviorData to keep behavior cols before analytics cols.
+ */
+function _ensureColumnsBefore(sheet, newCols, stopColsMap) {
+  var lastCol = sheet.getLastColumn();
+  if (lastCol === 0) return; // empty sheet handled by getOrCreateSheet
+  var existing = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  var existingMap = {};
+  for (var i = 0; i < existing.length; i++) {
+    existingMap[String(existing[i]).trim()] = true;
+  }
+  var missing = [];
+  for (var j = 0; j < newCols.length; j++) {
+    if (!existingMap[String(newCols[j]).trim()]) {
+      missing.push(newCols[j]);
+    }
+  }
+  if (!missing.length) return;
+  // Find 1-based column index of the first stop column
+  var insertBefore = 0;
+  for (var m = 0; m < existing.length; m++) {
+    if (stopColsMap[String(existing[m]).trim()]) {
+      insertBefore = m + 1;
+      break;
+    }
+  }
+  var startCol;
+  if (insertBefore > 0) {
+    sheet.insertColumnsBefore(insertBefore, missing.length);
+    startCol = insertBefore;
+  } else {
+    startCol = lastCol + 1; // no stop col found — append at end
+  }
+  var r = sheet.getRange(1, startCol, 1, missing.length);
+  r.setValues([missing]);
+  r.setFontWeight('bold');
+  r.setBackground('#00A7C7');
+  r.setFontColor('#FFFFFF');
 }
 
 /** Read a sheet tab into an array of plain objects (row 1 = keys). */
