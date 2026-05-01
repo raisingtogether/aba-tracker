@@ -72,6 +72,11 @@ function doPost(e) {
       result = { success: true, dryRun: migResult.dryRun, summary: migResult.summary,
         checked: migResult.checked, fixed: migResult.fixed };
 
+    } else if (data.action === 'fixShiftedAnalytics') {
+      var fsaResult = fixShiftedAnalytics(data.dryRun !== false);
+      result = { success: true, dryRun: fsaResult.dryRun, summary: fsaResult.summary,
+        fixed: fsaResult.fixed };
+
     } else {
       processSession(data);
       result = { success: true };
@@ -552,7 +557,7 @@ function writeBehaviorData(ss, d) {
   if (colMap['Tantrum Total (Min)'] !== undefined) { row[colMap['Tantrum Total (Min)']] = bd.tantrumTotalMin  || 0; }
 
   if (colMap['submissionId']   !== undefined) { row[colMap['submissionId']]   = d.submissionId   || ''; }
-  if (colMap['clientName']     !== undefined) { row[colMap['clientName']]     = d.clientName     || ''; }
+  if (colMap['clientName']     !== undefined) { row[colMap["clientName"]]     = resolveClientName(d); }
   if (colMap['clientId']       !== undefined) { row[colMap['clientId']]       = d.clientId       || ''; }
   if (colMap['therapistEmail'] !== undefined) { row[colMap['therapistEmail']] = d.therapistEmail || d.submittedBy || ''; }
   if (colMap['sessionType']    !== undefined) { row[colMap['sessionType']]    = d.sessionType    || ''; }
@@ -618,7 +623,7 @@ function writeSessionLog(ss, d) {
   if (colMap['Late Start Reason']  !== undefined) row[colMap['Late Start Reason']]  = d.lateStartReason || '';
   if (colMap['Submission ID']      !== undefined) row[colMap['Submission ID']]      = d.submissionId   || '';
   if (colMap['Notes']              !== undefined) row[colMap['Notes']]              = d.notes          || '';
-  if (colMap['clientName']         !== undefined) row[colMap['clientName']]         = d.clientName     || '';
+  if (colMap['clientName']         !== undefined) row[colMap["clientName"]]         = resolveClientName(d);
   if (colMap['clientId']           !== undefined) row[colMap['clientId']]           = d.clientId       || '';
   if (colMap['therapistEmail']     !== undefined) row[colMap['therapistEmail']]     = d.therapistEmail || d.submittedBy || '';
   if (colMap['isDraft']            !== undefined) row[colMap['isDraft']]            = d.isDraft ? true : false;
@@ -723,7 +728,7 @@ function writeTrialData(ss, d) {
 
   // Analytics columns
   if (colMap['submissionId']    !== undefined) { row[colMap['submissionId']]    = d.submissionId   || ''; }
-  if (colMap['clientName']      !== undefined) { row[colMap['clientName']]      = d.clientName     || ''; }
+  if (colMap['clientName']      !== undefined) { row[colMap["clientName"]]      = resolveClientName(d); }
   if (colMap['clientId']        !== undefined) { row[colMap['clientId']]        = d.clientId       || ''; }
   if (colMap['therapistEmail']  !== undefined) { row[colMap['therapistEmail']]  = d.therapistEmail || d.submittedBy || ''; }
   if (colMap['sessionType']     !== undefined) { row[colMap['sessionType']]     = d.sessionType    || ''; }
@@ -787,7 +792,7 @@ function writeABCData(ss, d) {
     if (colMap['Hypothesized Function']  !== undefined) row[colMap['Hypothesized Function']]  = inc.hypothesizedFunction || '';
     if (colMap['Time']                   !== undefined) row[colMap['Time']]                   = inc.time                 || '';
     if (colMap['submissionId']           !== undefined) row[colMap['submissionId']]           = d.submissionId           || '';
-    if (colMap['clientName']             !== undefined) row[colMap['clientName']]             = d.clientName             || '';
+    if (colMap['clientName']             !== undefined) row[colMap["clientName"]]             = resolveClientName(d);
     if (colMap['clientId']              !== undefined) row[colMap['clientId']]               = d.clientId               || '';
     if (colMap['therapistName']          !== undefined) row[colMap['therapistName']]          = d.therapist              || '';
     if (colMap['therapistEmail']         !== undefined) row[colMap['therapistEmail']]         = d.therapistEmail || d.submittedBy || '';
@@ -801,6 +806,40 @@ function writeABCData(ss, d) {
     validateRowAlignment('ABC Data', actualHeaders, row);
     sheet.appendRow(row);
   }
+}
+
+
+// ── CLIENT NAME RESOLUTION ────────────────────────────────────────────
+
+/**
+ * Returns the clientName from the payload. If it is absent or blank
+ * (which would silently shift all subsequent analytics columns left),
+ * logs a warning and falls back to looking up the name from the RT Admin
+ * Clients sheet by clientId. This prevents the "clientName gap" bug.
+ */
+function resolveClientName(d) {
+  var name = String(d.clientName || '').trim();
+  if (name) return name;
+
+  // clientName missing — log warning and attempt admin-sheet lookup
+  var warn = 'resolveClientName: clientName missing for clientId=' + (d.clientId || 'unknown') +
+    ' submissionId=' + (d.submissionId || '?');
+  Logger.log('WARNING: ' + warn);
+  writeAuditLog(new Date().toISOString(), 'system', 'alignment_warning', d.clientName || '', warn);
+
+  if (!d.clientId) return '';
+  try {
+    var adminSS = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+    var clients  = sheetToObjects(adminSS, 'Clients');
+    for (var ci = 0; ci < clients.length; ci++) {
+      if (String(clients[ci].id || '').trim() === String(d.clientId).trim()) {
+        return String(clients[ci].name || '').trim();
+      }
+    }
+  } catch (e) {
+    Logger.log('resolveClientName lookup failed: ' + e.message);
+  }
+  return '';
 }
 
 
@@ -1651,6 +1690,191 @@ function _mig_diffSummary(headers, oldRow, newRow) {
     }
   }
   return diffs.length + ' changes: ' + diffs.slice(0, 4).join('; ') + (diffs.length > 4 ? '…' : '');
+}
+
+
+// ── SHIFTED ANALYTICS REPAIR ────────────────────────────────────────────
+
+/**
+ * fixShiftedAnalytics(dryRun)
+ *
+ * Repairs rows where the clientName analytics column contains a clientId
+ * value (e.g. "C1") instead of a full client name. This happens when old
+ * session-write code omitted the clientName push, causing all subsequent
+ * analytics values to be one position to the left relative to the headers.
+ *
+ * Detection: value at the 'clientName' column matches a known clientId
+ *            from the RT Admin Clients sheet.
+ * Fix: right-shift the existing analytics values by 1 (starting from
+ *      clientName position) to fill their correct columns, then insert
+ *      the real client name at the clientName column.
+ *
+ * dryRun=true (default): log what would change, no writes.
+ * dryRun=false: backup each tab, apply corrections, write to Audit Log.
+ *
+ *   fixShiftedAnalytics(true);   // dry run
+ *   fixShiftedAnalytics(false);  // live
+ */
+function fixShiftedAnalytics(dryRun) {
+  var isDryRun = (dryRun !== false);
+  var ts = new Date().toISOString();
+  var logLines = [];
+  var totalFixed = 0;
+
+  function log(msg) { Logger.log(msg); logLines.push(msg); }
+
+  log('=== fixShiftedAnalytics ' + (isDryRun ? '[DRY RUN]' : '[LIVE]') +
+      ' started ' + ts + ' ===');
+
+  // Load client list — used both for iterating sheets and for the ID→name lookup
+  var adminSS = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var clientRows = sheetToObjects(adminSS, 'Clients');
+
+  // Build clientId → clientName map (only active clients)
+  var clientIdToName = {};
+  for (var ci = 0; ci < clientRows.length; ci++) {
+    var c = clientRows[ci];
+    if (c.id && c.name) clientIdToName[String(c.id).trim()] = String(c.name).trim();
+  }
+  log('Client map: ' + JSON.stringify(clientIdToName));
+
+  // Per-tab: which headers follow clientName in the correct schema.
+  // Used to compute the right-shift boundary.
+  var tabConfigs = [
+    {
+      name: 'Behavior Data',
+      afterClientName: ['clientId','therapistEmail','sessionType','billingCode',
+                        'isDraft','payloadHash','submittedAt','dateISO']
+    },
+    {
+      name: 'Trial Data',
+      afterClientName: ['clientId','therapistEmail','sessionType','billingCode',
+                        'isDraft','payloadHash','submittedAt','dateISO','Percent Correct']
+    },
+    {
+      name: 'ABC Data',
+      afterClientName: ['clientId','therapistName','therapistEmail','sessionType','billingCode',
+                        'isDraft','payloadHash','submittedAt','dateISO']
+    },
+    {
+      name: 'Time In Time Out',
+      afterClientName: ['clientId','therapistEmail','isDraft','payloadHash','submittedAt','dateISO']
+    }
+  ];
+
+  for (var ki = 0; ki < clientRows.length; ki++) {
+    var client = clientRows[ki];
+    if (!client.sheetId || String(client.status || 'active') === 'inactive') {
+      log('SKIP ' + (client.name || client.id) + ': no sheetId or inactive');
+      continue;
+    }
+    log('--- ' + client.name + ' ---');
+    var ss;
+    try {
+      ss = SpreadsheetApp.openById(client.sheetId);
+    } catch (e) {
+      log('  ERROR opening sheet: ' + e.message);
+      continue;
+    }
+    for (var ti = 0; ti < tabConfigs.length; ti++) {
+      var r = _fsa_processTab(ss, client.name, tabConfigs[ti], clientIdToName, isDryRun, log);
+      totalFixed += r.fixed;
+    }
+  }
+
+  var summary = (isDryRun ? '[DRY RUN] ' : '') + 'fixed=' + totalFixed;
+  log('=== DONE: ' + summary + ' ===');
+
+  if (!isDryRun) {
+    writeAuditLog(ts, 'system', 'fix_shifted_analytics', '', summary);
+  }
+  return { dryRun: isDryRun, summary: summary, fixed: totalFixed };
+}
+
+
+function _fsa_processTab(ss, clientName, tabConf, clientIdToName, isDryRun, log) {
+  var result = { fixed: 0 };
+  var tabName = tabConf.name;
+  var sheet = ss.getSheetByName(tabName);
+  if (!sheet) return result;
+
+  var allData = sheet.getDataRange().getValues();
+  if (allData.length < 2) return result;
+
+  var headers = allData[0];
+  var colMap  = _mig_buildColMap(headers); // reuse migration helper
+
+  var cnCol = colMap['clientName'];
+  if (cnCol === undefined) {
+    log('  ' + tabName + ': no clientName column — skipping');
+    return result;
+  }
+
+  // shiftEnd: the last column in the analytics block that needs to move right.
+  // In the MISALIGNED row the analytics values occupy cnCol..(cnCol + afterCount - 1)
+  // because clientName was never written — everything after it is 1 step left.
+  // After the fix they should occupy cnCol..(cnCol + afterCount) (one wider).
+  var afterCount = tabConf.afterClientName.length;
+  var shiftEnd   = cnCol + afterCount; // inclusive — this is where the last value lands
+
+  var corrections = [];
+
+  for (var ri = 1; ri < allData.length; ri++) {
+    var row = allData[ri];
+
+    // Skip blank rows
+    if (!row[0]) continue;
+
+    var cnVal = String(row[cnCol] || '').trim();
+    if (!cnVal) continue; // empty clientName — not detectable as shifted
+
+    // If the value in the clientName column is a known clientId, the row is shifted
+    if (!clientIdToName[cnVal]) continue;
+
+    var realName = clientIdToName[cnVal];
+
+    // Build corrected row
+    var newRow = row.slice(0);
+
+    // Right-shift values from cnCol..shiftEnd-1 → cnCol+1..shiftEnd
+    // Iterate from right to left to avoid overwriting source values
+    for (var ai = shiftEnd; ai > cnCol; ai--) {
+      newRow[ai] = (ai - 1 < row.length) ? row[ai - 1] : '';
+    }
+
+    // Insert the real client name at cnCol
+    newRow[cnCol] = realName;
+
+    corrections.push({ sheetRow: ri + 1, oldRow: row, newRow: newRow });
+    result.fixed++;
+    log('  ' + tabName + ' row ' + (ri + 1) + ': clientId=' + cnVal +
+        ' → inserted clientName="' + realName + '"');
+  }
+
+  if (!corrections.length) {
+    log('  ' + tabName + ': no shifted rows');
+    return result;
+  }
+
+  log('  ' + tabName + ': ' + corrections.length + ' rows to fix');
+
+  if (isDryRun) {
+    log('  ' + tabName + ': [DRY RUN] — no changes written');
+    return result;
+  }
+
+  // Backup before first write
+  _mig_backupTab(ss, tabName, log);
+
+  var numCols = headers.length;
+  for (var ki2 = 0; ki2 < corrections.length; ki2++) {
+    var corr     = corrections[ki2];
+    var writeRow = corr.newRow.slice(0, numCols);
+    while (writeRow.length < numCols) writeRow.push('');
+    sheet.getRange(corr.sheetRow, 1, 1, numCols).setValues([writeRow]);
+  }
+  log('  ' + tabName + ': wrote ' + corrections.length + ' corrections');
+  return result;
 }
 
 
