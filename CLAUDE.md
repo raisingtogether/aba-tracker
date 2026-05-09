@@ -162,6 +162,46 @@ All sheet writes use `ensureSheetColumns` + colMap-based row building. **Never h
 
 ---
 
+## Data Model Evolution Plan
+
+### Current Architecture (Phase 1)
+- Source of truth: Google Sheets (one per client)
+- Analytics warehouse: BigQuery (11 tables, hourly sync via WRITE_TRUNCATE)
+- Reporting: Looker Studio connected to BigQuery
+- Limitation: Sheets have dynamic columns (behaviors/goals as columns), which causes alignment issues. BigQuery normalizes these into rows (`behavior_records`, `trial_records`).
+
+### Short Term — New Modules (Phase 1 → Phase 2)
+New BigQuery tables as modules are built:
+- `assessments`: clientId, assessmentType, date, domain, subdomain, itemCode, score, scorerEmail
+- `behavioral_plans`: clientId, planVersion, createdDate, status, targetBehaviors, goals
+- `plan_goals`: planId, goalCode, objective, baseline, target, status
+- `video_sessions`: sessionId, recordingDate, deviceId, duration, storageUrl, annotationStatus
+- `video_annotations`: sessionId, timestamp, type, code, promptLevel, result, reviewerEmail
+- `skeleton_frames`: sessionId, frameNumber, timestamp, keypointsJson, behaviorLabel
+
+### Medium Term — BigQuery as Source of Truth (10+ clients)
+When Sheets latency becomes noticeable:
+- App writes directly to BigQuery via Apps Script (`BigQuery.Jobs.insert`)
+- Sheets become read-only mirrors (or eliminated)
+- Eliminates column alignment problems permanently
+- Schema versioning via BigQuery table metadata
+
+### Long Term — LHBM Training Pipeline
+- BigQuery = data lake for all behavioral data
+- Mac Mini M4 reads from BigQuery for training (de-identified)
+- Trained model writes predictions back to BigQuery
+- Looker Studio and app read predictions
+- Federated learning: other practices sync to shared Master LHBM via differential privacy
+
+### Data Integrity Safeguards (current)
+- `validateRowAlignment`: safety net on every write, logs misalignment to Audit Log
+- colMap-based row building: never hardcoded column positions
+- `LockService`: prevents concurrent config saves
+- Double-submission guard: prevents duplicate session records
+- BigQuery reconciliation query: run periodically to verify data quality
+
+---
+
 ## Roadmap reference
 
 - Feature tracker: `rt_feature_tracker.jsx` in repo root
