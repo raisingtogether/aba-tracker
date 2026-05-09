@@ -517,32 +517,40 @@ function writeBehaviorData(ss, d) {
   var bd        = d.behaviorData   || {};
   var clientId  = d.clientId       || '';
 
-  // Filter behavior keys/labels to only those assigned to this client.
-  // Source of truth: Behaviors tab in RT Admin sheet.
-  // A behavior with empty clientIds applies to all clients.
-  var adminSS   = SpreadsheetApp.openById(ADMIN_SHEET_ID);
-  var allBehavs = sheetToObjects(adminSS, 'Behaviors');
-  var assignedKeys = {};
-  for (var ai = 0; ai < allBehavs.length; ai++) {
-    var bv   = allBehavs[ai];
-    var bKey = String(bv.key || '').trim();
-    var cids = String(bv.clientIds || '').trim();
-    if (!bKey) continue;
-    if (!cids) {
-      assignedKeys[bKey] = true; // empty clientIds = all clients
-    } else {
-      var cidArr = cids.split(',');
-      for (var ci = 0; ci < cidArr.length; ci++) {
-        if (cidArr[ci].trim() === clientId) { assignedKeys[bKey] = true; break; }
+  // If the payload already contains behavior keys the frontend filtered by client
+  // assignment, use them directly — no need to re-read the admin sheet on every
+  // session submit.  Only fall back to the admin sheet when keys are absent
+  // (legacy or manual-entry payloads without a behaviorKeys field).
+  var keys, labels;
+  if (rawKeys.length > 0) {
+    keys   = rawKeys;
+    labels = rawLabels;
+  } else {
+    // Fallback: read admin Behaviors tab and filter by clientId
+    var adminSS   = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+    var allBehavs = sheetToObjects(adminSS, 'Behaviors');
+    var assignedKeys = {};
+    for (var ai = 0; ai < allBehavs.length; ai++) {
+      var bv   = allBehavs[ai];
+      var bKey = String(bv.key || '').trim();
+      var cids = String(bv.clientIds || '').trim();
+      if (!bKey) continue;
+      if (!cids) {
+        assignedKeys[bKey] = true;
+      } else {
+        var cidArr = cids.split(',');
+        for (var ci = 0; ci < cidArr.length; ci++) {
+          if (cidArr[ci].trim() === clientId) { assignedKeys[bKey] = true; break; }
+        }
       }
     }
-  }
-  var keys   = [];
-  var labels = [];
-  for (var fi = 0; fi < rawKeys.length; fi++) {
-    if (assignedKeys[rawKeys[fi]]) {
-      keys.push(rawKeys[fi]);
-      labels.push(rawLabels[fi]);
+    keys   = [];
+    labels = [];
+    for (var fi = 0; fi < rawKeys.length; fi++) {
+      if (assignedKeys[rawKeys[fi]]) {
+        keys.push(rawKeys[fi]);
+        labels.push(rawLabels[fi]);
+      }
     }
   }
 
