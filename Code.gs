@@ -86,6 +86,11 @@ function doPost(e) {
       result = { success: true, dryRun: chdResult.dryRun, summary: chdResult.summary,
         fixed: chdResult.fixed, dupsRemoved: chdResult.dupsRemoved, log: chdResult.log };
 
+    } else if (data.action === 'fixOrphanSubmissionIds') {
+      var fosiResult = fixOrphanSubmissionIds(data.dryRun !== false);
+      result = { success: true, dryRun: fosiResult.dryRun, summary: fosiResult.summary,
+        fixed: fosiResult.fixed, log: fosiResult.log };
+
     } else {
       processSession(data);
       result = { success: true };
@@ -666,6 +671,9 @@ function writeBehaviorData(ss, d) {
   var nonAnalyticsCols = labels.concat(['Tantrum Frequency', 'Tantrum Total (Min)']);
   _ensureColumnsBefore(sheet, nonAnalyticsCols, analyticsSet);
   ensureSheetColumns(sheet, analyticsHeaders);
+  // Flush all pending structural operations (insertColumnsBefore, setValues on headers)
+  // before re-reading the header row. Without this GAS may serve a cached pre-insert view.
+  SpreadsheetApp.flush();
 
   // Read ACTUAL header row — source of truth for column positions after all inserts.
   var lastCol = sheet.getLastColumn();
@@ -674,6 +682,22 @@ function writeBehaviorData(ss, d) {
   for (var hi = 0; hi < actualHeaders.length; hi++) {
     var h = String(actualHeaders[hi]).trim();
     if (h && colMap[h] === undefined) { colMap[h] = hi; }
+  }
+
+  // ── Diagnostics (visible in Apps Script execution log) ──────────────
+  Logger.log('[writeBehaviorData] sid=' + (d.submissionId || 'none') +
+    ' client=' + (d.clientName || '?') + ' date=' + (d.dateISO || d.date || '?'));
+  Logger.log('[writeBehaviorData] lastCol=' + lastCol +
+    ' headers=' + JSON.stringify(actualHeaders));
+  Logger.log('[writeBehaviorData] colMap: submissionId=' + colMap['submissionId'] +
+    ' clientName=' + colMap['clientName'] + ' clientId=' + colMap['clientId'] +
+    ' therapistEmail=' + colMap['therapistEmail']);
+  // Warn if any blank header exists (blank column in sheet — may cause misalignment confusion)
+  for (var whi = 0; whi < actualHeaders.length; whi++) {
+    if (String(actualHeaders[whi]).trim() === '') {
+      Logger.log('[writeBehaviorData] WARNING: blank header at col index ' + whi +
+        ' (sheet col ' + (whi + 1) + ') — this column is skipped in colMap');
+    }
   }
 
   // Build row sized to actual header count, default '' per cell
@@ -703,6 +727,12 @@ function writeBehaviorData(ss, d) {
   if (colMap['payloadHash']    !== undefined) { row[colMap['payloadHash']]    = d.payloadHash    || ''; }
   if (colMap['submittedAt']    !== undefined) { row[colMap['submittedAt']]    = d.submittedAt    || new Date().toISOString(); }
   if (colMap['dateISO']        !== undefined) { row[colMap['dateISO']]        = d.dateISO        || ''; }
+
+  // Log the exact analytics slice being written so we can verify positions
+  Logger.log('[writeBehaviorData] row[clientName@' + colMap['clientName'] + ']=' +
+    row[colMap['clientName']] + ' row[clientId@' + colMap['clientId'] + ']=' +
+    row[colMap['clientId']] + ' row[therapistEmail@' + colMap['therapistEmail'] + ']=' +
+    row[colMap['therapistEmail']]);
 
   validateRowAlignment('Behavior Data', actualHeaders, row);
   sheet.appendRow(row);
@@ -2377,22 +2407,40 @@ function cleanHistoricalData(dryRun, clientId) {
 
 /**
  * Parse a date cell value to YYYY-MM-DD.
- * Handles: Date objects, ISO strings, "3/29/2026", "Apr 21, 2026", "4/12/2026".
+ * Handles: Date objects, ISO strings, "3/29/2026", "4/12/2026", "Apr 21, 2026".
+ *
+ * Uses the spreadsheet's timezone (Session.getScriptTimeZone()) for Date objects
+ * so the displayed date matches what is stored. Parses M/D/YYYY strings directly
+ * without constructing a Date object to avoid UTC-offset boundary issues.
  */
 function _chd_parseDateToISO(val) {
   if (!val && val !== 0) { return ''; }
   if (val instanceof Date) {
-    return Utilities.formatDate(val, 'UTC', 'yyyy-MM-dd');
+    return Utilities.formatDate(val, Session.getScriptTimeZone(), 'yyyy-MM-dd');
   }
   var s = String(val).trim();
   if (!s || s === '0') { return ''; }
-  // Already YYYY-MM-DD
+  // Already YYYY-MM-DD (e.g. dateISO column value)
   if (/^\d{4}-\d{2}-\d{2}/.test(s)) { return s.substring(0, 10); }
-  // Let JS parse locale formats ("3/29/2026", "Apr 21, 2026", etc.)
+  // M/D/YYYY or MM/DD/YYYY — parse components directly, no timezone risk
+  var mdyMatch = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (mdyMatch) {
+    return mdyMatch[3] + '-' + ('0' + mdyMatch[1]).slice(-2) + '-' + ('0' + mdyMatch[2]).slice(-2);
+  }
+  // "Apr 21, 2026" or "Apr 21 2026"
+  var MONTHS = { jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12 };
+  var monMatch = s.match(/^([A-Za-z]{3})\s+(\d{1,2}),?\s+(\d{4})$/);
+  if (monMatch) {
+    var mon = MONTHS[monMatch[1].toLowerCase()];
+    if (mon) {
+      return monMatch[3] + '-' + ('0' + mon).slice(-2) + '-' + ('0' + monMatch[2]).slice(-2);
+    }
+  }
+  // Last resort: JS Date with script timezone
   try {
     var d = new Date(s);
     if (!isNaN(d.getTime())) {
-      return Utilities.formatDate(d, 'UTC', 'yyyy-MM-dd');
+      return Utilities.formatDate(d, Session.getScriptTimeZone(), 'yyyy-MM-dd');
     }
   } catch (ex) {}
   return '';
@@ -2722,6 +2770,283 @@ function _chd_removeDuplicates(ss, sheet, tabName, isDryRun, log) {
 
   result.removed = rowsToDelete.length;
   return result;
+}
+
+
+/**
+ * fixOrphanSubmissionIds(dryRun)
+ *
+ * For each client sheet, reads TITO to build an authoritative
+ * sessionKey → submissionId map, then reconciles Behavior Data,
+ * Trial Data, and ABC Data rows whose submissionId doesn't match.
+ *
+ * Session key: dateISO + '|' + therapistNameLower (from Therapist column).
+ * For rows where the therapist analytics column is blank the function
+ * tries a date-only fallback (unique per-date match) so those rows are
+ * still patched.
+ *
+ * Run from Apps Script editor:
+ *   fixOrphanSubmissionIds(true);   // dry run
+ *   fixOrphanSubmissionIds(false);  // live
+ */
+function fixOrphanSubmissionIds(dryRun) {
+  var isDryRun = (dryRun !== false);
+  var ts = new Date().toISOString();
+  var logLines = [];
+  var totalFixed = 0;
+
+  function log(msg) { Logger.log(msg); logLines.push(msg); }
+
+  log('=== fixOrphanSubmissionIds ' + (isDryRun ? '[DRY RUN]' : '[LIVE]') +
+      ' started ' + ts + ' ===');
+
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var adminSheet = ss.getSheetByName('RT Admin');
+  if (!adminSheet) {
+    log('ERROR: RT Admin sheet not found');
+    return { dryRun: isDryRun, summary: 'RT Admin not found', fixed: 0, log: logLines };
+  }
+
+  // Read clients from RT Admin > Clients tab
+  var clientsSheet = null;
+  var adminSheets = ss.getSheets();
+  // RT Admin is a spreadsheet containing named tabs; clients are in a separate sheet named 'Clients'
+  // In this project the admin data lives in the single RT Admin spreadsheet, so read it directly
+  var clientRows = adminSheet.getDataRange().getValues();
+  // clientRows header: id, name, initials, sheetId, status
+  // But RT Admin is one sheet with all tabs merged as rows under section headers.
+  // The real client list is on the 'Clients' named range / dedicated sheet.
+  // Use getSheetByName pattern consistent with rest of Code.gs (sheetToObjects / getConfigSheets).
+  var configSS = SpreadsheetApp.getActiveSpreadsheet();
+
+  // Re-use existing getConfig pattern: read Clients tab
+  var clientsTabSheet = configSS.getSheetByName('Clients');
+  var clients = [];
+  if (clientsTabSheet) {
+    var cData = clientsTabSheet.getDataRange().getValues();
+    if (cData.length > 1) {
+      var cHeaders = cData[0];
+      var cIdCol = -1, cNameCol = -1, cSheetIdCol = -1, cStatusCol = -1;
+      for (var ci = 0; ci < cHeaders.length; ci++) {
+        var ch = String(cHeaders[ci]).trim().toLowerCase();
+        if (ch === 'id') { cIdCol = ci; }
+        else if (ch === 'name') { cNameCol = ci; }
+        else if (ch === 'sheetid') { cSheetIdCol = ci; }
+        else if (ch === 'status') { cStatusCol = ci; }
+      }
+      for (var cr = 1; cr < cData.length; cr++) {
+        var crow = cData[cr];
+        var cstatus = cStatusCol !== -1 ? String(crow[cStatusCol]).trim().toLowerCase() : 'active';
+        if (cstatus !== 'active') { continue; }
+        var cid = cIdCol !== -1 ? String(crow[cIdCol]).trim() : '';
+        var cname = cNameCol !== -1 ? String(crow[cNameCol]).trim() : '';
+        var csheetId = cSheetIdCol !== -1 ? String(crow[cSheetIdCol]).trim() : '';
+        if (cid && csheetId) {
+          clients.push({ id: cid, name: cname, sheetId: csheetId });
+        }
+      }
+    }
+  }
+
+  if (clients.length === 0) {
+    log('ERROR: No active clients found in Clients tab');
+    return { dryRun: isDryRun, summary: 'No clients found', fixed: 0, log: logLines };
+  }
+
+  log('Processing ' + clients.length + ' client(s)');
+
+  var TABS_TO_FIX = ['Behavior Data', 'Trial Data', 'ABC Data'];
+
+  for (var cli = 0; cli < clients.length; cli++) {
+    var client = clients[cli];
+    log('--- Client: ' + client.name + ' (' + client.id + ') sheetId=' + client.sheetId + ' ---');
+
+    var clientSS;
+    try {
+      clientSS = SpreadsheetApp.openById(client.sheetId);
+    } catch (e) {
+      log('  ERROR: cannot open sheet ' + client.sheetId + ': ' + e.message);
+      continue;
+    }
+
+    // ── Step 1: Build authoritative map from TITO ──────────────────────────
+    var titoSheet = clientSS.getSheetByName('Time In Time Out');
+    if (!titoSheet) {
+      log('  SKIP: no TITO tab');
+      continue;
+    }
+
+    var titoData = titoSheet.getDataRange().getValues();
+    if (titoData.length < 2) {
+      log('  SKIP: TITO is empty');
+      continue;
+    }
+
+    var titoHeaders = titoData[0];
+    var titoColMap = _mig_buildColMap(titoHeaders);
+
+    var titoSubCol     = titoColMap['submissionId'] !== undefined ? titoColMap['submissionId']
+                       : titoColMap['Submission ID'] !== undefined ? titoColMap['Submission ID'] : -1;
+    var titoDateISOCol = titoColMap['dateISO'] !== undefined ? titoColMap['dateISO'] : -1;
+    var titoDateCol    = titoColMap['Date'] !== undefined ? titoColMap['Date']
+                       : titoColMap['date'] !== undefined ? titoColMap['date'] : -1;
+    var titoTherapistCol = titoColMap['Therapist'] !== undefined ? titoColMap['Therapist']
+                         : titoColMap['therapistEmail'] !== undefined ? titoColMap['therapistEmail'] : -1;
+
+    if (titoSubCol === -1) {
+      log('  SKIP: TITO has no submissionId column');
+      continue;
+    }
+
+    // keyMap: dateISO|therapistLower → submissionId
+    // dateOnlyMap: dateISO → [submissionId, ...] for date-only fallback
+    var keyMap = {};
+    var dateOnlyMap = {};
+
+    for (var tr = 1; tr < titoData.length; tr++) {
+      var trow = titoData[tr];
+      var tsub = String(trow[titoSubCol]).trim();
+      if (!tsub || !_mig_isUUID(tsub)) { continue; }
+
+      var tdateRaw = '';
+      if (titoDateISOCol !== -1 && trow[titoDateISOCol]) {
+        tdateRaw = trow[titoDateISOCol];
+      } else if (titoDateCol !== -1 && trow[titoDateCol]) {
+        tdateRaw = trow[titoDateCol];
+      }
+      var tdateISO = _chd_parseDateToISO(tdateRaw);
+      if (!tdateISO) { continue; }
+
+      var ttherapist = titoTherapistCol !== -1 ? String(trow[titoTherapistCol]).trim().toLowerCase() : '';
+      var tkey = tdateISO + '|' + ttherapist;
+      if (!keyMap[tkey]) { keyMap[tkey] = tsub; }
+
+      // date-only fallback: collect all submissionIds for this date
+      if (!dateOnlyMap[tdateISO]) { dateOnlyMap[tdateISO] = []; }
+      var found = false;
+      for (var di = 0; di < dateOnlyMap[tdateISO].length; di++) {
+        if (dateOnlyMap[tdateISO][di] === tsub) { found = true; break; }
+      }
+      if (!found) { dateOnlyMap[tdateISO].push(tsub); }
+    }
+
+    var titoKeyCount = _chd_objectKeyCount(keyMap);
+    log('  TITO: ' + titoKeyCount + ' session keys loaded');
+    if (titoKeyCount === 0) {
+      log('  SKIP: no valid TITO sessions');
+      continue;
+    }
+
+    // ── Step 2: Reconcile each dependent tab ──────────────────────────────
+    for (var ti = 0; ti < TABS_TO_FIX.length; ti++) {
+      var tabName = TABS_TO_FIX[ti];
+      var tabSheet = clientSS.getSheetByName(tabName);
+      if (!tabSheet) { log('  ' + tabName + ': tab not found, skip'); continue; }
+
+      var tabData = tabSheet.getDataRange().getValues();
+      if (tabData.length < 2) { log('  ' + tabName + ': empty, skip'); continue; }
+
+      var tabHeaders = tabData[0];
+      var tabColMap = _mig_buildColMap(tabHeaders);
+
+      var subCol      = tabColMap['submissionId'] !== undefined ? tabColMap['submissionId'] : -1;
+      var dateISOCol  = tabColMap['dateISO'] !== undefined ? tabColMap['dateISO'] : -1;
+      var dateCol     = tabColMap['Date'] !== undefined ? tabColMap['Date']
+                      : tabColMap['date'] !== undefined ? tabColMap['date'] : -1;
+      var therapistCol = tabColMap['Therapist'] !== undefined ? tabColMap['Therapist'] : -1;
+
+      if (subCol === -1) {
+        log('  ' + tabName + ': no submissionId column, skip');
+        continue;
+      }
+
+      var tabFixed = 0;
+      var tabSkipped = 0;
+
+      for (var row = 1; row < tabData.length; row++) {
+        var drow = tabData[row];
+
+        // Resolve dateISO for this row
+        var ddateRaw = '';
+        if (dateISOCol !== -1 && drow[dateISOCol]) {
+          ddateRaw = drow[dateISOCol];
+        } else if (dateCol !== -1 && drow[dateCol]) {
+          ddateRaw = drow[dateCol];
+        }
+        var ddateISO = _chd_parseDateToISO(ddateRaw);
+        if (!ddateISO) { tabSkipped++; continue; }
+
+        var currentSub = String(drow[subCol]).trim();
+
+        // Build session key using Therapist column if available
+        var dtherapist = therapistCol !== -1 ? String(drow[therapistCol]).trim().toLowerCase() : '';
+        var dkey = ddateISO + '|' + dtherapist;
+
+        var authoritativeSub = keyMap[dkey];
+
+        // Therapist column blank or no exact match — try date-only fallback
+        // (only use if exactly one TITO session on that date)
+        if (!authoritativeSub && dtherapist === '') {
+          var dateSubs = dateOnlyMap[ddateISO];
+          if (dateSubs && dateSubs.length === 1) {
+            authoritativeSub = dateSubs[0];
+          }
+        }
+
+        if (!authoritativeSub) { tabSkipped++; continue; }
+        if (currentSub === authoritativeSub) { continue; } // already correct
+
+        // Apply fix
+        var sheetRow = row + 1; // 1-based, row 1 = header
+        var sheetCol = subCol + 1; // 1-based
+
+        if (!isDryRun) {
+          try {
+            tabSheet.getRange(sheetRow, sheetCol).setValue(authoritativeSub);
+          } catch (e) {
+            log('  ' + tabName + ' row ' + sheetRow + ': ERROR ' + e.message);
+            continue;
+          }
+        }
+
+        log('  ' + tabName + ' row ' + sheetRow + ': ' +
+            (currentSub || '[blank]') + ' → ' + authoritativeSub +
+            ' (key=' + dkey + ')' +
+            (isDryRun ? ' [DRY RUN]' : ''));
+        tabFixed++;
+        totalFixed++;
+      }
+
+      log('  ' + tabName + ': fixed=' + tabFixed + ' skipped=' + tabSkipped);
+    }
+
+    // ── Step 3: Write to Audit Log ─────────────────────────────────────────
+    if (!isDryRun && totalFixed > 0) {
+      try {
+        var auditSheet = ss.getSheetByName('RT Audit Log');
+        if (auditSheet) {
+          auditSheet.appendRow([
+            new Date(), 'fixOrphanSubmissionIds', 'SYSTEM',
+            'client=' + client.id + ' fixed=' + totalFixed,
+            'fixOrphanSubmissionIds'
+          ]);
+        }
+      } catch (e) {
+        log('  WARNING: audit log write failed: ' + e.message);
+      }
+    }
+  }
+
+  var summary = (isDryRun ? '[DRY RUN] ' : '') +
+      'fixOrphanSubmissionIds complete. fixed=' + totalFixed;
+  log('=== ' + summary + ' ===');
+
+  return {
+    dryRun: isDryRun,
+    summary: summary,
+    fixed: totalFixed,
+    log: logLines
+  };
 }
 
 
