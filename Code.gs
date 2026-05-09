@@ -81,6 +81,11 @@ function doPost(e) {
       var mpResult = migratePins();
       result = { success: true, migrated: mpResult.migrated };
 
+    } else if (data.action === 'cleanHistoricalData') {
+      var chdResult = cleanHistoricalData(data.dryRun !== false, data.clientId ? data.clientId : null);
+      result = { success: true, dryRun: chdResult.dryRun, summary: chdResult.summary,
+        fixed: chdResult.fixed, dupsRemoved: chdResult.dupsRemoved, log: chdResult.log };
+
     } else {
       processSession(data);
       result = { success: true };
@@ -2256,4 +2261,487 @@ function checkGoalUsage(goalCode, clients) {
     sessionCount: totalCount,
     clients:      foundClients
   };
+}
+
+
+// ── HISTORICAL DATA CLEANUP ─────────────────────────────────────────────
+
+/**
+ * cleanHistoricalData(dryRun, clientId)
+ *
+ * Fixes data quality issues in all client data tabs:
+ *   1. Fill missing dateISO (handles Date objects, "3/29/2026", "Apr 21, 2026")
+ *   2. Fill missing submissionId (session-keyed via TITO, same UUID across all tabs)
+ *   3. Fill missing clientName and clientId (looked up from admin config)
+ *   4. Fill missing therapistEmail (looked up from therapist name)
+ *   5. Fill missing sessionType and billingCode (copied from TITO by session key)
+ *   6. Remove duplicate rows (by non-analytics column fingerprint, bottom-up delete)
+ *
+ * dryRun=true (default): log only, no writes.
+ * dryRun=false: create CLEANUP_BACKUP tabs, apply corrections, log to Audit Log.
+ * clientId: if provided, only process that client; otherwise all active clients.
+ *
+ * Run from Apps Script editor:
+ *   cleanHistoricalData(true);           // dry run — all clients
+ *   cleanHistoricalData(true,  'C1');    // dry run — client C1 only
+ *   cleanHistoricalData(false, 'C1');    // live   — client C1 only
+ *   cleanHistoricalData(false);          // live   — all clients (risk of 6-min timeout)
+ */
+function cleanHistoricalData(dryRun, clientId) {
+  var isDryRun = (dryRun !== false);
+  var ts = new Date().toISOString();
+  var logLines = [];
+  var totalFixed = 0;
+  var totalDupsRemoved = 0;
+
+  function log(msg) { Logger.log(msg); logLines.push(msg); }
+
+  log('=== cleanHistoricalData ' + (isDryRun ? '[DRY RUN]' : '[LIVE]') +
+      ' started ' + ts +
+      (clientId ? ' clientId=' + clientId : ' all clients') + ' ===');
+
+  var adminSS   = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var allClients = sheetToObjects(adminSS, 'Clients');
+  var therapists = sheetToObjects(adminSS, 'Therapists');
+
+  // Build therapist name (lowercase) → email lookup
+  var therapistEmailMap = {};
+  for (var ti = 0; ti < therapists.length; ti++) {
+    var tname  = String(therapists[ti].name  || '').toLowerCase().trim();
+    var temail = String(therapists[ti].email || '').trim();
+    if (tname && temail) { therapistEmailMap[tname] = temail; }
+  }
+
+  // Filter to target client(s)
+  var targetClients = [];
+  for (var ci = 0; ci < allClients.length; ci++) {
+    var cl = allClients[ci];
+    if (clientId && String(cl.id || '').trim() !== String(clientId).trim()) { continue; }
+    if (!cl.sheetId || String(cl.status || 'active') === 'inactive') {
+      log('SKIP ' + (cl.name || cl.id) + ': no sheetId or inactive');
+      continue;
+    }
+    targetClients.push(cl);
+  }
+  log('Processing ' + targetClients.length + ' client(s)');
+
+  for (var ki = 0; ki < targetClients.length; ki++) {
+    var client = targetClients[ki];
+    log('--- ' + client.name + ' (id=' + client.id + ') ---');
+
+    var ss;
+    try {
+      ss = SpreadsheetApp.openById(client.sheetId);
+    } catch (e) {
+      log('  ERROR opening sheet: ' + e.message);
+      continue;
+    }
+
+    var clientInfo = {
+      clientId:   String(client.id   || '').trim(),
+      clientName: String(client.name || '').trim()
+    };
+
+    // Build session key map from Time In Time Out (authoritative source for UUIDs)
+    var sessionKeyMap = _chd_buildSessionKeyMap(ss, log);
+    log('  TITO session keys: ' + _chd_objectKeyCount(sessionKeyMap));
+
+    var tabNames = ['Time In Time Out', 'Behavior Data', 'Trial Data', 'ABC Data'];
+    for (var tbi = 0; tbi < tabNames.length; tbi++) {
+      var tabResult = _chd_processTab(
+        ss, tabNames[tbi], sessionKeyMap,
+        clientInfo, therapistEmailMap, isDryRun, log
+      );
+      totalFixed       += tabResult.fixed;
+      totalDupsRemoved += tabResult.dupsRemoved;
+    }
+  }
+
+  var summary = (isDryRun ? '[DRY RUN] ' : '') +
+    'fixed=' + totalFixed + ' dupsRemoved=' + totalDupsRemoved;
+  log('=== DONE: ' + summary + ' ===');
+
+  if (!isDryRun) {
+    writeAuditLog(ts, 'system', 'clean_historical_data', clientId || 'all', summary);
+  }
+
+  return {
+    dryRun:      isDryRun,
+    summary:     summary,
+    fixed:       totalFixed,
+    dupsRemoved: totalDupsRemoved,
+    log:         logLines
+  };
+}
+
+
+/**
+ * Parse a date cell value to YYYY-MM-DD.
+ * Handles: Date objects, ISO strings, "3/29/2026", "Apr 21, 2026", "4/12/2026".
+ */
+function _chd_parseDateToISO(val) {
+  if (!val && val !== 0) { return ''; }
+  if (val instanceof Date) {
+    return Utilities.formatDate(val, 'UTC', 'yyyy-MM-dd');
+  }
+  var s = String(val).trim();
+  if (!s || s === '0') { return ''; }
+  // Already YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) { return s.substring(0, 10); }
+  // Let JS parse locale formats ("3/29/2026", "Apr 21, 2026", etc.)
+  try {
+    var d = new Date(s);
+    if (!isNaN(d.getTime())) {
+      return Utilities.formatDate(d, 'UTC', 'yyyy-MM-dd');
+    }
+  } catch (ex) {}
+  return '';
+}
+
+
+/** Count own-property keys on a plain object (ES5 safe). */
+function _chd_objectKeyCount(obj) {
+  var n = 0;
+  for (var k in obj) {
+    if (Object.prototype.hasOwnProperty.call(obj, k)) { n++; }
+  }
+  return n;
+}
+
+
+/**
+ * Read Time In Time Out tab and build:
+ *   sessionKey (dateISO + '|' + therapistLower) → { uuid, sessionType, billingCode }
+ *
+ * Reuses an existing valid UUID from the Submission ID column when present,
+ * so already-linked rows across tabs are not re-keyed.
+ */
+function _chd_buildSessionKeyMap(ss, log) {
+  var keyMap = {};
+  var sheet  = ss.getSheetByName('Time In Time Out');
+  if (!sheet) { log('  TITO: tab not found — session key map empty'); return keyMap; }
+
+  var data = sheet.getDataRange().getValues();
+  if (data.length < 2) { return keyMap; }
+
+  var headers = data[0];
+  var colMap  = _mig_buildColMap(headers);
+
+  var dateCol      = colMap['Date'];
+  var dateISOCol   = colMap['dateISO'];
+  var therapistCol = colMap['Therapist'];
+  // TITO uses display names for these columns
+  var sessTypeCol  = (colMap['Type of Session'] !== undefined) ? colMap['Type of Session'] : colMap['sessionType'];
+  var billCodeCol  = (colMap['Billing Code']    !== undefined) ? colMap['Billing Code']    : colMap['billingCode'];
+  var subIdCol     = (colMap['Submission ID']   !== undefined) ? colMap['Submission ID']   : colMap['submissionId'];
+
+  for (var ri = 1; ri < data.length; ri++) {
+    var row = data[ri];
+    // Skip rows with no date
+    var dateVal = (dateISOCol !== undefined && row[dateISOCol]) ? row[dateISOCol]
+                  : (dateCol !== undefined ? row[dateCol] : '');
+    var dateISO = _chd_parseDateToISO(dateVal);
+    if (!dateISO) { continue; }
+
+    var therapist = therapistCol !== undefined ? String(row[therapistCol] || '').trim() : '';
+    var key = dateISO + '|' + therapist.toLowerCase();
+
+    if (!keyMap[key]) {
+      var existingId = (subIdCol !== undefined) ? String(row[subIdCol] || '').trim() : '';
+      var uuid = _mig_isUUID(existingId) ? existingId : Utilities.getUuid();
+      keyMap[key] = {
+        uuid:        uuid,
+        sessionType: sessTypeCol !== undefined ? String(row[sessTypeCol] || '').trim() : '',
+        billingCode: billCodeCol !== undefined ? String(row[billCodeCol] || '').trim() : ''
+      };
+    }
+  }
+  return keyMap;
+}
+
+
+/**
+ * Process one data tab: collect field corrections, apply them, then remove duplicates.
+ * Returns { fixed: <cell corrections applied>, dupsRemoved: <rows deleted> }
+ */
+function _chd_processTab(ss, tabName, sessionKeyMap, clientInfo, therapistEmailMap, isDryRun, log) {
+  var result = { fixed: 0, dupsRemoved: 0 };
+  var sheet  = ss.getSheetByName(tabName);
+  if (!sheet) { log('  ' + tabName + ': not found'); return result; }
+
+  var data    = sheet.getDataRange().getValues();
+  if (data.length < 2) { log('  ' + tabName + ': no data rows'); return result; }
+
+  var headers = data[0];
+  var colMap  = _mig_buildColMap(headers);
+
+  var dateCol    = colMap['Date'];
+  var dateISOCol = colMap['dateISO'];
+
+  // Therapist name column varies by tab
+  var therapistCol;
+  if (tabName === 'ABC Data') {
+    // analytics 'therapistName' preferred; fall back to 'Initials' (no email lookup possible)
+    therapistCol = (colMap['therapistName'] !== undefined) ? colMap['therapistName'] : colMap['Initials'];
+  } else {
+    therapistCol = colMap['Therapist'];
+  }
+
+  // submissionId: TITO base header is "Submission ID"; all other tabs use "submissionId"
+  var submissionIdCol = (tabName === 'Time In Time Out')
+    ? ((colMap['Submission ID']  !== undefined) ? colMap['Submission ID']  : colMap['submissionId'])
+    : colMap['submissionId'];
+
+  var clientNameCol     = colMap['clientName'];
+  var clientIdCol       = colMap['clientId'];
+  var therapistEmailCol = colMap['therapistEmail'];
+
+  // sessionType/billingCode: TITO uses full display names; others use analytics names
+  var sessionTypeCol = (tabName === 'Time In Time Out')
+    ? ((colMap['Type of Session'] !== undefined) ? colMap['Type of Session'] : colMap['sessionType'])
+    : colMap['sessionType'];
+  var billingCodeCol = (tabName === 'Time In Time Out')
+    ? ((colMap['Billing Code']    !== undefined) ? colMap['Billing Code']    : colMap['billingCode'])
+    : colMap['billingCode'];
+
+  // Generates fresh UUIDs for keys not found in TITO (e.g. rows with no TITO counterpart)
+  var localKeyMap = {};
+
+  var corrections = []; // { sheetRow, col (1-based), oldVal, newVal, field }
+
+  for (var ri = 1; ri < data.length; ri++) {
+    var row = data[ri];
+
+    // Skip fully blank rows
+    var hasData = false;
+    for (var bi = 0; bi < row.length; bi++) {
+      if (row[bi] !== '' && row[bi] !== null && row[bi] !== undefined) { hasData = true; break; }
+    }
+    if (!hasData) { continue; }
+
+    var sheetRow = ri + 1; // convert to 1-based sheet row
+
+    // ── Compute dateISO ─────────────────────────────────────────────
+    var currentDateISO = (dateISOCol !== undefined) ? String(row[dateISOCol] || '').trim() : '';
+    var computedDateISO = currentDateISO;
+    if ((!computedDateISO || computedDateISO === '0') && dateCol !== undefined) {
+      computedDateISO = _chd_parseDateToISO(row[dateCol]);
+    }
+
+    // Fix 1: fill dateISO
+    if (dateISOCol !== undefined && computedDateISO && (!currentDateISO || currentDateISO === '0')) {
+      corrections.push({ sheetRow: sheetRow, col: dateISOCol + 1,
+        oldVal: currentDateISO, newVal: computedDateISO, field: 'dateISO' });
+    }
+
+    // ── Session key → UUID ──────────────────────────────────────────
+    var therapistName = (therapistCol !== undefined) ? String(row[therapistCol] || '').trim() : '';
+    var sessionKey    = computedDateISO + '|' + therapistName.toLowerCase();
+    var keyData       = sessionKeyMap[sessionKey];
+    var targetUUID    = '';
+    if (keyData) {
+      targetUUID = keyData.uuid;
+    } else if (computedDateISO) {
+      if (!localKeyMap[sessionKey]) { localKeyMap[sessionKey] = Utilities.getUuid(); }
+      targetUUID = localKeyMap[sessionKey];
+    }
+
+    // Fix 2: fill submissionId
+    if (submissionIdCol !== undefined && targetUUID) {
+      var currentSubId = String(row[submissionIdCol] || '').trim();
+      if (!_mig_isUUID(currentSubId)) {
+        corrections.push({ sheetRow: sheetRow, col: submissionIdCol + 1,
+          oldVal: currentSubId, newVal: targetUUID, field: 'submissionId' });
+      }
+    }
+
+    // Fix 3: fill clientName
+    if (clientNameCol !== undefined && clientInfo.clientName) {
+      var currentClientName = String(row[clientNameCol] || '').trim();
+      if (!currentClientName) {
+        corrections.push({ sheetRow: sheetRow, col: clientNameCol + 1,
+          oldVal: currentClientName, newVal: clientInfo.clientName, field: 'clientName' });
+      }
+    }
+
+    // Fix 3: fill clientId
+    if (clientIdCol !== undefined && clientInfo.clientId) {
+      var currentClientId = String(row[clientIdCol] || '').trim();
+      if (!currentClientId) {
+        corrections.push({ sheetRow: sheetRow, col: clientIdCol + 1,
+          oldVal: currentClientId, newVal: clientInfo.clientId, field: 'clientId' });
+      }
+    }
+
+    // Fix 4: fill therapistEmail
+    if (therapistEmailCol !== undefined && therapistName) {
+      var currentEmail = String(row[therapistEmailCol] || '').trim();
+      if (!currentEmail) {
+        var lookupEmail = therapistEmailMap[therapistName.toLowerCase()];
+        if (lookupEmail) {
+          corrections.push({ sheetRow: sheetRow, col: therapistEmailCol + 1,
+            oldVal: currentEmail, newVal: lookupEmail, field: 'therapistEmail' });
+        }
+      }
+    }
+
+    // Fix 5: fill sessionType and billingCode from TITO (skip TITO itself)
+    if (tabName !== 'Time In Time Out' && keyData) {
+      if (sessionTypeCol !== undefined && keyData.sessionType) {
+        var currentSessType = String(row[sessionTypeCol] || '').trim();
+        if (!currentSessType) {
+          corrections.push({ sheetRow: sheetRow, col: sessionTypeCol + 1,
+            oldVal: currentSessType, newVal: keyData.sessionType, field: 'sessionType' });
+        }
+      }
+      if (billingCodeCol !== undefined && keyData.billingCode) {
+        var currentBillCode = String(row[billingCodeCol] || '').trim();
+        if (!currentBillCode) {
+          corrections.push({ sheetRow: sheetRow, col: billingCodeCol + 1,
+            oldVal: currentBillCode, newVal: keyData.billingCode, field: 'billingCode' });
+        }
+      }
+    }
+  }
+
+  // ── Apply field corrections ─────────────────────────────────────────
+  if (corrections.length === 0) {
+    log('  ' + tabName + ': no field corrections needed');
+  } else {
+    log('  ' + tabName + ': ' + corrections.length + ' field correction(s)' +
+        (isDryRun ? ' [DRY RUN]' : ''));
+    if (!isDryRun) {
+      _chd_backupTab(ss, tabName, log);
+      for (var ci = 0; ci < corrections.length; ci++) {
+        var corr = corrections[ci];
+        try {
+          sheet.getRange(corr.sheetRow, corr.col).setValue(corr.newVal);
+        } catch (e) {
+          log('    ERROR ' + corr.field + ' row ' + corr.sheetRow + ': ' + e.message);
+        }
+      }
+    } else {
+      var sampleMax = corrections.length < 5 ? corrections.length : 5;
+      for (var si = 0; si < sampleMax; si++) {
+        var sc = corrections[si];
+        log('    [DRY RUN] row ' + sc.sheetRow + ' ' + sc.field +
+            ': [' + String(sc.oldVal).substring(0, 30) +
+            '] -> [' + String(sc.newVal).substring(0, 30) + ']');
+      }
+      if (corrections.length > 5) {
+        log('    [DRY RUN] ... and ' + (corrections.length - 5) + ' more');
+      }
+    }
+    result.fixed += corrections.length;
+  }
+
+  // ── Remove duplicates ───────────────────────────────────────────────
+  var dupsResult = _chd_removeDuplicates(ss, sheet, tabName, isDryRun, log);
+  result.dupsRemoved += dupsResult.removed;
+
+  return result;
+}
+
+
+/**
+ * Find and delete duplicate rows in a tab.
+ * Dedup key = all non-analytics column values, null-byte-joined.
+ * Keeps first occurrence; deletes later duplicates bottom-up.
+ */
+function _chd_removeDuplicates(ss, sheet, tabName, isDryRun, log) {
+  var result = { removed: 0 };
+
+  // Re-read after any corrections have been written
+  var data = sheet.getDataRange().getValues();
+  if (data.length < 2) { return result; }
+
+  var headers = data[0];
+
+  // Analytics / metadata columns excluded from the dedup fingerprint
+  var ANALYTICS_COLS = {
+    'submissionId': true, 'Submission ID': true,
+    'clientName': true, 'clientId': true,
+    'therapistEmail': true, 'therapistName': true,
+    'sessionType': true, 'billingCode': true,
+    'isDraft': true, 'payloadHash': true,
+    'submittedAt': true, 'dateISO': true,
+    'manualEntry': true, 'enteredBy': true,
+    'Adjusted End Time': true, 'End Time Adjustment Reason': true
+  };
+
+  var seen         = {};
+  var rowsToDelete = []; // 1-based sheet row indices
+
+  for (var ri = 1; ri < data.length; ri++) {
+    var row = data[ri];
+    // Skip blank rows
+    var hasData = false;
+    for (var bi = 0; bi < row.length; bi++) {
+      if (row[bi] !== '' && row[bi] !== null && row[bi] !== undefined) { hasData = true; break; }
+    }
+    if (!hasData) { continue; }
+
+    var keyParts = [];
+    for (var hi = 0; hi < headers.length; hi++) {
+      var h = String(headers[hi]).trim();
+      if (!h || ANALYTICS_COLS[h]) { continue; }
+      keyParts.push(String(row[hi] !== null && row[hi] !== undefined ? row[hi] : ''));
+    }
+    var dedupKey = keyParts.join('\x00');
+
+    if (seen[dedupKey]) {
+      rowsToDelete.push(ri + 1);
+    } else {
+      seen[dedupKey] = true;
+    }
+  }
+
+  if (rowsToDelete.length === 0) {
+    log('  ' + tabName + ': no duplicate rows');
+    return result;
+  }
+
+  log('  ' + tabName + ': ' + rowsToDelete.length + ' duplicate row(s)' +
+      (isDryRun ? ' [DRY RUN]' : ''));
+
+  if (!isDryRun) {
+    _chd_backupTab(ss, tabName, log);
+    // Delete bottom-up so row indices remain valid
+    for (var di = rowsToDelete.length - 1; di >= 0; di--) {
+      try {
+        sheet.deleteRow(rowsToDelete[di]);
+        log('    deleted row ' + rowsToDelete[di]);
+      } catch (e) {
+        log('    ERROR deleting row ' + rowsToDelete[di] + ': ' + e.message);
+      }
+    }
+  } else {
+    var preview = rowsToDelete.slice(0, 10).join(', ');
+    log('    [DRY RUN] rows: ' + preview + (rowsToDelete.length > 10 ? '...' : ''));
+  }
+
+  result.removed = rowsToDelete.length;
+  return result;
+}
+
+
+/**
+ * Create a CLEANUP_BACKUP copy of a tab before the first write.
+ * No-ops silently if the backup already exists.
+ */
+function _chd_backupTab(ss, tabName, log) {
+  try {
+    var sheet = ss.getSheetByName(tabName);
+    if (!sheet) { return; }
+    var backupName = tabName + ' CLEANUP_BACKUP';
+    if (ss.getSheetByName(backupName)) {
+      log('  Backup exists: ' + backupName + ' (kept)');
+      return;
+    }
+    var backup = sheet.copyTo(ss);
+    backup.setName(backupName);
+    log('  Created backup: ' + backupName);
+  } catch (e) {
+    log('  WARNING: backup failed for ' + tabName + ': ' + e.message);
+  }
 }
