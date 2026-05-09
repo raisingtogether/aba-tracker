@@ -1898,11 +1898,10 @@ function buildEndScreen() {
     S.abc.forEach((inc, i) => abcDiv.appendChild(sumRow(`#${i+1}: ${inc.behavior||'Unknown'}`, inc.fn||'\u2014', false)));
   }
 
-  // Reset notes & word count
-  document.getElementById('session-notes').value = '';
-  document.getElementById('notes-word-count').textContent = '0 / 150 words';
-  document.getElementById('notes-word-count').classList.remove('met');
-  document.getElementById('submit-btn').disabled = true;
+  // Sync word count display with whatever is already in the textarea.
+  // DO NOT clear notes here — if the RBT navigates Back→End again their notes must survive.
+  // Notes are only cleared in newSession() after a successful submit.
+  updateWordCount();
 
   EventBus.emit('session:end', { durationMin: S.durationMin, timeOut: S.timeOut });
 }
@@ -1917,6 +1916,13 @@ function sumRow(lbl, val, isZero) {
 
 // ─── END TIME ADJUSTMENT ──────────────────────────────────────────────
 function showEndTimeModal() {
+  console.log('[Submit] showEndTimeModal called');
+  var modalEl = document.getElementById('modal-end-time');
+  if (!modalEl) {
+    console.error('[Submit] ERROR: modal-end-time element missing from DOM');
+    toast('Error: end-session modal not found. Please refresh the app.', 'err');
+    return;
+  }
   // Reset form
   document.getElementById('end-time-adjust-form').style.display = 'none';
   document.getElementById('adjusted-end-time').value = '';
@@ -1925,7 +1931,8 @@ function showEndTimeModal() {
   S.adjustedEndTime = null;
   S.adjustedEndTimeDate = null;
   S.endTimeAdjustmentReason = '';
-  document.getElementById('modal-end-time').classList.add('active');
+  modalEl.classList.add('active');
+  console.log('[Submit] modal-end-time opened');
 }
 
 function cancelEndTimeModal() {
@@ -2055,13 +2062,19 @@ function updateWordCount() {
 
 // ─── SUBMIT SESSION ───────────────────────────────────────────────────
 function submitSession() {
+  console.log('[Submit] submitSession called');
   S.notes = document.getElementById('session-notes').value;
-  if (countWords(S.notes) < NOTES_MIN_WORDS) {
+  var rawCount      = S.notes.trim() === '' ? 0 : S.notes.trim().split(/\s+/).length;
+  var strippedCount = countWords(S.notes);
+  console.log('[Submit] word count — raw=' + rawCount + ' stripped=' + strippedCount + ' min=' + NOTES_MIN_WORDS);
+  if (strippedCount < NOTES_MIN_WORDS) {
+    console.log('[Submit] BLOCKED — word count below minimum');
     toast('Please write at least ' + NOTES_MIN_WORDS + ' content words in your notes', 'err'); return;
   }
   // Stop timers before showing modal
   if (S.tantrum.running) timerStop();
   if (S.sessInterval) { clearInterval(S.sessInterval); S.sessInterval = null; }
+  console.log('[Submit] word count OK — showing end-time modal');
   // Show end-time modal; actual submission happens in confirmEndNow / confirmAdjustedEnd
   showEndTimeModal();
 }
@@ -2177,6 +2190,13 @@ function showSuccess() {
 function newSession() {
   document.getElementById('success-screen').classList.remove('active');
   resetState();
+  // Reset notes textarea and submit button now that the session is fully done
+  var notesEl = document.getElementById('session-notes');
+  var wcEl    = document.getElementById('notes-word-count');
+  var subBtn  = document.getElementById('submit-btn');
+  if (notesEl) { notesEl.value = ''; }
+  if (wcEl)    { wcEl.textContent = '0 / ' + NOTES_MIN_WORDS + ' words'; wcEl.classList.remove('met'); }
+  if (subBtn)  { subBtn.disabled = true; }
   buildTherapistScreen();
   goTo('therapist');
 }
