@@ -15,10 +15,9 @@
 // ── CONFIGURATION ─────────────────────────────────────────────────────
 var BQ_PROJECT     = 'rt-aba-tracker';
 var BQ_DATASET     = 'aba_tracker';
-var BQ_ADMIN_SHEET = '1VPBADMXvhOww_52O1n2CieTsQB6XCotLt6XdAQsq0ik';
-var BQ_AUDIT_SHEET = '1tf98iS18vV08mQtPV9Vq6hQVkEp6Qg-ebUwHkeRlwaQ';
-// BQ_BATCH_SIZE is unused now that we use NDJSON load jobs instead of streaming insertAll
-var BQ_BATCH_SIZE  = 500;
+var BQ_ADMIN_SHEET  = '1VPBADMXvhOww_52O1n2CieTsQB6XCotLt6XdAQsq0ik';
+var BQ_AUDIT_SHEET  = '1tf98iS18vV08mQtPV9Vq6hQVkEp6Qg-ebUwHkeRlwaQ';
+var BQ_ADMIN_EMAIL  = 'tatiana@raising2gether.org';
 
 // Analytics columns appended to Behavior Data tab
 var BQ_BEHAV_ANALYTICS = [
@@ -74,6 +73,15 @@ function syncAllToBigQuery() {
     if (gc) goalDescMap[gc] = goals[gi].description || '';
   }
 
+  // Build behavior label → admin-defined key lookup (HIGH-1)
+  // behavior_records.behavior_key must match behaviors_reference.key for JOIN to work
+  var behaviorLabelToKey = {};
+  for (var bi = 0; bi < behaviors.length; bi++) {
+    var blabel = String(behaviors[bi].label || '').trim();
+    var bkey   = String(behaviors[bi].key   || '').trim();
+    if (blabel && bkey) behaviorLabelToKey[blabel] = bkey;
+  }
+
   // ── SYNC REFERENCE TABLES (always WRITE_TRUNCATE) ───────────────────
   var refTables = [
     { name: 'therapists',          rows: bqBuildTherapistRows(therapists)          },
@@ -122,7 +130,8 @@ function syncAllToBigQuery() {
 
     for (var rdr = 0; rdr < readers.length; rdr++) {
       try {
-        var rows = readers[rdr].fn(clientSS, client, goalDescMap);
+        // Pass behaviorLabelToKey as 4th arg; bqReadBehaviorRows uses it, others ignore it
+        var rows = readers[rdr].fn(clientSS, client, goalDescMap, behaviorLabelToKey);
         for (var rowi = 0; rowi < rows.length; rowi++) {
           readers[rdr].buf.push(rows[rowi]);
         }
@@ -151,10 +160,34 @@ function syncAllToBigQuery() {
   }
 
   // ── AUDIT LOG ENTRY ─────────────────────────────────────────────────
-  var elapsed  = Math.round((new Date() - startTime) / 1000);
-  var details  = 'Sync complete in ' + elapsed + 's | rows: ' + JSON.stringify(counts);
+  var elapsed = Math.round((new Date() - startTime) / 1000);
+  var details = 'Sync complete in ' + elapsed + 's | rows: ' + JSON.stringify(counts);
   if (errors.length) details += ' | errors: ' + errors.join('; ');
   bqAuditLog('bigquery_sync', details);
+
+  // MEDIUM-7: Log prominent warning if any data table failed (cross-table inconsistency risk)
+  var dataTableNames = ['sessions', 'behavior_records', 'trial_records', 'abc_incidents', 'mastery_log'];
+  for (var ei = 0; ei < errors.length; ei++) {
+    for (var dn = 0; dn < dataTableNames.length; dn++) {
+      if (errors[ei].indexOf(dataTableNames[dn]) >= 0) {
+        Logger.log('WARNING: data table sync failure — cross-table inconsistency possible: ' + errors[ei]);
+      }
+    }
+  }
+
+  // MEDIUM-8: Send email alert on any sync error
+  if (errors.length > 0 && BQ_ADMIN_EMAIL) {
+    try {
+      MailApp.sendEmail(
+        BQ_ADMIN_EMAIL,
+        'RT ABA Tracker \u2014 BigQuery Sync Error',
+        'The following errors occurred during the hourly BigQuery sync:\n\n' +
+          errors.join('\n') + '\n\nSync ran for ' + elapsed + 's.'
+      );
+    } catch (mailErr) {
+      Logger.log('Failed to send sync error email: ' + mailErr.message);
+    }
+  }
 }
 
 
@@ -279,15 +312,16 @@ function bqReadSessionRows(clientSS, client) {
 
   for (var ri = 1; ri < data.length; ri++) {
     var row = data[ri];
-    // Skip empty rows (no date and no submission ID)
-    if (!row[0] && bqStr(cm, row, 'Submission ID') === '') continue;
+    // Skip empty rows — use colMap-based check (LOW-15)
+    if (bqDateCell(cm, row, 'Date') === '' && bqStr(cm, row, 'Submission ID') === '') continue;
 
     result.push({
       submission_id:              bqStr(cm, row, 'Submission ID'),
       date_iso:                   bqStr(cm, row, 'dateISO'),
       date_display:               bqDateCell(cm, row, 'Date'),
       billing_code:               bqStr(cm, row, 'Billing Code'),
-      session_type:               bqStr(cm, row, 'Type of Session'),
+      // MEDIUM-6: fall back to analytics sessionType column for older rows
+      session_type:               bqStr(cm, row, 'Type of Session') || bqStr(cm, row, 'sessionType'),
       time_in:                    bqStr(cm, row, 'Time In'),
       time_out:                   bqStr(cm, row, 'Time Out'),
       duration_min:               bqNum(cm, row, 'Duration (min)'),
@@ -316,7 +350,7 @@ function bqReadSessionRows(clientSS, client) {
  * Read Behavior Data tab → behavior_records table rows.
  * NORMALIZES: one sheet row → one row per behavior (+ 2 tantrum rows).
  */
-function bqReadBehaviorRows(clientSS, client) {
+function bqReadBehaviorRows(clientSS, client, goalDescMap, labelToKeyMap) {
   var sheet = clientSS.getSheetByName('Behavior Data');
   if (!sheet) return [];
   var data = sheet.getDataRange().getValues();
@@ -338,12 +372,15 @@ function bqReadBehaviorRows(clientSS, client) {
   var behaviorCols = [];
   for (var hi = 0; hi < headers.length; hi++) {
     var h = headers[hi];
+    if (!h || h === '') continue;                                          // HIGH-2: skip blank headers
     if (h === 'Date' || h === 'Therapist' || h === 'Setting') continue;
     if (h === 'Tantrum Frequency' || h === 'Tantrum Total (Min)') continue;
     if (analyticsMap[h]) continue;
     if (settingIdx >= 0 && hi <= settingIdx) continue;
     if (tantrumIdx >= 0 && hi >= tantrumIdx) continue;
-    behaviorCols.push({ colIdx: hi, key: bqLabelToKey(h), label: h });
+    // HIGH-1: prefer admin-defined key; fall back to generated camelCase
+    var bkey = (labelToKeyMap && labelToKeyMap[h]) ? labelToKeyMap[h] : bqLabelToKey(h);
+    behaviorCols.push({ colIdx: hi, key: bkey, label: h });
   }
 
   var result = [];
@@ -399,8 +436,8 @@ function bqReadBehaviorRows(clientSS, client) {
       count:          tanFreq, is_draft: isDraft, submitted_at: submittedAt
     });
 
-    // Tantrum total minutes row
-    var tanMinIdx = cm['Tantrum Total (Min)'];
+    // Tantrum total minutes row — LOW-13: tolerate capitalization variant
+    var tanMinIdx = cm['Tantrum Total (Min)'] !== undefined ? cm['Tantrum Total (Min)'] : cm['Tantrum Total (min)'];
     var tanMin    = (tanMinIdx !== undefined && tanMinIdx < row.length) ? (parseInt(row[tanMinIdx]) || 0) : 0;
     result.push({
       submission_id:  submissionId, date_iso: dateISO, date_display: dateDisplay,
@@ -435,8 +472,19 @@ function bqReadTrialRows(clientSS, client, goalDescMap) {
 
   // Parse goal groups from header row.
   // Structure: Date | Setting | Therapist | [GoalCode, Trial 1..N, %]... | analytics...
+  // MEDIUM-10: detect start of goal columns dynamically instead of hardcoding hi2=3
+  var TRIAL_META_COLS = {
+    'Date': true, 'Setting': true, 'Therapist': true, 'Location': true
+  };
+  for (var tai2 = 0; tai2 < BQ_TRIAL_ANALYTICS.length; tai2++) {
+    TRIAL_META_COLS[BQ_TRIAL_ANALYTICS[tai2]] = true;
+  }
+  var hi2 = 0;
+  while (hi2 < headers.length && (TRIAL_META_COLS[headers[hi2]] || headers[hi2] === '')) {
+    hi2++;
+  }
+
   var goalGroups = [];
-  var hi2 = 3; // skip Date, Setting, Therapist
   while (hi2 < headers.length) {
     var hdr = headers[hi2];
     if (trialAnalyticsMap[hdr]) break; // entered analytics section
@@ -614,8 +662,9 @@ function bqReadMasteryRows(clientSS, client) {
       type:            bqStr(cm, row, 'type'),
       code:            bqStr(cm, row, 'code'),
       description:     bqStr(cm, row, 'description'),
-      mastery_date:    bqStr(cm, row, 'masteryDate'),
-      date_iso:        bqStr(cm, row, 'dateISO') || bqStr(cm, row, 'masteryDate'),
+      // HIGH-4: use bqDateCell so Date objects give YYYY-MM-DD, not datetime string
+      mastery_date:    bqDateCell(cm, row, 'masteryDate'),
+      date_iso:        bqDateCell(cm, row, 'dateISO') || bqDateCell(cm, row, 'masteryDate'),
       last_scores:     bqStr(cm, row, 'lastScores'),
       therapist_name:  bqStr(cm, row, 'therapistName'),
       therapist_email: bqStr(cm, row, 'therapistEmail'),
@@ -706,7 +755,9 @@ function bqRowsToNDJSONBlob(rows) {
     for (var key in row) {
       if (row.hasOwnProperty(key)) {
         var v = row[key];
-        if (v !== null && v !== undefined) {
+        // MEDIUM-5: also skip empty strings so BQ treats missing fields as NULL
+        // rather than empty string (makes IS NULL filters work correctly)
+        if (v !== null && v !== undefined && v !== '') {
           obj[key] = v;
         }
       }
@@ -718,12 +769,15 @@ function bqRowsToNDJSONBlob(rows) {
 
 /**
  * Poll a BigQuery job until it reaches DONE state (or times out).
+ * MEDIUM-9: first 5 polls use 1s sleep; subsequent polls use 3s.
+ * LOW-14: after timeout, does one final check before throwing.
  * Throws if the job reports an error or does not complete within ~3 minutes.
  */
 function bqWaitForJob(jobId) {
-  var maxAttempts = 60; // 60 × 3 s = 3-minute ceiling
+  var maxAttempts = 60; // up to ~3-minute ceiling
   for (var attempt = 0; attempt < maxAttempts; attempt++) {
-    Utilities.sleep(3000);
+    // MEDIUM-9: fast polls first, then back off
+    Utilities.sleep(attempt < 5 ? 1000 : 3000);
     var job = BigQuery.Jobs.get(BQ_PROJECT, jobId);
     if (job.status.state === 'DONE') {
       if (job.status.errorResult) {
@@ -731,6 +785,14 @@ function bqWaitForJob(jobId) {
       }
       return; // success
     }
+  }
+  // LOW-14: one final check — job may have completed during the last sleep
+  var finalJob = BigQuery.Jobs.get(BQ_PROJECT, jobId);
+  if (finalJob.status.state === 'DONE') {
+    if (finalJob.status.errorResult) {
+      throw new Error('BQ load job failed (' + jobId + '): ' + finalJob.status.errorResult.message);
+    }
+    return; // job completed just before timeout
   }
   throw new Error('BQ load job timed out after ' + maxAttempts + ' polls: ' + jobId);
 }
@@ -1018,10 +1080,15 @@ function bqNum(cm, row, colName) {
   return isNaN(n) ? null : n;
 }
 
-/** Read a boolean value. */
+/**
+ * Read a boolean value.
+ * HIGH-3: returns null (not false) when the column doesn't exist in the sheet,
+ * so the NDJSON encoder omits the field and BQ stores NULL instead of false.
+ * This lets queries distinguish "no draft flag recorded" from "explicitly false".
+ */
 function bqBool(cm, row, colName) {
   var idx = cm[colName];
-  if (idx === undefined || idx === null) return false;
+  if (idx === undefined || idx === null) return null; // column absent → NULL in BQ
   var v = (idx < row.length) ? row[idx] : null;
   if (v === true || v === 1 || String(v).toLowerCase() === 'true') return true;
   return false;
@@ -1064,7 +1131,8 @@ function bqAuditLog(action, details) {
     }
     sheet.appendRow([new Date().toISOString(), 'BigQuerySync', action, '', details]);
   } catch (e) {
-    Logger.log('bqAuditLog error: ' + e.message);
+    // LOW-12: make audit log write failures visible in the GAS execution log
+    Logger.log('AUDIT LOG WRITE FAILED: ' + e.message);
   }
   Logger.log('[BQ SYNC] ' + action + ': ' + details);
 }
