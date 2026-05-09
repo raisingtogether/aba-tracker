@@ -77,6 +77,10 @@ function doPost(e) {
       result = { success: true, dryRun: fsaResult.dryRun, summary: fsaResult.summary,
         fixed: fsaResult.fixed };
 
+    } else if (data.action === 'migratePins') {
+      var mpResult = migratePins();
+      result = { success: true, migrated: mpResult.migrated };
+
     } else {
       processSession(data);
       result = { success: true };
@@ -131,8 +135,12 @@ function verifyLogin(email, pin, totp) {
     return { valid: false, reason: 'Account is inactive' };
   }
 
-  // Verify 6-digit PIN
-  if (String(therapist.pin || '') !== String(pin)) {
+  // Verify 6-digit PIN (64-char hex = already hashed; shorter = plaintext legacy)
+  var storedPin = String(therapist.pin || '');
+  var pinMatch = storedPin.length === 64
+    ? (hashPin(String(email), String(pin)) === storedPin)
+    : (storedPin === String(pin));
+  if (!pinMatch) {
     return { valid: false, reason: 'Incorrect PIN' };
   }
 
@@ -166,6 +174,48 @@ function verifyLogin(email, pin, totp) {
       role:             role
     }
   };
+}
+
+
+// ── PIN HASHING ───────────────────────────────────────────────────────
+
+/**
+ * SHA-256 hash of "email:pin". Returns 64-char lowercase hex.
+ * Used for storing PINs securely in the Therapists sheet.
+ */
+function hashPin(email, pin) {
+  var input = String(email).toLowerCase().trim() + ':' + String(pin);
+  var bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, input);
+  var hex = '';
+  for (var i = 0; i < bytes.length; i++) {
+    var b = (bytes[i] + 256) & 0xFF;
+    hex += (b < 16 ? '0' : '') + b.toString(16);
+  }
+  return hex;
+}
+
+/**
+ * One-time migration: hash any plaintext PINs stored in the Therapists sheet.
+ * Safe to run multiple times (already-hashed PINs are left unchanged).
+ */
+function migratePins() {
+  var ss = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var therapists = sheetToObjects(ss, 'Therapists');
+  var changed = 0;
+  for (var i = 0; i < therapists.length; i++) {
+    var pin = String(therapists[i].pin || '');
+    if (pin && pin.length !== 64) {
+      therapists[i].pin = hashPin(String(therapists[i].email || ''), pin);
+      changed++;
+    }
+  }
+  if (changed > 0) {
+    objectsToSheet(ss, 'Therapists',
+      ['id', 'name', 'initials', 'color', 'profile', 'email', 'pin',
+       'totpSecret', 'clientIds', 'weeklyHourLimit', 'payRate', 'status', 'role'],
+      therapists);
+  }
+  return { migrated: changed };
 }
 
 
@@ -274,10 +324,11 @@ function getWeeklyHours(therapistName, weekStart, clients) {
       if (rows.length < 2) continue;
 
       var headers = rows[0];
-      var dateCol = -1, therapistCol = -1, durationCol = -1;
+      var dateCol = -1, therapistCol = -1, durationCol = -1, dateISOCol = -1;
       for (var hi = 0; hi < headers.length; hi++) {
         var h = String(headers[hi]).trim().toLowerCase();
         if (h === 'date')           dateCol      = hi;
+        if (h === 'dateiso')        dateISOCol   = hi;
         if (h === 'therapist')      therapistCol = hi;
         if (h === 'duration (min)') durationCol  = hi;
       }
@@ -287,7 +338,11 @@ function getWeeklyHours(therapistName, weekStart, clients) {
         var row = rows[ri];
         var rowTherapist = String(row[therapistCol] || '').trim();
         if (rowTherapist !== therapistName) continue;
-        var rowDate = new Date(row[dateCol]);
+        var rowDateStr = '';
+        if (dateISOCol >= 0) rowDateStr = toDateISO(row[dateISOCol]);
+        if (!rowDateStr && dateCol >= 0) rowDateStr = toDateISO(row[dateCol]);
+        if (!rowDateStr) continue;
+        var rowDate = new Date(rowDateStr);
         if (rowDate >= weekStartDate && rowDate < weekEndDate) {
           totalMin += parseFloat(row[durationCol]) || 0;
         }
@@ -389,10 +444,11 @@ function getBiweeklyHours(periodStart, periodEnd, clients) {
       if (rows.length < 2) continue;
 
       var headers = rows[0];
-      var dateCol = -1, therapistCol = -1, durationCol = -1, billingCol = -1;
+      var dateCol = -1, therapistCol = -1, durationCol = -1, billingCol = -1, dateISOCol = -1;
       for (var hi = 0; hi < headers.length; hi++) {
         var h = String(headers[hi]).trim().toLowerCase();
         if (h === 'date')           dateCol      = hi;
+        if (h === 'dateiso')        dateISOCol   = hi;
         if (h === 'therapist')      therapistCol = hi;
         if (h === 'duration (min)') durationCol  = hi;
         if (h === 'billing code')   billingCol   = hi;
@@ -400,8 +456,12 @@ function getBiweeklyHours(periodStart, periodEnd, clients) {
       if (dateCol < 0 || therapistCol < 0 || durationCol < 0) continue;
 
       for (var ri = 1; ri < rows.length; ri++) {
-        var row     = rows[ri];
-        var rowDate = new Date(row[dateCol]);
+        var row = rows[ri];
+        var rowDateStr = '';
+        if (dateISOCol >= 0) rowDateStr = toDateISO(row[dateISOCol]);
+        if (!rowDateStr && dateCol >= 0) rowDateStr = toDateISO(row[dateCol]);
+        if (!rowDateStr) continue;
+        var rowDate = new Date(rowDateStr);
         if (rowDate < startDate || rowDate >= endDate) continue;
         var tName = String(row[therapistCol] || '').trim();
         if (!tName) continue;
@@ -443,45 +503,71 @@ function getConfig() {
 // ── CONFIG: WRITE ─────────────────────────────────────────────────────
 
 function saveConfig(cfg) {
-  var ss = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(10000); } catch(e) {
+    throw new Error('Concurrent save in progress. Please retry.');
+  }
+  try {
+    var ss = SpreadsheetApp.openById(ADMIN_SHEET_ID);
 
-  if (cfg.therapists !== undefined)
-    objectsToSheet(ss, 'Therapists',
-      ['id', 'name', 'initials', 'color', 'profile', 'email', 'pin',
-       'totpSecret', 'clientIds', 'weeklyHourLimit', 'payRate', 'status', 'role'],
-      cfg.therapists);
+    if (cfg.therapists !== undefined) {
+      // Hash any new/changed plaintext PINs before writing to the sheet
+      var ts = cfg.therapists;
+      for (var ti = 0; ti < ts.length; ti++) {
+        var pin = String(ts[ti].pin || '');
+        if (pin && pin.length !== 64) {
+          ts[ti].pin = hashPin(String(ts[ti].email || ''), pin);
+        }
+      }
+      objectsToSheet(ss, 'Therapists',
+        ['id', 'name', 'initials', 'color', 'profile', 'email', 'pin',
+         'totpSecret', 'clientIds', 'weeklyHourLimit', 'payRate', 'status', 'role'],
+        ts);
+    }
 
-  if (cfg.clients !== undefined)
-    objectsToSheet(ss, 'Clients',
-      ['id', 'name', 'initials', 'sheetId', 'status'],
-      cfg.clients);
+    if (cfg.clients !== undefined)
+      objectsToSheet(ss, 'Clients',
+        ['id', 'name', 'initials', 'sheetId', 'status'],
+        cfg.clients);
 
-  if (cfg.behaviors !== undefined)
-    objectsToSheet(ss, 'Behaviors',
-      ['key', 'label', 'icon', 'color', 'clientIds', 'status'],
-      cfg.behaviors);
+    if (cfg.behaviors !== undefined)
+      objectsToSheet(ss, 'Behaviors',
+        ['key', 'label', 'icon', 'color', 'clientIds', 'status'],
+        cfg.behaviors);
 
-  if (cfg.goals !== undefined)
-    objectsToSheet(ss, 'Goals',
-      ['clientId', 'clientIds', 'code', 'description', 'numTrials', 'status'],
-      cfg.goals);
+    if (cfg.goals !== undefined) {
+      // Server-side duplicate goal code check
+      var seenCodes = {};
+      for (var gi = 0; gi < cfg.goals.length; gi++) {
+        var gc = String(cfg.goals[gi].code || '').toUpperCase().trim();
+        if (!gc) continue;
+        if (seenCodes[gc]) throw new Error('Duplicate goal code: ' + cfg.goals[gi].code);
+        seenCodes[gc] = true;
+      }
+      objectsToSheet(ss, 'Goals',
+        ['clientId', 'clientIds', 'code', 'description', 'numTrials', 'status'],
+        cfg.goals);
+    }
 
-  if (cfg.billing !== undefined)
-    objectsToSheet(ss, 'Billing',
-      ['profile', 'sessionType', 'code'],
-      cfg.billing);
+    if (cfg.billing !== undefined)
+      objectsToSheet(ss, 'Billing',
+        ['profile', 'sessionType', 'code'],
+        cfg.billing);
 
-  if (cfg.authorizations !== undefined)
-    objectsToSheet(ss, 'Authorizations',
-      ['clientId', 'payerType', 'insuranceCompany', 'authorizationNumber',
-       'billingCode', 'authorizedHours', 'startDate', 'endDate',
-       'coInsurance', 'stepUpProgram', 'status', 'unitRate', 'hourlyRate'],
-      cfg.authorizations);
+    if (cfg.authorizations !== undefined)
+      objectsToSheet(ss, 'Authorizations',
+        ['clientId', 'payerType', 'insuranceCompany', 'authorizationNumber',
+         'billingCode', 'authorizedHours', 'startDate', 'endDate',
+         'coInsurance', 'stepUpProgram', 'status', 'unitRate', 'hourlyRate'],
+        cfg.authorizations);
 
-  if (cfg.admins !== undefined)
-    objectsToSheet(ss, 'Admins',
-      ['email', 'name', 'status'],
-      cfg.admins);
+    if (cfg.admins !== undefined)
+      objectsToSheet(ss, 'Admins',
+        ['email', 'name', 'status'],
+        cfg.admins);
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 
@@ -1073,7 +1159,7 @@ function sheetToObjects(ss, tabName) {
     if (row[0] === '' || row[0] === null || row[0] === undefined) continue;
     var obj = {};
     for (var ci = 0; ci < headers.length; ci++) {
-      obj[headers[ci]] = (row[ci] !== null && row[ci] !== undefined) ? String(row[ci]) : '';
+      obj[headers[ci]] = (row[ci] !== null && row[ci] !== undefined) ? row[ci] : '';
     }
     result.push(obj);
   }
@@ -1207,13 +1293,23 @@ function checkBehaviorMastery(ss, clientId, clientName, therapistName, therapist
   if (rows.length < 2) return;
 
   var headers = rows[0];
-  // Find columns: Date=0, Therapist=1, Setting=2, then behaviors until Tantrum Frequency
-  var startCol = 3; // behavior columns start after Date, Therapist, Setting
-  var endCol   = -1;
+  // Derive behavior column range from header names rather than hardcoding startCol=3
+  var META_COLS = {
+    'date': true, 'therapist': true, 'setting': true,
+    'submissionid': true, 'clientname': true, 'clientid': true,
+    'therapistemail': true, 'sessiontype': true, 'billingcode': true,
+    'isdraft': true, 'payloadhash': true, 'submittedat': true, 'dateiso': true,
+    'tantrum frequency': true, 'tantrum total (min)': true
+  };
+  var startCol = -1, endCol = -1;
   for (var hi = 0; hi < headers.length; hi++) {
-    if (String(headers[hi]).trim() === 'Tantrum Frequency') { endCol = hi; break; }
+    var hn  = String(headers[hi]).trim();
+    var hnl = hn.toLowerCase();
+    if (hnl === 'tantrum frequency') { endCol = hi; break; }
+    if (startCol < 0 && hn && !META_COLS[hnl]) startCol = hi;
   }
-  if (endCol < 0) endCol = headers.length; // fallback: use all remaining cols
+  if (startCol < 0) startCol = 3; // absolute fallback
+  if (endCol < 0)   endCol   = headers.length;
 
   // Collect last 8 data rows
   var dataRows = rows.slice(1); // skip header
@@ -1290,10 +1386,26 @@ function writeMasteryLog(ss, type, code, description, masteryDate, lastScores, t
   ];
   var sheet = getOrCreateSheet(ss, 'Mastery Log', masteryHeaders);
   ensureSheetColumns(sheet, masteryHeaders);
-  sheet.appendRow([
-    type, code, description || '', masteryDate, lastScores || '',
-    therapistName || '', therapistEmail || '', clientName || '', clientId || '', masteryDate
-  ]);
+
+  // Build colMap from actual header row (safe against column re-ordering)
+  var hdrs = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  var colMap = {};
+  for (var hi = 0; hi < hdrs.length; hi++) {
+    colMap[String(hdrs[hi]).trim()] = hi;
+  }
+
+  var vals = {
+    'type': type, 'code': code, 'description': description || '',
+    'masteryDate': masteryDate, 'lastScores': lastScores || '',
+    'therapistName': therapistName || '', 'therapistEmail': therapistEmail || '',
+    'clientName': clientName || '', 'clientId': clientId || '', 'dateISO': masteryDate
+  };
+  var row = [];
+  for (var ci = 0; ci < hdrs.length; ci++) {
+    var key = String(hdrs[ci]).trim();
+    row.push(key && vals[key] !== undefined ? vals[key] : '');
+  }
+  sheet.appendRow(row);
 }
 
 
@@ -2100,11 +2212,12 @@ function checkGoalUsage(goalCode, clients) {
       var ss  = SpreadsheetApp.openById(client.sheetId);
       var tab = ss.getSheetByName('Trial Data');
       if (!tab) continue;
-      var vals = tab.getDataRange().getValues();
-      if (vals.length < 2) continue;
+      var lastCol = tab.getLastColumn();
+      var lastRow = tab.getLastRow();
+      if (lastRow < 2 || lastCol < 1) continue;
 
-      // Find columns whose header matches the goal code
-      var headers  = vals[0];
+      // Read header row first; only read full data when goal column exists
+      var headers  = tab.getRange(1, 1, 1, lastCol).getValues()[0];
       var goalCols = [];
       for (var hi = 0; hi < headers.length; hi++) {
         var h = String(headers[hi] || '').trim().toLowerCase();
@@ -2115,10 +2228,11 @@ function checkGoalUsage(goalCode, clients) {
       }
       if (goalCols.length === 0) continue;
 
-      // Count data rows that have any non-empty value in a matched column
+      // Goal column found — read data rows and count non-empty values
+      var dataRows = tab.getRange(2, 1, lastRow - 1, lastCol).getValues();
       var clientCount = 0;
-      for (var ri = 1; ri < vals.length; ri++) {
-        var row = vals[ri];
+      for (var ri = 0; ri < dataRows.length; ri++) {
+        var row = dataRows[ri];
         for (var gi = 0; gi < goalCols.length; gi++) {
           var val = row[goalCols[gi]];
           if (val !== '' && val !== null && val !== undefined) {

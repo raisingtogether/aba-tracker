@@ -2258,7 +2258,11 @@ function openAdmin() {
 
 function checkPin() {
   const pin = document.getElementById('pin-input').value;
-  if (pin === getAdminPin()) {
+  const stored = getAdminPin();
+  const hashed = simpleHash('rtadmin:' + pin);
+  if (hashed === stored || pin === stored) {
+    // Migrate plaintext PIN to hash on first successful use
+    if (pin === stored) localStorage.setItem('adminPin', hashed);
     document.getElementById('modal-pin').classList.remove('active');
     showAdminTab('therapists');
     goTo('admin');
@@ -2649,7 +2653,7 @@ function saveEntity() {
   } else if (type === 'goals') {
     const cbs         = document.querySelectorAll('.ef-goal-client-cb:checked');
     const clientIds   = Array.from(cbs).map(cb => cb.value).join(',');
-    const clientId    = Array.from(cbs).map(cb => cb.value)[0] || '';
+    const clientId    = Array.from(cbs).map(cb => cb.value).sort()[0] || '';
     const code        = document.getElementById('ef-code').value.trim();
     const description = document.getElementById('ef-description').value.trim();
     const numTrials   = document.getElementById('ef-numTrials').value || '5';
@@ -2744,10 +2748,12 @@ async function deleteGoal(idx) {
   persistConfig(raw);
 }
 
+var _renderAdminDebounce = null;
 async function persistConfig(raw) {
   RAW_CONFIG = raw;
   applyConfig(raw, { navigate: false });   // ← stay on admin screen
-  renderAdminList(adminTab);
+  clearTimeout(_renderAdminDebounce);
+  _renderAdminDebounce = setTimeout(function() { renderAdminList(adminTab); }, 500);
 
   if (GAS_URL === 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') {
     toast('Changes saved \u2713', 'ok');
@@ -2792,11 +2798,13 @@ function saveNewPin() {
   const errEl   = document.getElementById('cp-error');
   errEl.textContent = '';
 
-  if (current !== getAdminPin()) { errEl.textContent = 'Current PIN is incorrect'; return; }
+  const stored = getAdminPin();
+  const currentHashed = simpleHash('rtadmin:' + current);
+  if (currentHashed !== stored && current !== stored) { errEl.textContent = 'Current PIN is incorrect'; return; }
   if (!/^\d{4}$/.test(newPin))   { errEl.textContent = 'New PIN must be exactly 4 digits'; return; }
   if (newPin !== confirm)         { errEl.textContent = 'PINs do not match'; return; }
 
-  localStorage.setItem('adminPin', newPin);
+  localStorage.setItem('adminPin', simpleHash('rtadmin:' + newPin));
   closeChangePinModal();
   toast('PIN updated successfully \u2713', 'ok');
 }
@@ -2852,7 +2860,7 @@ function saveAuthTokenCache(token) {
   try {
     localStorage.setItem('googleAuthCache', JSON.stringify({
       token: token,
-      expiry: Date.now() + 24 * 60 * 60 * 1000  // 24-hour max
+      expiry: Date.now() + 55 * 60 * 1000  // 55-min max (tokens valid ~60 min)
     }));
   } catch(e) {}
 }
@@ -3324,6 +3332,18 @@ async function handleGoogleOAuthReturn(preToken) {
 // ── TIER 2 LOGIN ──────────────────────────────────────────────────────
 let _tier2Step = 1; // 1=email+pin, 2=totp
 
+function loginCheckTOTP() {
+  const email = document.getElementById('login-email').value.trim().toLowerCase();
+  if (!email) return;
+  const raw = RAW_CONFIG || DEFAULT_CONFIG;
+  const therapist = (raw.therapists || []).find(function(t) {
+    return String(t.email || '').toLowerCase() === email && (t.status || 'active') !== 'inactive';
+  });
+  if (therapist && therapist.totpSecret) {
+    document.getElementById('login-totp-group').style.display = 'block';
+  }
+}
+
 async function attemptTier2Login() {
   const email  = document.getElementById('login-email').value.trim().toLowerCase();
   const pin    = document.getElementById('login-pin').value.trim();
@@ -3615,6 +3635,8 @@ async function checkWeeklyHours() {
 
 
 // ── MASTERY STATUS ────────────────────────────────────────────────────
+var _masteryCache = null; // { clientId, date, data, ts }
+
 async function loadMasteryStatus() {
   if (!S.client || !S.client.sheetId) {
     document.querySelectorAll('.mastery-loading').forEach(function(el) { el.style.display = 'none'; });
@@ -3624,6 +3646,16 @@ async function loadMasteryStatus() {
     document.querySelectorAll('.mastery-loading').forEach(function(el) { el.style.display = 'none'; });
     return;
   }
+
+  // Return cached result if same client+date and within 5 minutes
+  var today = new Date().toISOString().substring(0, 10);
+  if (_masteryCache && _masteryCache.clientId === S.client.id &&
+      _masteryCache.date === today && (Date.now() - _masteryCache.ts) < 5 * 60 * 1000) {
+    applyMasteryBadges(_masteryCache.data);
+    document.querySelectorAll('.mastery-loading').forEach(function(el) { el.style.display = 'none'; });
+    return;
+  }
+
   try {
     // Build label→key map for behaviors so backend can use it
     var labelToKey = {};
@@ -3644,6 +3676,7 @@ async function loadMasteryStatus() {
     });
     var data = await resp.json();
     if (data.success && data.mastery) {
+      _masteryCache = { clientId: S.client.id, date: today, data: data.mastery, ts: Date.now() };
       applyMasteryBadges(data.mastery);
       var newMasteries = data.mastery.newMasteries || [];
       for (var ni = 0; ni < newMasteries.length; ni++) {
@@ -3934,24 +3967,21 @@ function renderAuthorizationsTab(container) {
 async function loadAuthConsumedHours(group, sheetId) {
   if (!sheetId || GAS_URL === 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') return;
   const sh = group.shared;
-  for (var ri = 0; ri < group.rows.length; ri++) {
-    const row  = group.rows[ri];
+  const promises = group.rows.map(function(row) {
     const code = row.billingCode || '';
-    if (!code) continue;
+    if (!code) return Promise.resolve();
     const rowId  = 'ar-' + (group.clientId || '').replace(/\W/g, '') + '-' + code.replace(/\W/g, '');
     const consEl = document.getElementById('cons-' + rowId);
-    const remEl  = document.getElementById('rem-'  + rowId);
-    const barEl  = document.getElementById('bar-'  + rowId);
-    const pctEl  = document.getElementById('pct-'  + rowId);
-    if (!consEl) continue;
-    try {
-      const resp = await fetch(GAS_URL, {
-        method: 'POST', headers: { 'Content-Type': 'text/plain' }, redirect: 'follow',
-        body: JSON.stringify({ action: 'getConsumedHours', billingCode: code, sheetId: sheetId,
-          startDate: sh.startDate || '', endDate: sh.endDate || '' })
-      });
-      const data = await resp.json();
-      if (!data.success) continue;
+    if (!consEl) return Promise.resolve();
+    const remEl = document.getElementById('rem-' + rowId);
+    const barEl = document.getElementById('bar-' + rowId);
+    const pctEl = document.getElementById('pct-' + rowId);
+    return fetch(GAS_URL, {
+      method: 'POST', headers: { 'Content-Type': 'text/plain' }, redirect: 'follow',
+      body: JSON.stringify({ action: 'getConsumedHours', billingCode: code, sheetId: sheetId,
+        startDate: sh.startDate || '', endDate: sh.endDate || '' })
+    }).then(function(resp) { return resp.json(); }).then(function(data) {
+      if (!data.success) return;
       const consumed  = data.consumed || 0;
       const auth      = parseFloat(row.authorizedHours) || 0;
       const remaining = Math.max(0, auth - consumed);
@@ -3961,8 +3991,9 @@ async function loadAuthConsumedHours(group, sheetId) {
       if (remEl)  remEl.textContent  = remaining.toFixed(1) + 'h';
       if (barEl)  { barEl.className = 'auth-progress-bar ' + cls; barEl.style.width = pct.toFixed(1) + '%'; }
       if (pctEl)  pctEl.textContent = pct.toFixed(0) + '%';
-    } catch(e) { /* skip */ }
-  }
+    }).catch(function() {});
+  });
+  await Promise.all(promises);
 }
 
 function deleteAuthGroup(clientId, authorizationNumber) {
@@ -4595,17 +4626,6 @@ document.addEventListener('visibilitychange', function() {
 
 // ─── START ────────────────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════
-// FEATURE 6 HELPER — auto-fill hourly rate when unit rate changes
-// ══════════════════════════════════════════════════════════════════════
-function authAutoHourly() {
-  var ur = parseFloat(document.getElementById('auth-unitrate').value) || 0;
-  var hrEl = document.getElementById('auth-hourlyrate');
-  if (ur > 0 && hrEl && !hrEl.value) {
-    hrEl.value = (ur * 4).toFixed(2);
-  }
-}
-
-// ══════════════════════════════════════════════════════════════════════
 // FEATURE 4 — MANUAL SESSION ENTRY (Admin only)
 // ══════════════════════════════════════════════════════════════════════
 var _meState = null;
@@ -5096,8 +5116,10 @@ function billingPrevWeek() {
 
 function billingNextWeek() {
   if (!_billingWeekStart) return;
-  _billingWeekStart = new Date(_billingWeekStart);
-  _billingWeekStart.setDate(_billingWeekStart.getDate() + 7);
+  var next = new Date(_billingWeekStart);
+  next.setDate(next.getDate() + 7);
+  if (next > billingGetWeekStart(new Date())) return; // no navigating past current week
+  _billingWeekStart = next;
   billingUpdateWeekDisplay();
 }
 
@@ -5275,7 +5297,7 @@ init();
       <div id="login-lock-msg" class="lock-msg" style="display:none">Account locked. Contact your administrator.</div>
       <div class="form-group">
         <label class="form-lbl">Email</label>
-        <input class="form-ctrl" id="login-email" type="email" placeholder="you@example.com" autocomplete="email">
+        <input class="form-ctrl" id="login-email" type="email" placeholder="you@example.com" autocomplete="email" onblur="loginCheckTOTP()">
       </div>
       <div class="form-group">
         <label class="form-lbl">PIN (6 digits)</label>
