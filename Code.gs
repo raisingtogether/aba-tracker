@@ -91,6 +91,10 @@ function doPost(e) {
       result = { success: true, dryRun: fosiResult.dryRun, summary: fosiResult.summary,
         fixed: fosiResult.fixed, log: fosiResult.log };
 
+    } else if (data.action === 'diagnoseBehaviorHeaders') {
+      var dbhResult = diagnoseBehaviorHeaders();
+      result = { success: true, log: dbhResult.log };
+
     } else {
       processSession(data);
       result = { success: true };
@@ -3047,6 +3051,142 @@ function fixOrphanSubmissionIds(dryRun) {
     fixed: totalFixed,
     log: logLines
   };
+}
+
+
+/**
+ * diagnoseBehaviorHeaders()
+ *
+ * READ-ONLY diagnostic. Opens every active client sheet, reads the full
+ * header row of the "Behavior Data" tab, and logs:
+ *   - Each column index (0-based) + header value; empties flagged with ***EMPTY***
+ *   - The first data row (row 2) values aligned with their headers
+ *
+ * Run from Apps Script editor:
+ *   diagnoseBehaviorHeaders();
+ *
+ * Or via doPost: { action: 'diagnoseBehaviorHeaders' }
+ * Results are in Logger output and returned as { log: [...] }.
+ */
+function diagnoseBehaviorHeaders() {
+  var logLines = [];
+  function log(msg) { Logger.log(msg); logLines.push(msg); }
+
+  log('=== diagnoseBehaviorHeaders started ' + new Date().toISOString() + ' ===');
+
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var clientsTabSheet = ss.getSheetByName('Clients');
+  if (!clientsTabSheet) {
+    log('ERROR: Clients tab not found in active spreadsheet');
+    return { log: logLines };
+  }
+
+  var cData = clientsTabSheet.getDataRange().getValues();
+  if (cData.length < 2) {
+    log('ERROR: Clients tab has no data rows');
+    return { log: logLines };
+  }
+
+  // Build column map for Clients tab
+  var cHeaders = cData[0];
+  var cIdCol = -1, cNameCol = -1, cSheetIdCol = -1, cStatusCol = -1;
+  for (var ci = 0; ci < cHeaders.length; ci++) {
+    var ch = String(cHeaders[ci]).trim().toLowerCase();
+    if (ch === 'id') { cIdCol = ci; }
+    else if (ch === 'name') { cNameCol = ci; }
+    else if (ch === 'sheetid') { cSheetIdCol = ci; }
+    else if (ch === 'status') { cStatusCol = ci; }
+  }
+
+  var clients = [];
+  for (var cr = 1; cr < cData.length; cr++) {
+    var crow = cData[cr];
+    var cstatus = cStatusCol !== -1 ? String(crow[cStatusCol]).trim().toLowerCase() : 'active';
+    if (cstatus !== 'active') { continue; }
+    var cid     = cIdCol     !== -1 ? String(crow[cIdCol]).trim()     : '';
+    var cname   = cNameCol   !== -1 ? String(crow[cNameCol]).trim()   : '';
+    var csheetId = cSheetIdCol !== -1 ? String(crow[cSheetIdCol]).trim() : '';
+    if (cid && csheetId) {
+      clients.push({ id: cid, name: cname, sheetId: csheetId });
+    }
+  }
+
+  log('Found ' + clients.length + ' active client(s)');
+
+  for (var cli = 0; cli < clients.length; cli++) {
+    var client = clients[cli];
+    log('');
+    log('━━━ CLIENT: ' + client.name + ' (' + client.id + ') ━━━');
+    log('    sheetId: ' + client.sheetId);
+
+    var clientSS;
+    try {
+      clientSS = SpreadsheetApp.openById(client.sheetId);
+    } catch (e) {
+      log('    ERROR opening sheet: ' + e.message);
+      continue;
+    }
+
+    var bdSheet = clientSS.getSheetByName('Behavior Data');
+    if (!bdSheet) {
+      log('    Behavior Data tab: NOT FOUND');
+      continue;
+    }
+
+    var lastCol = bdSheet.getLastColumn();
+    var lastRow = bdSheet.getLastRow();
+    log('    Behavior Data: ' + lastRow + ' rows x ' + lastCol + ' cols');
+
+    if (lastCol === 0) {
+      log('    (empty sheet)');
+      continue;
+    }
+
+    // Read header row
+    var headerRange = bdSheet.getRange(1, 1, 1, lastCol);
+    var headers = headerRange.getValues()[0];
+
+    // Log headers
+    log('    ── HEADERS (' + lastCol + ' columns) ──');
+    var emptyCount = 0;
+    for (var hi = 0; hi < headers.length; hi++) {
+      var hval = String(headers[hi]);
+      var htrim = hval.trim();
+      var flag = '';
+      if (htrim === '') {
+        emptyCount++;
+        flag = '  <<<  ***EMPTY***';
+      }
+      log('    col[' + hi + '] (sheet col ' + (hi + 1) + '): "' + htrim + '"' + flag);
+    }
+    if (emptyCount > 0) {
+      log('    !! ' + emptyCount + ' EMPTY HEADER(S) detected !!');
+    } else {
+      log('    (no empty headers)');
+    }
+
+    // Read first data row (row 2) if it exists
+    if (lastRow < 2) {
+      log('    ── ROW 2: (no data rows) ──');
+      continue;
+    }
+
+    var row2Range = bdSheet.getRange(2, 1, 1, lastCol);
+    var row2 = row2Range.getValues()[0];
+
+    log('    ── ROW 2 (first data row) ──');
+    for (var ri = 0; ri < row2.length; ri++) {
+      var rval = row2[ri];
+      var rstr = (rval instanceof Date) ? rval.toISOString() : String(rval);
+      var rhdr = String(headers[ri]).trim();
+      var rempty = (rhdr === '') ? '  [EMPTY HEADER]' : '';
+      log('    col[' + ri + '] "' + rhdr + '"' + rempty + ' = ' + rstr);
+    }
+  }
+
+  log('');
+  log('=== diagnoseBehaviorHeaders complete ===');
+  return { log: logLines };
 }
 
 
