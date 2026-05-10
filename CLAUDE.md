@@ -132,6 +132,19 @@ All sheet writes use `ensureSheetColumns` + colMap-based row building. **Never h
 
 ---
 
+## Mastery System — Final Status (May 10, 2026)
+
+- Behavior mastery: BCBA-reviewed recommendation system working end-to-end
+- 10 consecutive sessions ≤1 + 2+ settings → `'recommended'`; 1 setting → `'pendingGeneralization'`
+- Approve/Dismiss buttons functional (Version 9 deployment)
+- Duplicate prevention: `getMasteryLogStatus` returns `'recommended'` (not `''`) when entry exists but status column missing — blocks writes on every submit
+- Backfill: existing entries auto-set to `'recommended'` (behaviors) or `'confirmed'` (goals) when status column is first created by `writeMasteryLog`
+- Clean Dupes button in mastery report panel for manual dedup of older rows
+- `getMasteryReport` entry objects include `sheetId` — frontend uses it directly (no `CFG.CLIENTS` lookup)
+- Goal mastery: separate system (80% × 5 sessions), auto-confirmed, unchanged
+
+---
+
 ## Behavior Mastery System (Updated May 2026)
 
 - Changed from auto-declaration to BCBA-reviewed recommendation system
@@ -191,6 +204,12 @@ All sheet writes use `ensureSheetColumns` + colMap-based row building. **Never h
 - ABC pill tap rebuilding DOM (confirmed not a bug — `setABCField` only updates CSS)
 - `authAutoHourly` removed (referenced non-existent DOM IDs `auth-unitrate`/`auth-hourlyrate`)
 
+### Bugs Resolved May 10, 2026
+- **Mastery Report crash** "Cannot read properties of null (reading 'clientName')" — root cause: `getMasteryReport` two-pass refactor stored entries directly in `latestByKey` but build loop still accessed `latestByKey[key].entry` (stale pattern from old `{ rowIndex, entry }` shape) → every entry was `undefined`
+- **Mastery Approve/Dismiss "Invalid argument: id"** — root cause: frontend was looking up `sheetId` via `CFG.CLIENTS.filter(c => c.id === ent.clientId)` which could fail on whitespace/case mismatch; fixed by returning `sheetId` in each `getMasteryReport` entry object and using `ent.sheetId` directly
+- **Mastery duplicates (6 elopement entries)** — root cause: `getMasteryLogStatus` returned `''` when status column was missing but an entry existed, causing `checkBehaviorMastery` to call `writeMasteryLog` on every session submit; fixed by returning `'recommended'` instead, plus one-time backfill in `writeMasteryLog` when status column is newly created
+- **getMasteryReport cross-month dedup** — inline dedup was date-filtered (only saw duplicates in same month); replaced with two-pass: PASS 1 scans all rows regardless of date to delete physical duplicates, PASS 2 applies date filter for display
+
 ---
 
 ## Deployment notes
@@ -201,6 +220,14 @@ All sheet writes use `ensureSheetColumns` + colMap-based row building. **Never h
 - Git credential: use Personal Access Token, not password
 - **GAS deploy**: Deploy → New Deployment → Web App; Execute as Me; Anyone can access
 - After Code.gs changes: always create a new deployment version (don't reuse old URL)
+
+### GAS Deployment (CRITICAL)
+Code.gs changes require TWO steps to take effect:
+1. Copy from GitHub Raw → paste in script.google.com → Cmd+S
+2. Deploy → Manage deployments → edit (pencil icon) → Version: New version → Deploy
+
+Without step 2, the web app continues running the old version.
+**Current deployment**: Version 9, URL: `https://script.google.com/macros/s/AKfycbz8AJ-6WIoNdBNh-z3iuT9BXNnw3r95gTqONo78wpTJDXQ9QPGaIp_fmR6gjZlB2yQf/exec`
 
 ---
 

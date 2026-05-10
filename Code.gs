@@ -1741,7 +1741,6 @@ function cleanDuplicateMasteries(clients) {
  * matching mastery log row.
  */
 function approveBehaviorMastery(clientSheetId, clientId, behaviorKey, approverEmail, approverRole) {
-  Logger.log('MASTERY ACTION approve: sheetId=[' + String(clientSheetId) + '] len=' + String(clientSheetId ? String(clientSheetId).length : 0) + ' clientId=[' + String(clientId) + '] key=[' + String(behaviorKey) + '] role=[' + String(approverRole) + ']');
   if (!approverRole || (approverRole !== 'Admin' && approverRole !== 'BCBA')) {
     return { success: false, error: 'Unauthorized: BCBA or Admin role required' };
   }
@@ -1807,7 +1806,6 @@ function approveBehaviorMastery(clientSheetId, clientId, behaviorKey, approverEm
  * Sets status = 'dismissed' on the most recent matching mastery log row.
  */
 function dismissBehaviorMastery(clientSheetId, clientId, behaviorKey, approverEmail, approverRole) {
-  Logger.log('MASTERY ACTION dismiss: sheetId=[' + String(clientSheetId) + '] len=' + String(clientSheetId ? String(clientSheetId).length : 0) + ' clientId=[' + String(clientId) + '] key=[' + String(behaviorKey) + '] role=[' + String(approverRole) + ']');
   if (!approverRole || (approverRole !== 'Admin' && approverRole !== 'BCBA')) {
     return { success: false, error: 'Unauthorized: BCBA or Admin role required' };
   }

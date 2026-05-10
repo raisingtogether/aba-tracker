@@ -3880,7 +3880,6 @@ function renderMasteryReportResults(entries, year, month) {
         var bhClientId = esc(ent.clientId || '');
         // Use sheetId returned directly by server in the mastery entry (no CFG.CLIENTS lookup needed)
         var bhSheetId = esc((ent.sheetId || '').trim());
-        console.log('[MASTERY RENDER] ent.clientId:', ent.clientId, 'ent.sheetId:', ent.sheetId, 'bhSheetId:', bhSheetId, 'bhKey:', bhKey);
         actionBtns = '<span style="margin-left:8px">' +
           '<button class="btn btn-sm" style="padding:2px 10px;font-size:11px;background:#16A34A;color:white;border-radius:100px;border:none;cursor:pointer" ' +
             'onclick="masteryApprove(\'' + bhSheetId + '\',\'' + bhClientId + '\',\'' + bhKey + '\',this)">Approve</button> ' +
@@ -3913,7 +3912,6 @@ function renderMasteryReportResults(entries, year, month) {
 async function masteryApprove(clientSheetId, clientId, behaviorKey, btn) {
   if (!AUTH.user) { toast('Not authenticated', 'err'); return; }
   if (AUTH.role !== 'admin' && AUTH.role !== 'bcba') { toast('Only BCBA or Admin can approve mastery', 'err'); return; }
-  console.log('[MASTERY] action: approveBehaviorMastery sheetId:', clientSheetId, 'length:', clientSheetId ? clientSheetId.length : 'null', 'clientId:', clientId, 'key:', behaviorKey);
   btn.disabled = true;
   btn.textContent = 'Saving\u2026';
   try {
@@ -3929,7 +3927,6 @@ async function masteryApprove(clientSheetId, clientId, behaviorKey, btn) {
       })
     });
     var data = await resp.json();
-    console.log('[MASTERY] response:', JSON.stringify(data));
     if (data.success) {
       toast('Mastery confirmed', 'ok');
       _masteryReportData = null;
@@ -3939,7 +3936,6 @@ async function masteryApprove(clientSheetId, clientId, behaviorKey, btn) {
       btn.disabled = false; btn.textContent = 'Approve';
     }
   } catch(e) {
-    console.log('[MASTERY] error:', e);
     toast('Error: ' + e.message, 'err');
     btn.disabled = false; btn.textContent = 'Approve';
   }
@@ -3948,7 +3944,6 @@ async function masteryApprove(clientSheetId, clientId, behaviorKey, btn) {
 async function masteryDismiss(clientSheetId, clientId, behaviorKey, btn) {
   if (!AUTH.user) { toast('Not authenticated', 'err'); return; }
   if (AUTH.role !== 'admin' && AUTH.role !== 'bcba') { toast('Only BCBA or Admin can approve mastery', 'err'); return; }
-  console.log('[MASTERY] action: dismissBehaviorMastery sheetId:', clientSheetId, 'length:', clientSheetId ? clientSheetId.length : 'null', 'clientId:', clientId, 'key:', behaviorKey);
   btn.disabled = true;
   btn.textContent = 'Saving\u2026';
   try {
@@ -3964,7 +3959,6 @@ async function masteryDismiss(clientSheetId, clientId, behaviorKey, btn) {
       })
     });
     var data = await resp.json();
-    console.log('[MASTERY] response:', JSON.stringify(data));
     if (data.success) {
       toast('Mastery dismissed', 'ok');
       _masteryReportData = null;
@@ -3974,7 +3968,6 @@ async function masteryDismiss(clientSheetId, clientId, behaviorKey, btn) {
       btn.disabled = false; btn.textContent = 'Dismiss';
     }
   } catch(e) {
-    console.log('[MASTERY] error:', e);
     toast('Error: ' + e.message, 'err');
     btn.disabled = false; btn.textContent = 'Dismiss';
   }
