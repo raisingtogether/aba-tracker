@@ -1461,7 +1461,12 @@ function getMasteryLogStatus(ss, type, code, preloadedData) {
   if (lastMatchRow < 0) return null;
 
   var statusColIdx = colMap['status'];
-  if (statusColIdx === undefined) return ''; // old schema without status col
+  if (statusColIdx === undefined) {
+    // Status column doesn't exist yet (old schema). An entry DOES exist (lastMatchRow >= 0).
+    // Return 'recommended' so checkBehaviorMastery does NOT write a duplicate.
+    // The column will be created (with backfill) the next time writeMasteryLog runs.
+    return 'recommended';
+  }
 
   var existingStatus = String(data[lastMatchRow][statusColIdx] || '').trim();
   // Backfill: old entries with empty status — use type-appropriate default
@@ -1489,13 +1494,41 @@ function writeMasteryLog(ss, type, code, description, masteryDate, lastScores, t
     'status', 'approvedBy', 'approvalDate', 'settingsObserved'
   ];
   var sheet = getOrCreateSheet(ss, 'Mastery Log', masteryHeaders);
+
+  // Check whether the status column exists BEFORE ensureSheetColumns (for backfill detection)
+  var priorLastCol = sheet.getLastColumn();
+  var statusExistedBefore = false;
+  if (priorLastCol > 0) {
+    var priorHeaders = sheet.getRange(1, 1, 1, priorLastCol).getValues()[0];
+    for (var pi = 0; pi < priorHeaders.length; pi++) {
+      if (String(priorHeaders[pi]).trim() === 'status') { statusExistedBefore = true; break; }
+    }
+  }
+
+  // Ensure all 14 columns exist (adds status, approvedBy, approvalDate, settingsObserved if missing)
   ensureSheetColumns(sheet, masteryHeaders);
 
-  // Build colMap from actual header row (safe against column re-ordering)
+  // Build colMap from actual header row after potential column additions
   var hdrs = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
   var colMap = {};
   for (var hi = 0; hi < hdrs.length; hi++) {
     colMap[String(hdrs[hi]).trim()] = hi;
+  }
+
+  // FIX 3: Backfill status for all existing rows when the status column was just created.
+  // Runs once — only when statusExistedBefore is false but the column now exists.
+  if (!statusExistedBefore && colMap['status'] !== undefined) {
+    var allData = sheet.getDataRange().getValues();
+    var statusColIdx = colMap['status'];
+    var typeColIdx   = colMap['type'];
+    for (var bri = 1; bri < allData.length; bri++) {
+      var bCellStatus = String(allData[bri][statusColIdx] || '').trim();
+      if (!bCellStatus) {
+        var bRowType = typeColIdx !== undefined ? String(allData[bri][typeColIdx] || '').trim() : '';
+        var bDefault = (bRowType === 'goal') ? 'confirmed' : 'recommended';
+        sheet.getRange(bri + 1, statusColIdx + 1).setValue(bDefault);
+      }
+    }
   }
 
   var vals = {
