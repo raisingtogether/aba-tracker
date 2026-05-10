@@ -3075,9 +3075,13 @@ function diagnoseBehaviorHeaders() {
   log('=== diagnoseBehaviorHeaders started ' + new Date().toISOString() + ' ===');
 
   var ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (!ss) {
+    log('ERROR: getActiveSpreadsheet() returned null — run this from the bound spreadsheet script editor');
+    return { log: logLines };
+  }
   var clientsTabSheet = ss.getSheetByName('Clients');
   if (!clientsTabSheet) {
-    log('ERROR: Clients tab not found in active spreadsheet');
+    log('ERROR: Clients tab not found in active spreadsheet (name="' + ss.getName() + '")');
     return { log: logLines };
   }
 
@@ -3133,7 +3137,7 @@ function diagnoseBehaviorHeaders() {
 
     var bdSheet = clientSS.getSheetByName('Behavior Data');
     if (!bdSheet) {
-      log('    Behavior Data tab: NOT FOUND');
+      log('    Behavior Data tab not found for ' + client.name + ' (sheetId=' + client.sheetId + ')');
       continue;
     }
 
