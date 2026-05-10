@@ -3430,30 +3430,50 @@ function repairCamilaBehaviorData(dryRun) {
         note: 'B: submissionId ← col[13] UUID' });
 
     } else { // rowType === 'C'
-      // col[13] = submissionId UUID (in OFF Task col — shifted left 1)
-      // col[14] = clientName (in submissionId col — shifted left 1)
-      // col[15] = clientId "C1" (in clientName col)
-      // col[16..22] = therapistEmail..dateISO (each 1 col too early)
-      // col[23] = blank
+      // Type C has TWO overlapping problems:
+      //   1. col[13] (OFF Task hdr) = submissionId UUID — same as Type B
+      //   2. clientName was never written to this row, so col[14] (submissionId hdr)
+      //      has the cleanup-generated duplicate UUID (DISCARD), and from col[15]
+      //      onward all analytics are shifted LEFT by one extra position.
       //
-      // Fix BEFORE deletion:
-      //   sheetCol 14 ← 0      (OFF Task = 0, old session before OFF Task was tracked)
-      //   sheetCol 15 ← v13    (submissionId UUID)
-      //   sheetCol 16 ← v14    (clientName)
-      //   sheetCol 17 ← row[15] (clientId "C1")
-      //   sheetCol 18..24 ← row[16..22] (therapistEmail..dateISO)
-      corrections.push({ sheetRow: sheetRow, sheetCol: 14, newVal: 0,       note: 'C: OFF Task=0' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 15, newVal: v13,     note: 'C: submissionId' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 16, newVal: v14,     note: 'C: clientName' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 17, newVal: row[15], note: 'C: clientId' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 18, newVal: row[16], note: 'C: therapistEmail' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 19, newVal: row[17], note: 'C: sessionType' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 20, newVal: row[18], note: 'C: billingCode' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 21, newVal: row[19], note: 'C: isDraft' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 22, newVal: row[20], note: 'C: payloadHash' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 23, newVal: row[21], note: 'C: submittedAt' });
+      // Current layout:
+      //   col[12] (EMPTY hdr)        = 0  — OFF Task count (will be deleted)
+      //   col[13] (OFF Task hdr)     = original submissionId UUID
+      //   col[14] (submissionId hdr) = cleanup duplicate UUID — DISCARD
+      //   col[15] (clientName hdr)   = "C1" (clientId value; clientName missing)
+      //   col[16] (clientId hdr)     = therapistEmail value
+      //   col[17] (therapistEmail)   = sessionType value
+      //   col[18] (sessionType)      = billingCode value
+      //   col[19] (billingCode)      = wrong value (97153 duplicate); isDraft = false
+      //   col[20] (isDraft)          = payloadHash value
+      //   col[21] (payloadHash)      = submittedAt value
+      //   col[22] (submittedAt)      = dateISO value
+      //   col[23] (dateISO)          = duplicate dateISO (col[22] is authoritative)
+      //
+      // Fix BEFORE deletion (sheetCol = 1-indexed):
+      //   sheetCol 14 ← 0             (OFF Task = 0)
+      //   sheetCol 15 ← v13           (submissionId = original UUID from col[13])
+      //   sheetCol 16 ← client.name   (clientName hardcoded — was never in row)
+      //   sheetCol 17 ← row[15]       (clientId = "C1")
+      //   sheetCol 18 ← row[16]       (therapistEmail)
+      //   sheetCol 19 ← row[17]       (sessionType)
+      //   sheetCol 20 ← row[18]       (billingCode)
+      //   sheetCol 21 ← false         (isDraft — col[19] has wrong value, hardcode)
+      //   sheetCol 22 ← row[20]       (payloadHash)
+      //   sheetCol 23 ← row[21]       (submittedAt)
+      //   sheetCol 24 ← row[22]       (dateISO)
+      corrections.push({ sheetRow: sheetRow, sheetCol: 14, newVal: 0,           note: 'C: OFF Task=0' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 15, newVal: v13,         note: 'C: submissionId ← col[13]' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 16, newVal: client.name, note: 'C: clientName (hardcoded)' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 17, newVal: row[15],     note: 'C: clientId ← col[15]' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 18, newVal: row[16],     note: 'C: therapistEmail ← col[16]' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 19, newVal: row[17],     note: 'C: sessionType ← col[17]' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 20, newVal: row[18],     note: 'C: billingCode ← col[18]' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 21, newVal: false,       note: 'C: isDraft=false (hardcoded)' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 22, newVal: row[20],     note: 'C: payloadHash ← col[20]' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 23, newVal: row[21],     note: 'C: submittedAt ← col[21]' });
       var dateISOVal = (lastCol >= 24 && row[22] !== undefined) ? row[22] : '';
-      corrections.push({ sheetRow: sheetRow, sheetCol: 24, newVal: dateISOVal, note: 'C: dateISO' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 24, newVal: dateISOVal,  note: 'C: dateISO ← col[22]' });
     }
   }
 
