@@ -1564,9 +1564,10 @@ function getMasteryReport(year, month, clients) {
 
   for (var ci = 0; ci < clients.length; ci++) {
     var client = clients[ci];
-    if (!client.sheetId) continue;
+    if (!client || !client.sheetId) continue;
     try {
       var ss    = SpreadsheetApp.openById(client.sheetId);
+      if (!ss) continue;
       var sheet = ss.getSheetByName('Mastery Log');
       if (!sheet) continue;
       var data  = sheet.getDataRange().getValues();
@@ -1661,7 +1662,8 @@ function getMasteryReport(year, month, clients) {
   var entries = [];
   var keys = Object.keys(latestByKey);
   for (var ki = 0; ki < keys.length; ki++) {
-    entries.push(latestByKey[keys[ki]].entry);
+    var e = latestByKey[keys[ki]];
+    if (e && typeof e === 'object') { entries.push(e); }
   }
   return entries;
 }

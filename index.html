@@ -3859,6 +3859,7 @@ function renderMasteryReportResults(entries, year, month) {
   var byClient = {};
   for (var i = 0; i < entries.length; i++) {
     var e = entries[i];
+    if (!e || typeof e !== 'object') continue;
     var ckey = e.clientName || 'Unknown';
     if (!byClient[ckey]) byClient[ckey] = [];
     byClient[ckey].push(e);
