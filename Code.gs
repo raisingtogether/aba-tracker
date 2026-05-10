@@ -1225,9 +1225,11 @@ function objectsToSheet(ss, tabName, headers, objects) {
 
 /**
  * Check goal and behavior mastery for a client.
- * Goal mastery: 80%+ for 5 consecutive sessions.
- * Behavior mastery: <=1 occurrence for 8 consecutive sessions.
- * Returns: { goals: { code: bool }, behaviors: { key: bool }, newMasteries: [...] }
+ * Goal mastery: 80%+ for 5 consecutive sessions → status 'confirmed'.
+ * Behavior mastery: <=1 occurrence for 10 consecutive sessions →
+ *   'recommended' (2+ distinct settings observed) or
+ *   'pendingGeneralization' (only 1 setting observed).
+ * Returns: { goals: { code: bool }, behaviors: { key: statusString }, newMasteries: [...] }
  */
 function getMasteryStatus(clientSheetId, clientId, clientName, therapistName, therapistEmail, behaviorLabelToKey) {
   var result = { goals: {}, behaviors: {}, newMasteries: [] };
@@ -1333,12 +1335,23 @@ function checkBehaviorMastery(ss, clientId, clientName, therapistName, therapist
   if (startCol < 0) startCol = 3; // absolute fallback
   if (endCol < 0)   endCol   = headers.length;
 
-  // Need at least 10 data rows for mastery check
+  // Need at least 10 consecutive data rows for mastery check
   var dataRows = rows.slice(1); // skip header
   if (dataRows.length < 10) return;
   var last10 = dataRows.slice(-10);
 
   var today = new Date().toISOString().substring(0, 10);
+
+  // Pre-load Mastery Log data once before iterating behaviors.
+  // Avoids N separate sheet reads (one per mastered behavior) inside the loop.
+  var masteryLogData = null;
+  var masteryLogSheet = ss.getSheetByName('Mastery Log');
+  if (masteryLogSheet) {
+    try {
+      var mlData = masteryLogSheet.getDataRange().getValues();
+      if (mlData && mlData.length >= 2) { masteryLogData = mlData; }
+    } catch(e) {}
+  }
 
   for (var ci = startCol; ci < endCol; ci++) {
     var label = String(headers[ci] || '').trim();
@@ -1368,18 +1381,23 @@ function checkBehaviorMastery(ss, clientId, clientName, therapistName, therapist
 
     result.behaviors[key] = masteryStatus;
 
-    var existingStatus = getMasteryLogStatus(ss, 'behavior', key);
+    // Pass pre-loaded data to avoid re-reading the Mastery Log sheet per behavior
+    var existingStatus = getMasteryLogStatus(ss, 'behavior', key, masteryLogData);
     // Only write if no existing active entry (allow re-entry after 'dismissed')
     if (existingStatus === null || existingStatus === '') {
       var scoresStr = scores.join(', ');
       var settingsStr = settingsList.join(', ');
       writeMasteryLog(ss, 'behavior', key, label, today, scoresStr, therapistName, therapistEmail, clientName, clientId, masteryStatus, settingsStr);
+      // Invalidate cache after write so subsequent behaviors in this loop see updated data
+      masteryLogData = null;
       result.newMasteries.push({ type: 'behavior', code: key, description: label, masteryDate: today, lastScores: scoresStr, status: masteryStatus, settingsObserved: settingsStr });
     } else if (existingStatus === 'dismissed') {
       // Regression recovered — write a fresh entry
       var scoresStr2 = scores.join(', ');
       var settingsStr2 = settingsList.join(', ');
       writeMasteryLog(ss, 'behavior', key, label, today, scoresStr2, therapistName, therapistEmail, clientName, clientId, masteryStatus, settingsStr2);
+      // Invalidate cache after write
+      masteryLogData = null;
       result.newMasteries.push({ type: 'behavior', code: key, description: label, masteryDate: today, lastScores: scoresStr2, status: masteryStatus, settingsObserved: settingsStr2 });
     }
     // If existingStatus is 'recommended', 'pendingGeneralization', or 'confirmed' — skip
@@ -1402,14 +1420,28 @@ function toDateISO(val) {
 /**
  * Returns the status of the most recent mastery log entry for type+code,
  * or null if no entry exists.
- * Status values: 'recommended', 'pendingGeneralization', 'confirmed', 'dismissed', ''
- * Backfills empty status fields to 'recommended' on read.
+ * Status values: 'recommended', 'pendingGeneralization', 'confirmed', 'dismissed'
+ * Backfills empty status fields using type-appropriate default on read.
+ *
+ * @param {Spreadsheet} ss
+ * @param {string}      type  - 'behavior' or 'goal'
+ * @param {string}      code  - behavior key or goal code
+ * @param {Array}       [preloadedData] - optional pre-loaded sheet.getDataRange().getValues();
+ *                              if provided, skips the sheet read (performance optimization).
+ *                              When provided, live backfill writes are skipped (caller must
+ *                              handle backfill separately if needed).
  */
-function getMasteryLogStatus(ss, type, code) {
-  var sheet = ss.getSheetByName('Mastery Log');
-  if (!sheet) return null;
-  var data = sheet.getDataRange().getValues();
-  if (data.length < 2) return null;
+function getMasteryLogStatus(ss, type, code, preloadedData) {
+  var sheet, data;
+  if (preloadedData) {
+    data = preloadedData;
+    sheet = null; // no live backfill when using cached data
+  } else {
+    sheet = ss.getSheetByName('Mastery Log');
+    if (!sheet) return null;
+    data = sheet.getDataRange().getValues();
+  }
+  if (!data || data.length < 2) return null;
   var headers = data[0];
   var colMap = {};
   for (var hi = 0; hi < headers.length; hi++) {
@@ -1432,12 +1464,15 @@ function getMasteryLogStatus(ss, type, code) {
   if (statusColIdx === undefined) return ''; // old schema without status col
 
   var existingStatus = String(data[lastMatchRow][statusColIdx] || '').trim();
-  // Backfill: old entries with empty status → write 'recommended'
+  // Backfill: old entries with empty status — use type-appropriate default
   if (!existingStatus) {
-    try {
-      sheet.getRange(lastMatchRow + 1, statusColIdx + 1).setValue('recommended');
-    } catch(e) {}
-    existingStatus = 'recommended';
+    existingStatus = (type === 'goal') ? 'confirmed' : 'recommended';
+    if (sheet) {
+      // Only write backfill when using live sheet data (not preloaded cache)
+      try {
+        sheet.getRange(lastMatchRow + 1, statusColIdx + 1).setValue(existingStatus);
+      } catch(e) {}
+    }
   }
   return existingStatus;
 }
@@ -1489,8 +1524,8 @@ function writeMasteryLog(ss, type, code, description, masteryDate, lastScores, t
  */
 function getMasteryReport(year, month, clients) {
   if (!clients || !clients.length) return [];
-  var entries = [];
-  var seen    = {};  // dedup key: clientId|type|code
+  // latestByKey: maps dedupKey → { rowIndex, entry } — always keeps the last (most recent) row
+  var latestByKey = {};
   var monthStr = String(month).length < 2 ? ('0' + month) : String(month);
   var prefix   = year + '-' + monthStr;
 
@@ -1515,10 +1550,7 @@ function getMasteryReport(year, month, clients) {
         var row = data[ri];
         var entryType = String(row[colMap['type']] || '').trim();
         var entryCode = String(row[colMap['code']] || '').trim();
-
-        // Deduplicate: skip if we already have an entry for this client+type+code
-        var dedupKey = (client.id || '') + '|' + entryType + '|' + entryCode;
-        if (seen[dedupKey]) continue;
+        if (!entryType || !entryCode) continue;
 
         // Normalize dateISO — Google Sheets may store ISO strings as Date objects
         var dateISO = toDateISO(colMap['dateISO'] !== undefined ? row[colMap['dateISO']] : '');
@@ -1530,10 +1562,12 @@ function getMasteryReport(year, month, clients) {
         var masteryDateVal = colMap['masteryDate'] !== undefined ? toDateISO(row[colMap['masteryDate']]) : dateISO;
 
         var entryStatus = colMap['status'] !== undefined ? String(row[colMap['status']] || '').trim() : '';
-        if (!entryStatus) { entryStatus = 'recommended'; }
+        // Default status by type: goal entries are auto-confirmed; behavior entries default to recommended
+        if (!entryStatus) {
+          entryStatus = (entryType === 'goal') ? 'confirmed' : 'recommended';
+        }
 
-        seen[dedupKey] = true;
-        entries.push({
+        var entry = {
           clientId:        client.id || '',
           clientName:      client.name || '',
           type:            entryType,
@@ -1547,11 +1581,22 @@ function getMasteryReport(year, month, clients) {
           settingsObserved:colMap['settingsObserved'] !== undefined ? String(row[colMap['settingsObserved']] || '').trim() : '',
           approvedBy:      colMap['approvedBy']       !== undefined ? String(row[colMap['approvedBy']]       || '').trim() : '',
           approvalDate:    colMap['approvalDate']     !== undefined ? String(row[colMap['approvalDate']]     || '').trim() : ''
-        });
+        };
+
+        // Keep LAST row per dedupKey (most recent entry wins — handles dismiss+recovery)
+        var dedupKey = (client.id || '') + '|' + entryType + '|' + entryCode;
+        latestByKey[dedupKey] = { rowIndex: ri, entry: entry };
       }
     } catch(e) {
       // Skip inaccessible client sheets
     }
+  }
+
+  // Build output array from the latest entry per key
+  var entries = [];
+  var keys = Object.keys(latestByKey);
+  for (var ki = 0; ki < keys.length; ki++) {
+    entries.push(latestByKey[keys[ki]].entry);
   }
   return entries;
 }
