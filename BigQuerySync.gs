@@ -659,17 +659,21 @@ function bqReadMasteryRows(clientSS, client) {
     var row = data[ri];
     if (!row[0]) continue;
     result.push({
-      type:            bqStr(cm, row, 'type'),
-      code:            bqStr(cm, row, 'code'),
-      description:     bqStr(cm, row, 'description'),
+      type:             bqStr(cm, row, 'type'),
+      code:             bqStr(cm, row, 'code'),
+      description:      bqStr(cm, row, 'description'),
       // HIGH-4: use bqDateCell so Date objects give YYYY-MM-DD, not datetime string
-      mastery_date:    bqDateCell(cm, row, 'masteryDate'),
-      date_iso:        bqDateCell(cm, row, 'dateISO') || bqDateCell(cm, row, 'masteryDate'),
-      last_scores:     bqStr(cm, row, 'lastScores'),
-      therapist_name:  bqStr(cm, row, 'therapistName'),
-      therapist_email: bqStr(cm, row, 'therapistEmail'),
-      client_name:     bqStr(cm, row, 'clientName') || client.name,
-      client_id:       bqStr(cm, row, 'clientId')   || client.id
+      mastery_date:     bqDateCell(cm, row, 'masteryDate'),
+      date_iso:         bqDateCell(cm, row, 'dateISO') || bqDateCell(cm, row, 'masteryDate'),
+      last_scores:      bqStr(cm, row, 'lastScores'),
+      therapist_name:   bqStr(cm, row, 'therapistName'),
+      therapist_email:  bqStr(cm, row, 'therapistEmail'),
+      client_name:      bqStr(cm, row, 'clientName') || client.name,
+      client_id:        bqStr(cm, row, 'clientId')   || client.id,
+      status:           bqStr(cm, row, 'status'),
+      approved_by:      bqStr(cm, row, 'approvedBy'),
+      approval_date:    bqStr(cm, row, 'approvalDate'),
+      settings_observed:bqStr(cm, row, 'settingsObserved')
     });
   }
   return result;
@@ -908,16 +912,20 @@ function bqCreateTableSchema(tableId) {
 
   if (tableId === 'mastery_log') {
     return { fields: [
-      { name: 'type',            type: 'STRING', mode: 'NULLABLE' },
-      { name: 'code',            type: 'STRING', mode: 'NULLABLE' },
-      { name: 'description',     type: 'STRING', mode: 'NULLABLE' },
-      { name: 'mastery_date',    type: 'STRING', mode: 'NULLABLE' },
-      { name: 'date_iso',        type: 'STRING', mode: 'NULLABLE' },
-      { name: 'last_scores',     type: 'STRING', mode: 'NULLABLE' },
-      { name: 'therapist_name',  type: 'STRING', mode: 'NULLABLE' },
-      { name: 'therapist_email', type: 'STRING', mode: 'NULLABLE' },
-      { name: 'client_name',     type: 'STRING', mode: 'NULLABLE' },
-      { name: 'client_id',       type: 'STRING', mode: 'NULLABLE' }
+      { name: 'type',             type: 'STRING', mode: 'NULLABLE' },
+      { name: 'code',             type: 'STRING', mode: 'NULLABLE' },
+      { name: 'description',      type: 'STRING', mode: 'NULLABLE' },
+      { name: 'mastery_date',     type: 'STRING', mode: 'NULLABLE' },
+      { name: 'date_iso',         type: 'STRING', mode: 'NULLABLE' },
+      { name: 'last_scores',      type: 'STRING', mode: 'NULLABLE' },
+      { name: 'therapist_name',   type: 'STRING', mode: 'NULLABLE' },
+      { name: 'therapist_email',  type: 'STRING', mode: 'NULLABLE' },
+      { name: 'client_name',      type: 'STRING', mode: 'NULLABLE' },
+      { name: 'client_id',        type: 'STRING', mode: 'NULLABLE' },
+      { name: 'status',           type: 'STRING', mode: 'NULLABLE' },
+      { name: 'approved_by',      type: 'STRING', mode: 'NULLABLE' },
+      { name: 'approval_date',    type: 'STRING', mode: 'NULLABLE' },
+      { name: 'settings_observed',type: 'STRING', mode: 'NULLABLE' }
     ]};
   }
 

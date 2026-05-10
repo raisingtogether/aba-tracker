@@ -67,62 +67,13 @@ function doPost(e) {
       var cleanResult = cleanDuplicateMasteries(data.clients);
       result = { success: true, removed: cleanResult.removed, details: cleanResult.details };
 
-    } else if (data.action === 'migrateHistoricalData') {
-      var migResult = migrateHistoricalData(data.dryRun !== false);
-      result = { success: true, dryRun: migResult.dryRun, summary: migResult.summary,
-        checked: migResult.checked, fixed: migResult.fixed };
+    } else if (data.action === 'approveBehaviorMastery') {
+      var abmResult = approveBehaviorMastery(data.clientSheetId, data.clientId, data.behaviorKey, data.approverEmail, data.approverRole);
+      result = abmResult;
 
-    } else if (data.action === 'fixShiftedAnalytics') {
-      var fsaResult = fixShiftedAnalytics(data.dryRun !== false);
-      result = { success: true, dryRun: fsaResult.dryRun, summary: fsaResult.summary,
-        fixed: fsaResult.fixed };
-
-    } else if (data.action === 'migratePins') {
-      var mpResult = migratePins();
-      result = { success: true, migrated: mpResult.migrated };
-
-    } else if (data.action === 'cleanHistoricalData') {
-      var chdResult = cleanHistoricalData(data.dryRun !== false, data.clientId ? data.clientId : null);
-      result = { success: true, dryRun: chdResult.dryRun, summary: chdResult.summary,
-        fixed: chdResult.fixed, dupsRemoved: chdResult.dupsRemoved, log: chdResult.log };
-
-    } else if (data.action === 'fixOrphanSubmissionIds') {
-      var fosiResult = fixOrphanSubmissionIds(data.dryRun !== false);
-      result = { success: true, dryRun: fosiResult.dryRun, summary: fosiResult.summary,
-        fixed: fosiResult.fixed, log: fosiResult.log };
-
-    } else if (data.action === 'diagnoseBehaviorHeaders') {
-      var dbhResult = diagnoseBehaviorHeaders();
-      result = { success: true, log: dbhResult.log };
-
-    } else if (data.action === 'repairCamilaBehaviorData') {
-      var rcbResult = repairCamilaBehaviorData(data.dryRun !== false);
-      result = { success: true, dryRun: rcbResult.dryRun, summary: rcbResult.summary,
-        fixed: rcbResult.fixed, log: rcbResult.log };
-
-    } else if (data.action === 'unifySubmissionIds') {
-      var usiResult = unifySubmissionIds(data.dryRun !== false, data.clientId || null);
-      result = { success: true, dryRun: usiResult.dryRun, summary: usiResult.summary,
-        fixed: usiResult.fixed, log: usiResult.log };
-
-    } else if (data.action === 'fillEmptyAnalytics') {
-      var feaResult = fillEmptyAnalytics(data.dryRun !== false, data.clientId || null);
-      result = { success: true, dryRun: feaResult.dryRun, summary: feaResult.summary,
-        fixed: feaResult.fixed, log: feaResult.log };
-
-    } else if (data.action === 'diagnoseTITOHeaders') {
-      var dthResult = diagnoseTITOHeaders();
-      result = { success: true, log: dthResult.log };
-
-    } else if (data.action === 'repairCamilaTITO') {
-      var rctResult = repairCamilaTITO(data.dryRun !== false);
-      result = { success: true, dryRun: rctResult.dryRun, summary: rctResult.summary,
-        fixed: rctResult.fixed, log: rctResult.log };
-
-    } else if (data.action === 'repairDylanTITO') {
-      var rdtResult = repairDylanTITO(data.dryRun !== false);
-      result = { success: true, dryRun: rdtResult.dryRun, summary: rdtResult.summary,
-        fixed: rdtResult.fixed, log: rdtResult.log };
+    } else if (data.action === 'dismissBehaviorMastery') {
+      var dbmResult = dismissBehaviorMastery(data.clientSheetId, data.clientId, data.behaviorKey, data.approverEmail, data.approverRole);
+      result = dbmResult;
 
     } else {
       processSession(data);
@@ -236,31 +187,6 @@ function hashPin(email, pin) {
   }
   return hex;
 }
-
-/**
- * One-time migration: hash any plaintext PINs stored in the Therapists sheet.
- * Safe to run multiple times (already-hashed PINs are left unchanged).
- */
-function migratePins() {
-  var ss = SpreadsheetApp.openById(ADMIN_SHEET_ID);
-  var therapists = sheetToObjects(ss, 'Therapists');
-  var changed = 0;
-  for (var i = 0; i < therapists.length; i++) {
-    var pin = String(therapists[i].pin || '');
-    if (pin && pin.length !== 64) {
-      therapists[i].pin = hashPin(String(therapists[i].email || ''), pin);
-      changed++;
-    }
-  }
-  if (changed > 0) {
-    objectsToSheet(ss, 'Therapists',
-      ['id', 'name', 'initials', 'color', 'profile', 'email', 'pin',
-       'totpSecret', 'clientIds', 'weeklyHourLimit', 'payRate', 'status', 'role'],
-      therapists);
-  }
-  return { migrated: changed };
-}
-
 
 // ── TOTP VERIFICATION ─────────────────────────────────────────────────
 
@@ -1396,43 +1322,67 @@ function checkBehaviorMastery(ss, clientId, clientName, therapistName, therapist
     'isdraft': true, 'payloadhash': true, 'submittedat': true, 'dateiso': true,
     'tantrum frequency': true, 'tantrum total (min)': true
   };
-  var startCol = -1, endCol = -1;
+  var startCol = -1, endCol = -1, settingCol = -1;
   for (var hi = 0; hi < headers.length; hi++) {
     var hn  = String(headers[hi]).trim();
     var hnl = hn.toLowerCase();
+    if (hnl === 'setting') { settingCol = hi; }
     if (hnl === 'tantrum frequency') { endCol = hi; break; }
     if (startCol < 0 && hn && !META_COLS[hnl]) startCol = hi;
   }
   if (startCol < 0) startCol = 3; // absolute fallback
   if (endCol < 0)   endCol   = headers.length;
 
-  // Collect last 8 data rows
+  // Need at least 10 data rows for mastery check
   var dataRows = rows.slice(1); // skip header
-  if (dataRows.length < 8) return;
-  var last8 = dataRows.slice(-8);
+  if (dataRows.length < 10) return;
+  var last10 = dataRows.slice(-10);
 
   var today = new Date().toISOString().substring(0, 10);
 
   for (var ci = startCol; ci < endCol; ci++) {
     var label = String(headers[ci] || '').trim();
     if (!label) continue;
-    // Use the label→key map if provided; otherwise fall back to stripped lowercase
     var key = (labelToKey && labelToKey[label]) ? labelToKey[label] : label.toLowerCase().replace(/[^a-z0-9]/g, '');
     var allMastered = true;
     var scores = [];
-    for (var ri = 0; ri < last8.length; ri++) {
-      var count = parseFloat(last8[ri][ci]) || 0;
+    var settingsMap = {};
+    for (var ri = 0; ri < last10.length; ri++) {
+      var count = parseFloat(last10[ri][ci]) || 0;
       scores.push(count);
       if (count > 1) { allMastered = false; }
-    }
-    result.behaviors[key] = allMastered;
-    if (allMastered) {
-      if (!isMasteryLogged(ss, 'behavior', key)) {
-        var scoresStr = scores.join(', ');
-        writeMasteryLog(ss, 'behavior', key, label, today, scoresStr, therapistName, therapistEmail, clientName, clientId);
-        result.newMasteries.push({ type: 'behavior', code: key, description: label, masteryDate: today, lastScores: scoresStr });
+      if (settingCol >= 0) {
+        var settingVal = String(last10[ri][settingCol] || '').trim();
+        if (settingVal) { settingsMap[settingVal] = true; }
       }
     }
+
+    if (!allMastered) {
+      result.behaviors[key] = 'none';
+      continue;
+    }
+
+    var settingsList = Object.keys(settingsMap);
+    var settingsCount = settingsList.length;
+    var masteryStatus = (settingsCount >= 2) ? 'recommended' : 'pendingGeneralization';
+
+    result.behaviors[key] = masteryStatus;
+
+    var existingStatus = getMasteryLogStatus(ss, 'behavior', key);
+    // Only write if no existing active entry (allow re-entry after 'dismissed')
+    if (existingStatus === null || existingStatus === '') {
+      var scoresStr = scores.join(', ');
+      var settingsStr = settingsList.join(', ');
+      writeMasteryLog(ss, 'behavior', key, label, today, scoresStr, therapistName, therapistEmail, clientName, clientId, masteryStatus, settingsStr);
+      result.newMasteries.push({ type: 'behavior', code: key, description: label, masteryDate: today, lastScores: scoresStr, status: masteryStatus, settingsObserved: settingsStr });
+    } else if (existingStatus === 'dismissed') {
+      // Regression recovered — write a fresh entry
+      var scoresStr2 = scores.join(', ');
+      var settingsStr2 = settingsList.join(', ');
+      writeMasteryLog(ss, 'behavior', key, label, today, scoresStr2, therapistName, therapistEmail, clientName, clientId, masteryStatus, settingsStr2);
+      result.newMasteries.push({ type: 'behavior', code: key, description: label, masteryDate: today, lastScores: scoresStr2, status: masteryStatus, settingsObserved: settingsStr2 });
+    }
+    // If existingStatus is 'recommended', 'pendingGeneralization', or 'confirmed' — skip
   }
 }
 
@@ -1449,35 +1399,59 @@ function toDateISO(val) {
   return String(val).trim();
 }
 
-// Checks if a mastery entry already exists for this type+code in this client's sheet.
-// Intentionally does NOT filter by date — once mastered, never log again.
-function isMasteryLogged(ss, type, code) {
+/**
+ * Returns the status of the most recent mastery log entry for type+code,
+ * or null if no entry exists.
+ * Status values: 'recommended', 'pendingGeneralization', 'confirmed', 'dismissed', ''
+ * Backfills empty status fields to 'recommended' on read.
+ */
+function getMasteryLogStatus(ss, type, code) {
   var sheet = ss.getSheetByName('Mastery Log');
-  if (!sheet) return false;
+  if (!sheet) return null;
   var data = sheet.getDataRange().getValues();
-  if (data.length < 2) return false;
+  if (data.length < 2) return null;
   var headers = data[0];
-  var typeCol = -1, codeCol = -1;
+  var colMap = {};
   for (var hi = 0; hi < headers.length; hi++) {
-    var h = String(headers[hi]).trim();
-    if (h === 'type') typeCol = hi;
-    if (h === 'code') codeCol = hi;
+    colMap[String(headers[hi]).trim()] = hi;
   }
-  if (typeCol < 0 || codeCol < 0) return false;
+  if (colMap['type'] === undefined || colMap['code'] === undefined) return null;
+
+  // Find most recent matching row (last occurrence wins)
+  var lastMatchRow = -1;
   for (var ri = 1; ri < data.length; ri++) {
     var row = data[ri];
-    if (String(row[typeCol]).trim() === type &&
-        String(row[codeCol]).trim() === code) {
-      return true;
+    if (String(row[colMap['type']]).trim() === type &&
+        String(row[colMap['code']]).trim() === code) {
+      lastMatchRow = ri;
     }
   }
-  return false;
+  if (lastMatchRow < 0) return null;
+
+  var statusColIdx = colMap['status'];
+  if (statusColIdx === undefined) return ''; // old schema without status col
+
+  var existingStatus = String(data[lastMatchRow][statusColIdx] || '').trim();
+  // Backfill: old entries with empty status → write 'recommended'
+  if (!existingStatus) {
+    try {
+      sheet.getRange(lastMatchRow + 1, statusColIdx + 1).setValue('recommended');
+    } catch(e) {}
+    existingStatus = 'recommended';
+  }
+  return existingStatus;
 }
 
-function writeMasteryLog(ss, type, code, description, masteryDate, lastScores, therapistName, therapistEmail, clientName, clientId) {
+// Legacy alias for goal mastery (unchanged logic)
+function isMasteryLogged(ss, type, code) {
+  return getMasteryLogStatus(ss, type, code) !== null;
+}
+
+function writeMasteryLog(ss, type, code, description, masteryDate, lastScores, therapistName, therapistEmail, clientName, clientId, status, settingsObserved) {
   var masteryHeaders = [
     'type', 'code', 'description', 'masteryDate', 'lastScores',
-    'therapistName', 'therapistEmail', 'clientName', 'clientId', 'dateISO'
+    'therapistName', 'therapistEmail', 'clientName', 'clientId', 'dateISO',
+    'status', 'approvedBy', 'approvalDate', 'settingsObserved'
   ];
   var sheet = getOrCreateSheet(ss, 'Mastery Log', masteryHeaders);
   ensureSheetColumns(sheet, masteryHeaders);
@@ -1493,7 +1467,9 @@ function writeMasteryLog(ss, type, code, description, masteryDate, lastScores, t
     'type': type, 'code': code, 'description': description || '',
     'masteryDate': masteryDate, 'lastScores': lastScores || '',
     'therapistName': therapistName || '', 'therapistEmail': therapistEmail || '',
-    'clientName': clientName || '', 'clientId': clientId || '', 'dateISO': masteryDate
+    'clientName': clientName || '', 'clientId': clientId || '', 'dateISO': masteryDate,
+    'status': status || 'recommended', 'approvedBy': '', 'approvalDate': '',
+    'settingsObserved': settingsObserved || ''
   };
   var row = [];
   for (var ci = 0; ci < hdrs.length; ci++) {
@@ -1553,17 +1529,24 @@ function getMasteryReport(year, month, clients) {
         if (!dateISO || dateISO.indexOf(prefix) !== 0) continue;
         var masteryDateVal = colMap['masteryDate'] !== undefined ? toDateISO(row[colMap['masteryDate']]) : dateISO;
 
+        var entryStatus = colMap['status'] !== undefined ? String(row[colMap['status']] || '').trim() : '';
+        if (!entryStatus) { entryStatus = 'recommended'; }
+
         seen[dedupKey] = true;
         entries.push({
-          clientId:      client.id || '',
-          clientName:    client.name || '',
-          type:          entryType,
-          code:          entryCode,
-          description:   String(row[colMap['description']]   || '').trim(),
-          masteryDate:   masteryDateVal,
-          lastScores:    String(row[colMap['lastScores']]    || '').trim(),
-          therapistName: String(row[colMap['therapistName']] || '').trim(),
-          therapistEmail:String(row[colMap['therapistEmail']]|| '').trim()
+          clientId:        client.id || '',
+          clientName:      client.name || '',
+          type:            entryType,
+          code:            entryCode,
+          description:     String(row[colMap['description']]        || '').trim(),
+          masteryDate:     masteryDateVal,
+          lastScores:      String(row[colMap['lastScores']]         || '').trim(),
+          therapistName:   String(row[colMap['therapistName']]      || '').trim(),
+          therapistEmail:  String(row[colMap['therapistEmail']]     || '').trim(),
+          status:          entryStatus,
+          settingsObserved:colMap['settingsObserved'] !== undefined ? String(row[colMap['settingsObserved']] || '').trim() : '',
+          approvedBy:      colMap['approvedBy']       !== undefined ? String(row[colMap['approvedBy']]       || '').trim() : '',
+          approvalDate:    colMap['approvalDate']     !== undefined ? String(row[colMap['approvalDate']]     || '').trim() : ''
         });
       }
     } catch(e) {
@@ -1638,543 +1621,126 @@ function cleanDuplicateMasteries(clients) {
   return { removed: totalRemoved, details: details };
 }
 
-
-// ── HISTORICAL DATA MIGRATION ───────────────────────────────────────────
+// ── BEHAVIOR MASTERY APPROVAL / DISMISSAL ───────────────────────────────
 
 /**
- * migrateHistoricalData(dryRun)
- *
- * One-time fix for column misalignment in all client data sheets.
- * Misalignment occurred when new behaviors/goals were added after analytics
- * columns already existed: ensureSheetColumns appended new columns at the far
- * right, but the row-build code used a fixed allHeaders order (data before
- * analytics), causing values to land in wrong column positions.
- *
- * dryRun=true (default): log what would change, write nothing.
- * dryRun=false: create backups, apply corrections, log to Audit Log.
- *
- * Run from Apps Script editor:
- *   migrateHistoricalData(true);   // dry run
- *   migrateHistoricalData(false);  // live
+ * BCBA/Admin approves a behavior mastery recommendation.
+ * Sets status = 'confirmed', approvedBy, approvalDate on the most recent
+ * matching mastery log row.
  */
-function migrateHistoricalData(dryRun) {
-  var isDryRun = (dryRun !== false); // default true — safe by default
-  var ts = new Date().toISOString();
-  var logLines = [];
-  var totalChecked = 0;
-  var totalFixed   = 0;
-
-  function log(msg) {
-    Logger.log(msg);
-    logLines.push(msg);
+function approveBehaviorMastery(clientSheetId, clientId, behaviorKey, approverEmail, approverRole) {
+  if (!approverRole || (approverRole !== 'Admin' && approverRole !== 'BCBA')) {
+    return { success: false, error: 'Unauthorized: BCBA or Admin role required' };
   }
-
-  log('=== migrateHistoricalData ' + (isDryRun ? '[DRY RUN]' : '[LIVE]') +
-      ' started ' + ts + ' ===');
-
-  var adminSS = SpreadsheetApp.openById(ADMIN_SHEET_ID);
-  var clients  = sheetToObjects(adminSS, 'Clients');
-  log('Clients found: ' + clients.length);
-
-  var tabNames = ['Behavior Data', 'Trial Data', 'ABC Data', 'Time In Time Out'];
-
-  for (var ci = 0; ci < clients.length; ci++) {
-    var client = clients[ci];
-    if (!client.sheetId || String(client.status || 'active') === 'inactive') {
-      log('SKIP ' + (client.name || client.id) + ': no sheetId or inactive');
-      continue;
-    }
-    log('--- ' + client.name + ' ---');
-    var ss;
-    try {
-      ss = SpreadsheetApp.openById(client.sheetId);
-    } catch (e) {
-      log('  ERROR opening sheet: ' + e.message);
-      continue;
-    }
-    for (var ti = 0; ti < tabNames.length; ti++) {
-      var r = _mig_processTab(ss, client.name, tabNames[ti], isDryRun, log);
-      totalChecked += r.checked;
-      totalFixed   += r.fixed;
-    }
-  }
-
-  var summary = (isDryRun ? '[DRY RUN] ' : '') +
-    'checked=' + totalChecked + ' fixed=' + totalFixed;
-  log('=== DONE: ' + summary + ' ===');
-
-  if (!isDryRun) {
-    writeAuditLog(ts, 'system', 'data_migration', '', summary);
-  }
-  return { dryRun: isDryRun, summary: summary, checked: totalChecked, fixed: totalFixed };
-}
-
-
-function _mig_processTab(ss, clientName, tabName, isDryRun, log) {
-  var result = { checked: 0, fixed: 0 };
-  var sheet = ss.getSheetByName(tabName);
-  if (!sheet) { log('  ' + tabName + ': not found'); return result; }
-
-  var allData = sheet.getDataRange().getValues();
-  if (allData.length < 2) { log('  ' + tabName + ': no data rows'); return result; }
-
-  var headers = allData[0];
-  var colMap  = _mig_buildColMap(headers);
-
-  var corrections = []; // [{ sheetRow, oldRow, newRow }]
-
-  for (var ri = 1; ri < allData.length; ri++) {
-    var rowData = allData[ri];
-    // Skip blank rows
-    var blank = true;
-    for (var bi = 0; bi < rowData.length; bi++) {
-      if (rowData[bi] !== '' && rowData[bi] !== null && rowData[bi] !== undefined) {
-        blank = false; break;
-      }
-    }
-    if (blank) continue;
-    result.checked++;
-
-    var fixedRow = null;
-
-    if (tabName === 'Behavior Data') {
-      fixedRow = _mig_fixBehaviorRow(headers, colMap, rowData);
-    } else if (tabName === 'Trial Data') {
-      fixedRow = _mig_fixTrialRow(headers, colMap, rowData);
-    }
-
-    if (!fixedRow) {
-      // No alignment fix needed; try data quality fixes only
-      var copy    = rowData.slice(0);
-      var changed = _mig_fixDataQuality(colMap, copy);
-      if (changed) fixedRow = copy;
-    } else {
-      // Alignment fix applied; also run data quality fixes
-      _mig_fixDataQuality(colMap, fixedRow);
-    }
-
-    if (fixedRow) {
-      var sheetRow = ri + 1; // +1 because allData[0]=header=row1, allData[1]=row2
-      corrections.push({ sheetRow: sheetRow, oldRow: rowData, newRow: fixedRow });
-      result.fixed++;
-      log('  ' + tabName + ' row ' + sheetRow + ': ' +
-          _mig_diffSummary(headers, rowData, fixedRow));
-    }
-  }
-
-  if (!corrections.length) {
-    log('  ' + tabName + ': all ' + result.checked + ' rows OK');
-    return result;
-  }
-
-  log('  ' + tabName + ': ' + corrections.length + '/' + result.checked + ' rows need fixing');
-
-  if (isDryRun) {
-    log('  ' + tabName + ': [DRY RUN] — no changes written');
-    return result;
-  }
-
-  // Create backup before first write
-  _mig_backupTab(ss, tabName, log);
-
-  var numCols = headers.length;
-  for (var ki = 0; ki < corrections.length; ki++) {
-    var corr     = corrections[ki];
-    var writeRow = corr.newRow.slice(0, numCols);
-    while (writeRow.length < numCols) writeRow.push('');
-    sheet.getRange(corr.sheetRow, 1, 1, numCols).setValues([writeRow]);
-  }
-  log('  ' + tabName + ': wrote ' + corrections.length + ' corrections');
-  return result;
-}
-
-
-function _mig_backupTab(ss, tabName, log) {
+  if (!clientSheetId) return { success: false, error: 'Missing clientSheetId' };
   try {
-    var sheet = ss.getSheetByName(tabName);
-    if (!sheet) return;
-    var backupName = tabName + ' BACKUP';
-    if (ss.getSheetByName(backupName)) {
-      log('  Backup already exists: ' + backupName + ' (kept existing)');
-      return;
+    var ss    = SpreadsheetApp.openById(clientSheetId);
+    var sheet = ss.getSheetByName('Mastery Log');
+    if (!sheet) return { success: false, error: 'Mastery Log sheet not found' };
+    var data = sheet.getDataRange().getValues();
+    if (data.length < 2) return { success: false, error: 'No mastery entries found' };
+
+    var headers = data[0];
+    var colMap = {};
+    for (var hi = 0; hi < headers.length; hi++) {
+      colMap[String(headers[hi]).trim()] = hi;
     }
-    var backup = sheet.copyTo(ss);
-    backup.setName(backupName);
-    log('  Created backup: ' + backupName);
-  } catch (e) {
-    log('  WARNING: backup failed for ' + tabName + ': ' + e.message);
-  }
-}
-
-
-function _mig_buildColMap(headers) {
-  var m = {};
-  for (var i = 0; i < headers.length; i++) {
-    var h = String(headers[i]).trim();
-    if (h && m[h] === undefined) m[h] = i;
-  }
-  return m;
-}
-
-
-function _mig_isUUID(val) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-    .test(String(val || '').trim());
-}
-
-
-function _mig_findUUID(rowData) {
-  for (var i = 0; i < rowData.length; i++) {
-    if (_mig_isUUID(rowData[i])) return i;
-  }
-  return -1;
-}
-
-
-/**
- * Fix Behavior Data row alignment.
- *
- * Sheet header structure (immutable existing cols):
- *   [base(3)] [originalBehaviors(S-5)] [TantrumFreq(S-2)] [TantrumTotal(S-1)]
- *   [analytics(S..S+9)] [newBehaviors appended after analytics]
- *
- * Misaligned row was written as allHeaders order:
- *   [base] [allBehaviors(inc new)] [tantrum] [analytics]
- *   ↑ new behaviors appear BEFORE tantrum, pushing tantrum+analytics right by shift positions
- *
- * S = colMap['submissionId'], P = position UUID was found in row data.
- * shift = P - S = number of new behavior columns.
- */
-function _mig_fixBehaviorRow(headers, colMap, rowData) {
-  var S = colMap['submissionId'];
-  if (S === undefined) return null;
-  var P = _mig_findUUID(rowData);
-  if (P < 0 || P === S || P < S) return null;
-
-  var shift         = P - S;
-  var analyticsCount = 10; // submissionId..dateISO
-
-  // Tantrum must be at S-2, S-1 (invariant of the schema)
-  if (colMap['Tantrum Frequency'] !== S - 2 ||
-      colMap['Tantrum Total (Min)'] !== S - 1) return null;
-
-  var totalCols = headers.length;
-  var newRow = [];
-  for (var i = 0; i < totalCols; i++) newRow.push('');
-
-  // Original behavior data (base + original behaviors): row[0..S-3] → same positions
-  for (var oi = 0; oi <= S - 3; oi++) {
-    if (oi < rowData.length) newRow[oi] = rowData[oi];
-  }
-
-  // Tantrum: was at row[P-2], row[P-1] → goes to col S-2, S-1
-  if (P - 2 < rowData.length) newRow[S - 2] = rowData[P - 2];
-  if (P - 1 < rowData.length) newRow[S - 1] = rowData[P - 1];
-
-  // Analytics block: row[P..P+9] → cols S..S+9
-  for (var ai = 0; ai < analyticsCount; ai++) {
-    if (P + ai < rowData.length && S + ai < totalCols) {
-      newRow[S + ai] = rowData[P + ai];
+    if (colMap['type'] === undefined || colMap['code'] === undefined) {
+      return { success: false, error: 'Mastery Log missing required columns' };
     }
-  }
 
-  // New behavior values: row[S-2..P-3] (count=shift) → cols S+analyticsCount..S+analyticsCount+shift-1
-  for (var ni = 0; ni < shift; ni++) {
-    var srcIdx = (S - 2) + ni;
-    var dstIdx = S + analyticsCount + ni;
-    if (srcIdx < rowData.length && dstIdx < totalCols) {
-      newRow[dstIdx] = rowData[srcIdx];
-    }
-  }
-
-  return newRow;
-}
-
-
-/**
- * Fix Trial Data row alignment.
- *
- * Sheet header structure:
- *   [base(3)] [originalGoals] [analytics(S..S+10)] [newGoals appended after analytics]
- *
- * Misaligned row was written in allHeaders order:
- *   [base] [allGoals(inc new)] [analytics]
- *   ↑ new goal columns appear BEFORE analytics, pushing analytics right by shift positions
- */
-function _mig_fixTrialRow(headers, colMap, rowData) {
-  var S = colMap['submissionId'];
-  if (S === undefined) return null;
-  var P = _mig_findUUID(rowData);
-  if (P < 0 || P === S || P < S) return null;
-
-  var shift         = P - S;
-  var analyticsCount = 11; // submissionId..Percent Correct
-
-  var totalCols = headers.length;
-  var newRow = [];
-  for (var i = 0; i < totalCols; i++) newRow.push('');
-
-  // Original goal data: row[0..S-1] → same sheet positions (correct)
-  for (var oi = 0; oi < S; oi++) {
-    if (oi < rowData.length) newRow[oi] = rowData[oi];
-  }
-
-  // Analytics block: row[P..P+10] → cols S..S+10
-  for (var ai = 0; ai < analyticsCount; ai++) {
-    if (P + ai < rowData.length && S + ai < totalCols) {
-      newRow[S + ai] = rowData[P + ai];
-    }
-  }
-
-  // New goal data: row[S..P-1] (count=shift) → cols S+analyticsCount..S+analyticsCount+shift-1
-  for (var ni = 0; ni < shift; ni++) {
-    var srcIdx = S + ni;
-    var dstIdx = S + analyticsCount + ni;
-    if (srcIdx < rowData.length && dstIdx < totalCols) {
-      newRow[dstIdx] = rowData[srcIdx];
-    }
-  }
-
-  // Carry any remaining orphaned values beyond analytics (extra appended data)
-  for (var ex = P + analyticsCount; ex < rowData.length; ex++) {
-    var exDst = S + analyticsCount + shift + (ex - (P + analyticsCount));
-    if (exDst < totalCols) newRow[exDst] = rowData[ex];
-  }
-
-  return newRow;
-}
-
-
-/**
- * In-place data quality fixes. Returns true if any change was made.
- * - isDraft: "FALSE"/"TRUE" string → boolean
- * - dateISO: empty → derive from Date column value
- */
-function _mig_fixDataQuality(colMap, row) {
-  var changed = false;
-
-  var isDraftCol = colMap['isDraft'];
-  if (isDraftCol !== undefined && isDraftCol < row.length) {
-    var dv = row[isDraftCol];
-    if (dv === 'FALSE' || dv === 'false') { row[isDraftCol] = false; changed = true; }
-    else if (dv === 'TRUE' || dv === 'true') { row[isDraftCol] = true; changed = true; }
-  }
-
-  var dateISOCol = colMap['dateISO'];
-  if (dateISOCol !== undefined && dateISOCol < row.length) {
-    var diso = String(row[dateISOCol] || '').trim();
-    if (!diso || diso === '0') {
-      var dateCol = (colMap['Date'] !== undefined) ? colMap['Date'] : colMap['date'];
-      if (dateCol !== undefined && dateCol < row.length && row[dateCol]) {
-        var derived = toDateISO(row[dateCol]);
-        if (derived) { row[dateISOCol] = derived; changed = true; }
+    // Find last matching row (most recent)
+    var lastMatchRow = -1;
+    for (var ri = 1; ri < data.length; ri++) {
+      var row = data[ri];
+      if (String(row[colMap['type']]).trim() === 'behavior' &&
+          String(row[colMap['code']]).trim() === behaviorKey) {
+        lastMatchRow = ri;
       }
     }
-  }
+    if (lastMatchRow < 0) return { success: false, error: 'No mastery entry found for this behavior' };
 
-  return changed;
-}
+    var today = new Date().toISOString().substring(0, 10);
+    var sheetRow = lastMatchRow + 1; // 1-based
 
-
-function _mig_diffSummary(headers, oldRow, newRow) {
-  var diffs = [];
-  var len = Math.max(oldRow.length, newRow.length);
-  for (var i = 0; i < len; i++) {
-    var ov = (i < oldRow.length) ? oldRow[i] : '';
-    var nv = (i < newRow.length) ? newRow[i] : '';
-    if (String(ov) !== String(nv)) {
-      var hdr = (i < headers.length) ? String(headers[i]) : 'col' + i;
-      diffs.push(hdr + ':[' + String(ov).substring(0, 20) + ']→[' + String(nv).substring(0, 20) + ']');
+    // Ensure new columns exist
+    var newCols = ['status', 'approvedBy', 'approvalDate', 'settingsObserved'];
+    ensureSheetColumns(sheet, newCols);
+    // Re-read headers after potential column add
+    var updatedHeaders = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+    var updatedColMap = {};
+    for (var ui = 0; ui < updatedHeaders.length; ui++) {
+      updatedColMap[String(updatedHeaders[ui]).trim()] = ui;
     }
+
+    if (updatedColMap['status'] !== undefined) {
+      sheet.getRange(sheetRow, updatedColMap['status'] + 1).setValue('confirmed');
+    }
+    if (updatedColMap['approvedBy'] !== undefined) {
+      sheet.getRange(sheetRow, updatedColMap['approvedBy'] + 1).setValue(approverEmail || '');
+    }
+    if (updatedColMap['approvalDate'] !== undefined) {
+      sheet.getRange(sheetRow, updatedColMap['approvalDate'] + 1).setValue(today);
+    }
+    return { success: true, status: 'confirmed', approvedBy: approverEmail, approvalDate: today };
+  } catch(e) {
+    return { success: false, error: String(e) };
   }
-  return diffs.length + ' changes: ' + diffs.slice(0, 4).join('; ') + (diffs.length > 4 ? '…' : '');
 }
-
-
-// ── SHIFTED ANALYTICS REPAIR ────────────────────────────────────────────
 
 /**
- * fixShiftedAnalytics(dryRun)
- *
- * Repairs rows where the clientName analytics column contains a clientId
- * value (e.g. "C1") instead of a full client name. This happens when old
- * session-write code omitted the clientName push, causing all subsequent
- * analytics values to be one position to the left relative to the headers.
- *
- * Detection: value at the 'clientName' column matches a known clientId
- *            from the RT Admin Clients sheet.
- * Fix: right-shift the existing analytics values by 1 (starting from
- *      clientName position) to fill their correct columns, then insert
- *      the real client name at the clientName column.
- *
- * dryRun=true (default): log what would change, no writes.
- * dryRun=false: backup each tab, apply corrections, write to Audit Log.
- *
- *   fixShiftedAnalytics(true);   // dry run
- *   fixShiftedAnalytics(false);  // live
+ * BCBA/Admin dismisses a behavior mastery recommendation.
+ * Sets status = 'dismissed' on the most recent matching mastery log row.
  */
-function fixShiftedAnalytics(dryRun) {
-  var isDryRun = (dryRun !== false);
-  var ts = new Date().toISOString();
-  var logLines = [];
-  var totalFixed = 0;
-
-  function log(msg) { Logger.log(msg); logLines.push(msg); }
-
-  log('=== fixShiftedAnalytics ' + (isDryRun ? '[DRY RUN]' : '[LIVE]') +
-      ' started ' + ts + ' ===');
-
-  // Load client list — used both for iterating sheets and for the ID→name lookup
-  var adminSS = SpreadsheetApp.openById(ADMIN_SHEET_ID);
-  var clientRows = sheetToObjects(adminSS, 'Clients');
-
-  // Build clientId → clientName map (only active clients)
-  var clientIdToName = {};
-  for (var ci = 0; ci < clientRows.length; ci++) {
-    var c = clientRows[ci];
-    if (c.id && c.name) clientIdToName[String(c.id).trim()] = String(c.name).trim();
+function dismissBehaviorMastery(clientSheetId, clientId, behaviorKey, approverEmail, approverRole) {
+  if (!approverRole || (approverRole !== 'Admin' && approverRole !== 'BCBA')) {
+    return { success: false, error: 'Unauthorized: BCBA or Admin role required' };
   }
-  log('Client map: ' + JSON.stringify(clientIdToName));
+  if (!clientSheetId) return { success: false, error: 'Missing clientSheetId' };
+  try {
+    var ss    = SpreadsheetApp.openById(clientSheetId);
+    var sheet = ss.getSheetByName('Mastery Log');
+    if (!sheet) return { success: false, error: 'Mastery Log sheet not found' };
+    var data = sheet.getDataRange().getValues();
+    if (data.length < 2) return { success: false, error: 'No mastery entries found' };
 
-  // Per-tab: which headers follow clientName in the correct schema.
-  // Used to compute the right-shift boundary.
-  var tabConfigs = [
-    {
-      name: 'Behavior Data',
-      afterClientName: ['clientId','therapistEmail','sessionType','billingCode',
-                        'isDraft','payloadHash','submittedAt','dateISO']
-    },
-    {
-      name: 'Trial Data',
-      afterClientName: ['clientId','therapistEmail','sessionType','billingCode',
-                        'isDraft','payloadHash','submittedAt','dateISO','Percent Correct']
-    },
-    {
-      name: 'ABC Data',
-      afterClientName: ['clientId','therapistName','therapistEmail','sessionType','billingCode',
-                        'isDraft','payloadHash','submittedAt','dateISO']
-    },
-    {
-      name: 'Time In Time Out',
-      afterClientName: ['clientId','therapistEmail','isDraft','payloadHash','submittedAt','dateISO']
+    var headers = data[0];
+    var colMap = {};
+    for (var hi = 0; hi < headers.length; hi++) {
+      colMap[String(headers[hi]).trim()] = hi;
     }
-  ];
+    if (colMap['type'] === undefined || colMap['code'] === undefined) {
+      return { success: false, error: 'Mastery Log missing required columns' };
+    }
 
-  for (var ki = 0; ki < clientRows.length; ki++) {
-    var client = clientRows[ki];
-    if (!client.sheetId || String(client.status || 'active') === 'inactive') {
-      log('SKIP ' + (client.name || client.id) + ': no sheetId or inactive');
-      continue;
+    var lastMatchRow = -1;
+    for (var ri = 1; ri < data.length; ri++) {
+      var row = data[ri];
+      if (String(row[colMap['type']]).trim() === 'behavior' &&
+          String(row[colMap['code']]).trim() === behaviorKey) {
+        lastMatchRow = ri;
+      }
     }
-    log('--- ' + client.name + ' ---');
-    var ss;
-    try {
-      ss = SpreadsheetApp.openById(client.sheetId);
-    } catch (e) {
-      log('  ERROR opening sheet: ' + e.message);
-      continue;
+    if (lastMatchRow < 0) return { success: false, error: 'No mastery entry found for this behavior' };
+
+    var sheetRow = lastMatchRow + 1;
+
+    var newCols2 = ['status', 'approvedBy', 'approvalDate', 'settingsObserved'];
+    ensureSheetColumns(sheet, newCols2);
+    var updatedHeaders2 = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+    var updatedColMap2 = {};
+    for (var ui2 = 0; ui2 < updatedHeaders2.length; ui2++) {
+      updatedColMap2[String(updatedHeaders2[ui2]).trim()] = ui2;
     }
-    for (var ti = 0; ti < tabConfigs.length; ti++) {
-      var r = _fsa_processTab(ss, client.name, tabConfigs[ti], clientIdToName, isDryRun, log);
-      totalFixed += r.fixed;
+
+    if (updatedColMap2['status'] !== undefined) {
+      sheet.getRange(sheetRow, updatedColMap2['status'] + 1).setValue('dismissed');
     }
+    return { success: true, status: 'dismissed' };
+  } catch(e) {
+    return { success: false, error: String(e) };
   }
-
-  var summary = (isDryRun ? '[DRY RUN] ' : '') + 'fixed=' + totalFixed;
-  log('=== DONE: ' + summary + ' ===');
-
-  if (!isDryRun) {
-    writeAuditLog(ts, 'system', 'fix_shifted_analytics', '', summary);
-  }
-  return { dryRun: isDryRun, summary: summary, fixed: totalFixed };
 }
-
-
-function _fsa_processTab(ss, clientName, tabConf, clientIdToName, isDryRun, log) {
-  var result = { fixed: 0 };
-  var tabName = tabConf.name;
-  var sheet = ss.getSheetByName(tabName);
-  if (!sheet) return result;
-
-  var allData = sheet.getDataRange().getValues();
-  if (allData.length < 2) return result;
-
-  var headers = allData[0];
-  var colMap  = _mig_buildColMap(headers); // reuse migration helper
-
-  var cnCol = colMap['clientName'];
-  if (cnCol === undefined) {
-    log('  ' + tabName + ': no clientName column — skipping');
-    return result;
-  }
-
-  // shiftEnd: the last column in the analytics block that needs to move right.
-  // In the MISALIGNED row the analytics values occupy cnCol..(cnCol + afterCount - 1)
-  // because clientName was never written — everything after it is 1 step left.
-  // After the fix they should occupy cnCol..(cnCol + afterCount) (one wider).
-  var afterCount = tabConf.afterClientName.length;
-  var shiftEnd   = cnCol + afterCount; // inclusive — this is where the last value lands
-
-  var corrections = [];
-
-  for (var ri = 1; ri < allData.length; ri++) {
-    var row = allData[ri];
-
-    // Skip blank rows
-    if (!row[0]) continue;
-
-    var cnVal = String(row[cnCol] || '').trim();
-    if (!cnVal) continue; // empty clientName — not detectable as shifted
-
-    // If the value in the clientName column is a known clientId, the row is shifted
-    if (!clientIdToName[cnVal]) continue;
-
-    var realName = clientIdToName[cnVal];
-
-    // Build corrected row
-    var newRow = row.slice(0);
-
-    // Right-shift values from cnCol..shiftEnd-1 → cnCol+1..shiftEnd
-    // Iterate from right to left to avoid overwriting source values
-    for (var ai = shiftEnd; ai > cnCol; ai--) {
-      newRow[ai] = (ai - 1 < row.length) ? row[ai - 1] : '';
-    }
-
-    // Insert the real client name at cnCol
-    newRow[cnCol] = realName;
-
-    corrections.push({ sheetRow: ri + 1, oldRow: row, newRow: newRow });
-    result.fixed++;
-    log('  ' + tabName + ' row ' + (ri + 1) + ': clientId=' + cnVal +
-        ' → inserted clientName="' + realName + '"');
-  }
-
-  if (!corrections.length) {
-    log('  ' + tabName + ': no shifted rows');
-    return result;
-  }
-
-  log('  ' + tabName + ': ' + corrections.length + ' rows to fix');
-
-  if (isDryRun) {
-    log('  ' + tabName + ': [DRY RUN] — no changes written');
-    return result;
-  }
-
-  // Backup before first write
-  _mig_backupTab(ss, tabName, log);
-
-  var numCols = headers.length;
-  for (var ki2 = 0; ki2 < corrections.length; ki2++) {
-    var corr     = corrections[ki2];
-    var writeRow = corr.newRow.slice(0, numCols);
-    while (writeRow.length < numCols) writeRow.push('');
-    sheet.getRange(corr.sheetRow, 1, 1, numCols).setValues([writeRow]);
-  }
-  log('  ' + tabName + ': wrote ' + corrections.length + ' corrections');
-  return result;
-}
-
 
 // ── WEEKLY BILLING REPORT ───────────────────────────────────────────────
 
@@ -2354,2064 +1920,3 @@ function checkGoalUsage(goalCode, clients) {
 }
 
 
-// ── HISTORICAL DATA CLEANUP ─────────────────────────────────────────────
-
-/**
- * cleanHistoricalData(dryRun, clientId)
- *
- * Fixes data quality issues in all client data tabs:
- *   1. Fill missing dateISO (handles Date objects, "3/29/2026", "Apr 21, 2026")
- *   2. Fill missing submissionId (session-keyed via TITO, same UUID across all tabs)
- *   3. Fill missing clientName and clientId (looked up from admin config)
- *   4. Fill missing therapistEmail (looked up from therapist name)
- *   5. Fill missing sessionType and billingCode (copied from TITO by session key)
- *   6. Remove duplicate rows (by non-analytics column fingerprint, bottom-up delete)
- *
- * dryRun=true (default): log only, no writes.
- * dryRun=false: create CLEANUP_BACKUP tabs, apply corrections, log to Audit Log.
- * clientId: if provided, only process that client; otherwise all active clients.
- *
- * Run from Apps Script editor:
- *   cleanHistoricalData(true);           // dry run — all clients
- *   cleanHistoricalData(true,  'C1');    // dry run — client C1 only
- *   cleanHistoricalData(false, 'C1');    // live   — client C1 only
- *   cleanHistoricalData(false);          // live   — all clients (risk of 6-min timeout)
- */
-function cleanHistoricalData(dryRun, clientId) {
-  var isDryRun = (dryRun !== false);
-  var ts = new Date().toISOString();
-  var logLines = [];
-  var totalFixed = 0;
-  var totalDupsRemoved = 0;
-
-  function log(msg) { Logger.log(msg); logLines.push(msg); }
-
-  log('=== cleanHistoricalData ' + (isDryRun ? '[DRY RUN]' : '[LIVE]') +
-      ' started ' + ts +
-      (clientId ? ' clientId=' + clientId : ' all clients') + ' ===');
-
-  var adminSS   = SpreadsheetApp.openById(ADMIN_SHEET_ID);
-  var allClients = sheetToObjects(adminSS, 'Clients');
-  var therapists = sheetToObjects(adminSS, 'Therapists');
-
-  // Build therapist name (lowercase) → email lookup
-  var therapistEmailMap = {};
-  for (var ti = 0; ti < therapists.length; ti++) {
-    var tname  = String(therapists[ti].name  || '').toLowerCase().trim();
-    var temail = String(therapists[ti].email || '').trim();
-    if (tname && temail) { therapistEmailMap[tname] = temail; }
-  }
-
-  // Filter to target client(s)
-  var targetClients = [];
-  for (var ci = 0; ci < allClients.length; ci++) {
-    var cl = allClients[ci];
-    if (clientId && String(cl.id || '').trim() !== String(clientId).trim()) { continue; }
-    if (!cl.sheetId || String(cl.status || 'active') === 'inactive') {
-      log('SKIP ' + (cl.name || cl.id) + ': no sheetId or inactive');
-      continue;
-    }
-    targetClients.push(cl);
-  }
-  log('Processing ' + targetClients.length + ' client(s)');
-
-  for (var ki = 0; ki < targetClients.length; ki++) {
-    var client = targetClients[ki];
-    log('--- ' + client.name + ' (id=' + client.id + ') ---');
-
-    var ss;
-    try {
-      ss = SpreadsheetApp.openById(client.sheetId);
-    } catch (e) {
-      log('  ERROR opening sheet: ' + e.message);
-      continue;
-    }
-
-    var clientInfo = {
-      clientId:   String(client.id   || '').trim(),
-      clientName: String(client.name || '').trim()
-    };
-
-    // Build session key map from Time In Time Out (authoritative source for UUIDs)
-    var sessionKeyMap = _chd_buildSessionKeyMap(ss, log);
-    log('  TITO session keys: ' + _chd_objectKeyCount(sessionKeyMap));
-
-    var tabNames = ['Time In Time Out', 'Behavior Data', 'Trial Data', 'ABC Data'];
-    for (var tbi = 0; tbi < tabNames.length; tbi++) {
-      var tabResult = _chd_processTab(
-        ss, tabNames[tbi], sessionKeyMap,
-        clientInfo, therapistEmailMap, isDryRun, log
-      );
-      totalFixed       += tabResult.fixed;
-      totalDupsRemoved += tabResult.dupsRemoved;
-    }
-  }
-
-  var summary = (isDryRun ? '[DRY RUN] ' : '') +
-    'fixed=' + totalFixed + ' dupsRemoved=' + totalDupsRemoved;
-  log('=== DONE: ' + summary + ' ===');
-
-  if (!isDryRun) {
-    writeAuditLog(ts, 'system', 'clean_historical_data', clientId || 'all', summary);
-  }
-
-  return {
-    dryRun:      isDryRun,
-    summary:     summary,
-    fixed:       totalFixed,
-    dupsRemoved: totalDupsRemoved,
-    log:         logLines
-  };
-}
-
-
-/**
- * Parse a date cell value to YYYY-MM-DD.
- * Handles: Date objects, ISO strings, "3/29/2026", "4/12/2026", "Apr 21, 2026".
- *
- * Uses the spreadsheet's timezone (Session.getScriptTimeZone()) for Date objects
- * so the displayed date matches what is stored. Parses M/D/YYYY strings directly
- * without constructing a Date object to avoid UTC-offset boundary issues.
- */
-function _chd_parseDateToISO(val) {
-  if (!val && val !== 0) { return ''; }
-  if (val instanceof Date) {
-    return Utilities.formatDate(val, Session.getScriptTimeZone(), 'yyyy-MM-dd');
-  }
-  var s = String(val).trim();
-  if (!s || s === '0') { return ''; }
-  // Already YYYY-MM-DD (e.g. dateISO column value)
-  if (/^\d{4}-\d{2}-\d{2}/.test(s)) { return s.substring(0, 10); }
-  // M/D/YYYY or MM/DD/YYYY — parse components directly, no timezone risk
-  var mdyMatch = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (mdyMatch) {
-    return mdyMatch[3] + '-' + ('0' + mdyMatch[1]).slice(-2) + '-' + ('0' + mdyMatch[2]).slice(-2);
-  }
-  // "Apr 21, 2026" or "Apr 21 2026"
-  var MONTHS = { jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12 };
-  var monMatch = s.match(/^([A-Za-z]{3})\s+(\d{1,2}),?\s+(\d{4})$/);
-  if (monMatch) {
-    var mon = MONTHS[monMatch[1].toLowerCase()];
-    if (mon) {
-      return monMatch[3] + '-' + ('0' + mon).slice(-2) + '-' + ('0' + monMatch[2]).slice(-2);
-    }
-  }
-  // Last resort: JS Date with script timezone
-  try {
-    var d = new Date(s);
-    if (!isNaN(d.getTime())) {
-      return Utilities.formatDate(d, Session.getScriptTimeZone(), 'yyyy-MM-dd');
-    }
-  } catch (ex) {}
-  return '';
-}
-
-
-/** Count own-property keys on a plain object (ES5 safe). */
-function _chd_objectKeyCount(obj) {
-  var n = 0;
-  for (var k in obj) {
-    if (Object.prototype.hasOwnProperty.call(obj, k)) { n++; }
-  }
-  return n;
-}
-
-
-/**
- * Read Time In Time Out tab and build:
- *   sessionKey (dateISO + '|' + therapistLower) → { uuid, sessionType, billingCode }
- *
- * Reuses an existing valid UUID from the Submission ID column when present,
- * so already-linked rows across tabs are not re-keyed.
- */
-function _chd_buildSessionKeyMap(ss, log) {
-  var keyMap = {};
-  var sheet  = ss.getSheetByName('Time In Time Out');
-  if (!sheet) { log('  TITO: tab not found — session key map empty'); return keyMap; }
-
-  var data = sheet.getDataRange().getValues();
-  if (data.length < 2) { return keyMap; }
-
-  var headers = data[0];
-  var colMap  = _mig_buildColMap(headers);
-
-  var dateCol      = colMap['Date'];
-  var dateISOCol   = colMap['dateISO'];
-  var therapistCol = colMap['Therapist'];
-  // TITO uses display names for these columns
-  var sessTypeCol  = (colMap['Type of Session'] !== undefined) ? colMap['Type of Session'] : colMap['sessionType'];
-  var billCodeCol  = (colMap['Billing Code']    !== undefined) ? colMap['Billing Code']    : colMap['billingCode'];
-  var subIdCol     = (colMap['Submission ID']   !== undefined) ? colMap['Submission ID']   : colMap['submissionId'];
-
-  for (var ri = 1; ri < data.length; ri++) {
-    var row = data[ri];
-    // Skip rows with no date
-    var dateVal = (dateISOCol !== undefined && row[dateISOCol]) ? row[dateISOCol]
-                  : (dateCol !== undefined ? row[dateCol] : '');
-    var dateISO = _chd_parseDateToISO(dateVal);
-    if (!dateISO) { continue; }
-
-    var therapist = therapistCol !== undefined ? String(row[therapistCol] || '').trim() : '';
-    var key = dateISO + '|' + therapist.toLowerCase();
-
-    if (!keyMap[key]) {
-      var existingId = (subIdCol !== undefined) ? String(row[subIdCol] || '').trim() : '';
-      var uuid = _mig_isUUID(existingId) ? existingId : Utilities.getUuid();
-      keyMap[key] = {
-        uuid:        uuid,
-        sessionType: sessTypeCol !== undefined ? String(row[sessTypeCol] || '').trim() : '',
-        billingCode: billCodeCol !== undefined ? String(row[billCodeCol] || '').trim() : ''
-      };
-    }
-  }
-  return keyMap;
-}
-
-
-/**
- * Process one data tab: collect field corrections, apply them, then remove duplicates.
- * Returns { fixed: <cell corrections applied>, dupsRemoved: <rows deleted> }
- */
-function _chd_processTab(ss, tabName, sessionKeyMap, clientInfo, therapistEmailMap, isDryRun, log) {
-  var result = { fixed: 0, dupsRemoved: 0 };
-  var sheet  = ss.getSheetByName(tabName);
-  if (!sheet) { log('  ' + tabName + ': not found'); return result; }
-
-  var data    = sheet.getDataRange().getValues();
-  if (data.length < 2) { log('  ' + tabName + ': no data rows'); return result; }
-
-  var headers = data[0];
-  var colMap  = _mig_buildColMap(headers);
-
-  var dateCol    = colMap['Date'];
-  var dateISOCol = colMap['dateISO'];
-
-  // Therapist name column varies by tab
-  var therapistCol;
-  if (tabName === 'ABC Data') {
-    // analytics 'therapistName' preferred; fall back to 'Initials' (no email lookup possible)
-    therapistCol = (colMap['therapistName'] !== undefined) ? colMap['therapistName'] : colMap['Initials'];
-  } else {
-    therapistCol = colMap['Therapist'];
-  }
-
-  // submissionId: TITO base header is "Submission ID"; all other tabs use "submissionId"
-  var submissionIdCol = (tabName === 'Time In Time Out')
-    ? ((colMap['Submission ID']  !== undefined) ? colMap['Submission ID']  : colMap['submissionId'])
-    : colMap['submissionId'];
-
-  var clientNameCol     = colMap['clientName'];
-  var clientIdCol       = colMap['clientId'];
-  var therapistEmailCol = colMap['therapistEmail'];
-
-  // sessionType/billingCode: TITO uses full display names; others use analytics names
-  var sessionTypeCol = (tabName === 'Time In Time Out')
-    ? ((colMap['Type of Session'] !== undefined) ? colMap['Type of Session'] : colMap['sessionType'])
-    : colMap['sessionType'];
-  var billingCodeCol = (tabName === 'Time In Time Out')
-    ? ((colMap['Billing Code']    !== undefined) ? colMap['Billing Code']    : colMap['billingCode'])
-    : colMap['billingCode'];
-
-  // Generates fresh UUIDs for keys not found in TITO (e.g. rows with no TITO counterpart)
-  var localKeyMap = {};
-
-  var corrections = []; // { sheetRow, col (1-based), oldVal, newVal, field }
-
-  for (var ri = 1; ri < data.length; ri++) {
-    var row = data[ri];
-
-    // Skip fully blank rows
-    var hasData = false;
-    for (var bi = 0; bi < row.length; bi++) {
-      if (row[bi] !== '' && row[bi] !== null && row[bi] !== undefined) { hasData = true; break; }
-    }
-    if (!hasData) { continue; }
-
-    var sheetRow = ri + 1; // convert to 1-based sheet row
-
-    // ── Compute dateISO ─────────────────────────────────────────────
-    var currentDateISO = (dateISOCol !== undefined) ? String(row[dateISOCol] || '').trim() : '';
-    var computedDateISO = currentDateISO;
-    if ((!computedDateISO || computedDateISO === '0') && dateCol !== undefined) {
-      computedDateISO = _chd_parseDateToISO(row[dateCol]);
-    }
-
-    // Fix 1: fill dateISO
-    if (dateISOCol !== undefined && computedDateISO && (!currentDateISO || currentDateISO === '0')) {
-      corrections.push({ sheetRow: sheetRow, col: dateISOCol + 1,
-        oldVal: currentDateISO, newVal: computedDateISO, field: 'dateISO' });
-    }
-
-    // ── Session key → UUID ──────────────────────────────────────────
-    var therapistName = (therapistCol !== undefined) ? String(row[therapistCol] || '').trim() : '';
-    var sessionKey    = computedDateISO + '|' + therapistName.toLowerCase();
-    var keyData       = sessionKeyMap[sessionKey];
-    var targetUUID    = '';
-    if (keyData) {
-      targetUUID = keyData.uuid;
-    } else if (computedDateISO) {
-      if (!localKeyMap[sessionKey]) { localKeyMap[sessionKey] = Utilities.getUuid(); }
-      targetUUID = localKeyMap[sessionKey];
-    }
-
-    // Fix 2: fill submissionId
-    if (submissionIdCol !== undefined && targetUUID) {
-      var currentSubId = String(row[submissionIdCol] || '').trim();
-      if (!_mig_isUUID(currentSubId)) {
-        corrections.push({ sheetRow: sheetRow, col: submissionIdCol + 1,
-          oldVal: currentSubId, newVal: targetUUID, field: 'submissionId' });
-      }
-    }
-
-    // Fix 3: fill clientName
-    if (clientNameCol !== undefined && clientInfo.clientName) {
-      var currentClientName = String(row[clientNameCol] || '').trim();
-      if (!currentClientName) {
-        corrections.push({ sheetRow: sheetRow, col: clientNameCol + 1,
-          oldVal: currentClientName, newVal: clientInfo.clientName, field: 'clientName' });
-      }
-    }
-
-    // Fix 3: fill clientId
-    if (clientIdCol !== undefined && clientInfo.clientId) {
-      var currentClientId = String(row[clientIdCol] || '').trim();
-      if (!currentClientId) {
-        corrections.push({ sheetRow: sheetRow, col: clientIdCol + 1,
-          oldVal: currentClientId, newVal: clientInfo.clientId, field: 'clientId' });
-      }
-    }
-
-    // Fix 4: fill therapistEmail
-    if (therapistEmailCol !== undefined && therapistName) {
-      var currentEmail = String(row[therapistEmailCol] || '').trim();
-      if (!currentEmail) {
-        var lookupEmail = therapistEmailMap[therapistName.toLowerCase()];
-        if (lookupEmail) {
-          corrections.push({ sheetRow: sheetRow, col: therapistEmailCol + 1,
-            oldVal: currentEmail, newVal: lookupEmail, field: 'therapistEmail' });
-        }
-      }
-    }
-
-    // Fix 5: fill sessionType and billingCode from TITO (skip TITO itself)
-    if (tabName !== 'Time In Time Out' && keyData) {
-      if (sessionTypeCol !== undefined && keyData.sessionType) {
-        var currentSessType = String(row[sessionTypeCol] || '').trim();
-        if (!currentSessType) {
-          corrections.push({ sheetRow: sheetRow, col: sessionTypeCol + 1,
-            oldVal: currentSessType, newVal: keyData.sessionType, field: 'sessionType' });
-        }
-      }
-      if (billingCodeCol !== undefined && keyData.billingCode) {
-        var currentBillCode = String(row[billingCodeCol] || '').trim();
-        if (!currentBillCode) {
-          corrections.push({ sheetRow: sheetRow, col: billingCodeCol + 1,
-            oldVal: currentBillCode, newVal: keyData.billingCode, field: 'billingCode' });
-        }
-      }
-    }
-  }
-
-  // ── Apply field corrections ─────────────────────────────────────────
-  if (corrections.length === 0) {
-    log('  ' + tabName + ': no field corrections needed');
-  } else {
-    log('  ' + tabName + ': ' + corrections.length + ' field correction(s)' +
-        (isDryRun ? ' [DRY RUN]' : ''));
-    if (!isDryRun) {
-      _chd_backupTab(ss, tabName, log);
-      for (var ci = 0; ci < corrections.length; ci++) {
-        var corr = corrections[ci];
-        try {
-          sheet.getRange(corr.sheetRow, corr.col).setValue(corr.newVal);
-        } catch (e) {
-          log('    ERROR ' + corr.field + ' row ' + corr.sheetRow + ': ' + e.message);
-        }
-      }
-    } else {
-      var sampleMax = corrections.length < 5 ? corrections.length : 5;
-      for (var si = 0; si < sampleMax; si++) {
-        var sc = corrections[si];
-        log('    [DRY RUN] row ' + sc.sheetRow + ' ' + sc.field +
-            ': [' + String(sc.oldVal).substring(0, 30) +
-            '] -> [' + String(sc.newVal).substring(0, 30) + ']');
-      }
-      if (corrections.length > 5) {
-        log('    [DRY RUN] ... and ' + (corrections.length - 5) + ' more');
-      }
-    }
-    result.fixed += corrections.length;
-  }
-
-  // ── Remove duplicates ───────────────────────────────────────────────
-  var dupsResult = _chd_removeDuplicates(ss, sheet, tabName, isDryRun, log);
-  result.dupsRemoved += dupsResult.removed;
-
-  return result;
-}
-
-
-/**
- * Find and delete duplicate rows in a tab.
- * Dedup key = all non-analytics column values, null-byte-joined.
- * Keeps first occurrence; deletes later duplicates bottom-up.
- */
-function _chd_removeDuplicates(ss, sheet, tabName, isDryRun, log) {
-  var result = { removed: 0 };
-
-  // Re-read after any corrections have been written
-  var data = sheet.getDataRange().getValues();
-  if (data.length < 2) { return result; }
-
-  var headers = data[0];
-
-  // Analytics / metadata columns excluded from the dedup fingerprint
-  var ANALYTICS_COLS = {
-    'submissionId': true, 'Submission ID': true,
-    'clientName': true, 'clientId': true,
-    'therapistEmail': true, 'therapistName': true,
-    'sessionType': true, 'billingCode': true,
-    'isDraft': true, 'payloadHash': true,
-    'submittedAt': true, 'dateISO': true,
-    'manualEntry': true, 'enteredBy': true,
-    'Adjusted End Time': true, 'End Time Adjustment Reason': true
-  };
-
-  var seen         = {};
-  var rowsToDelete = []; // 1-based sheet row indices
-
-  for (var ri = 1; ri < data.length; ri++) {
-    var row = data[ri];
-    // Skip blank rows
-    var hasData = false;
-    for (var bi = 0; bi < row.length; bi++) {
-      if (row[bi] !== '' && row[bi] !== null && row[bi] !== undefined) { hasData = true; break; }
-    }
-    if (!hasData) { continue; }
-
-    var keyParts = [];
-    for (var hi = 0; hi < headers.length; hi++) {
-      var h = String(headers[hi]).trim();
-      if (!h || ANALYTICS_COLS[h]) { continue; }
-      keyParts.push(String(row[hi] !== null && row[hi] !== undefined ? row[hi] : ''));
-    }
-    var dedupKey = keyParts.join('\x00');
-
-    if (seen[dedupKey]) {
-      rowsToDelete.push(ri + 1);
-    } else {
-      seen[dedupKey] = true;
-    }
-  }
-
-  if (rowsToDelete.length === 0) {
-    log('  ' + tabName + ': no duplicate rows');
-    return result;
-  }
-
-  log('  ' + tabName + ': ' + rowsToDelete.length + ' duplicate row(s)' +
-      (isDryRun ? ' [DRY RUN]' : ''));
-
-  if (!isDryRun) {
-    _chd_backupTab(ss, tabName, log);
-    // Delete bottom-up so row indices remain valid
-    for (var di = rowsToDelete.length - 1; di >= 0; di--) {
-      try {
-        sheet.deleteRow(rowsToDelete[di]);
-        log('    deleted row ' + rowsToDelete[di]);
-      } catch (e) {
-        log('    ERROR deleting row ' + rowsToDelete[di] + ': ' + e.message);
-      }
-    }
-  } else {
-    var preview = rowsToDelete.slice(0, 10).join(', ');
-    log('    [DRY RUN] rows: ' + preview + (rowsToDelete.length > 10 ? '...' : ''));
-  }
-
-  result.removed = rowsToDelete.length;
-  return result;
-}
-
-
-/**
- * fixOrphanSubmissionIds(dryRun)
- *
- * For each client sheet, reads TITO to build an authoritative
- * sessionKey → submissionId map, then reconciles Behavior Data,
- * Trial Data, and ABC Data rows whose submissionId doesn't match.
- *
- * Session key: dateISO + '|' + therapistNameLower (from Therapist column).
- * For rows where the therapist analytics column is blank the function
- * tries a date-only fallback (unique per-date match) so those rows are
- * still patched.
- *
- * Run from Apps Script editor:
- *   fixOrphanSubmissionIds(true);   // dry run
- *   fixOrphanSubmissionIds(false);  // live
- */
-function fixOrphanSubmissionIds(dryRun) {
-  var isDryRun = (dryRun !== false);
-  var ts = new Date().toISOString();
-  var logLines = [];
-  var totalFixed = 0;
-
-  function log(msg) { Logger.log(msg); logLines.push(msg); }
-
-  log('=== fixOrphanSubmissionIds ' + (isDryRun ? '[DRY RUN]' : '[LIVE]') +
-      ' started ' + ts + ' ===');
-
-  var adminSS = SpreadsheetApp.openById(ADMIN_SHEET_ID);
-  var clientsTabSheet = adminSS.getSheetByName('Clients');
-  var clients = [];
-  if (clientsTabSheet) {
-    var cData = clientsTabSheet.getDataRange().getValues();
-    if (cData.length > 1) {
-      var cHeaders = cData[0];
-      var cIdCol = -1, cNameCol = -1, cSheetIdCol = -1, cStatusCol = -1;
-      for (var ci = 0; ci < cHeaders.length; ci++) {
-        var ch = String(cHeaders[ci]).trim().toLowerCase();
-        if (ch === 'id') { cIdCol = ci; }
-        else if (ch === 'name') { cNameCol = ci; }
-        else if (ch === 'sheetid') { cSheetIdCol = ci; }
-        else if (ch === 'status') { cStatusCol = ci; }
-      }
-      for (var cr = 1; cr < cData.length; cr++) {
-        var crow = cData[cr];
-        var cstatus = cStatusCol !== -1 ? String(crow[cStatusCol]).trim().toLowerCase() : 'active';
-        if (cstatus !== 'active') { continue; }
-        var cid = cIdCol !== -1 ? String(crow[cIdCol]).trim() : '';
-        var cname = cNameCol !== -1 ? String(crow[cNameCol]).trim() : '';
-        var csheetId = cSheetIdCol !== -1 ? String(crow[cSheetIdCol]).trim() : '';
-        if (cid && csheetId) {
-          clients.push({ id: cid, name: cname, sheetId: csheetId });
-        }
-      }
-    }
-  }
-
-  if (clients.length === 0) {
-    log('ERROR: No active clients found in Clients tab');
-    return { dryRun: isDryRun, summary: 'No clients found', fixed: 0, log: logLines };
-  }
-
-  log('Processing ' + clients.length + ' client(s)');
-
-  var TABS_TO_FIX = ['Behavior Data', 'Trial Data', 'ABC Data'];
-
-  for (var cli = 0; cli < clients.length; cli++) {
-    var client = clients[cli];
-    log('--- Client: ' + client.name + ' (' + client.id + ') sheetId=' + client.sheetId + ' ---');
-
-    var clientSS;
-    try {
-      clientSS = SpreadsheetApp.openById(client.sheetId);
-    } catch (e) {
-      log('  ERROR: cannot open sheet ' + client.sheetId + ': ' + e.message);
-      continue;
-    }
-
-    // ── Step 1: Build authoritative map from TITO ──────────────────────────
-    var titoSheet = clientSS.getSheetByName('Time In Time Out');
-    if (!titoSheet) {
-      log('  SKIP: no TITO tab');
-      continue;
-    }
-
-    var titoData = titoSheet.getDataRange().getValues();
-    if (titoData.length < 2) {
-      log('  SKIP: TITO is empty');
-      continue;
-    }
-
-    var titoHeaders = titoData[0];
-    var titoColMap = _mig_buildColMap(titoHeaders);
-
-    var titoSubCol     = titoColMap['submissionId'] !== undefined ? titoColMap['submissionId']
-                       : titoColMap['Submission ID'] !== undefined ? titoColMap['Submission ID'] : -1;
-    var titoDateISOCol = titoColMap['dateISO'] !== undefined ? titoColMap['dateISO'] : -1;
-    var titoDateCol    = titoColMap['Date'] !== undefined ? titoColMap['Date']
-                       : titoColMap['date'] !== undefined ? titoColMap['date'] : -1;
-    var titoTherapistCol = titoColMap['Therapist'] !== undefined ? titoColMap['Therapist']
-                         : titoColMap['therapistEmail'] !== undefined ? titoColMap['therapistEmail'] : -1;
-
-    if (titoSubCol === -1) {
-      log('  SKIP: TITO has no submissionId column');
-      continue;
-    }
-
-    // keyMap: dateISO|therapistLower → submissionId
-    // dateOnlyMap: dateISO → [submissionId, ...] for date-only fallback
-    var keyMap = {};
-    var dateOnlyMap = {};
-
-    for (var tr = 1; tr < titoData.length; tr++) {
-      var trow = titoData[tr];
-      var tsub = String(trow[titoSubCol]).trim();
-      if (!tsub || !_mig_isUUID(tsub)) { continue; }
-
-      var tdateRaw = '';
-      if (titoDateISOCol !== -1 && trow[titoDateISOCol]) {
-        tdateRaw = trow[titoDateISOCol];
-      } else if (titoDateCol !== -1 && trow[titoDateCol]) {
-        tdateRaw = trow[titoDateCol];
-      }
-      var tdateISO = _chd_parseDateToISO(tdateRaw);
-      if (!tdateISO) { continue; }
-
-      var ttherapist = titoTherapistCol !== -1 ? String(trow[titoTherapistCol]).trim().toLowerCase() : '';
-      var tkey = tdateISO + '|' + ttherapist;
-      if (!keyMap[tkey]) { keyMap[tkey] = tsub; }
-
-      // date-only fallback: collect all submissionIds for this date
-      if (!dateOnlyMap[tdateISO]) { dateOnlyMap[tdateISO] = []; }
-      var found = false;
-      for (var di = 0; di < dateOnlyMap[tdateISO].length; di++) {
-        if (dateOnlyMap[tdateISO][di] === tsub) { found = true; break; }
-      }
-      if (!found) { dateOnlyMap[tdateISO].push(tsub); }
-    }
-
-    var titoKeyCount = _chd_objectKeyCount(keyMap);
-    log('  TITO: ' + titoKeyCount + ' session keys loaded');
-    if (titoKeyCount === 0) {
-      log('  SKIP: no valid TITO sessions');
-      continue;
-    }
-
-    // ── Step 2: Reconcile each dependent tab ──────────────────────────────
-    for (var ti = 0; ti < TABS_TO_FIX.length; ti++) {
-      var tabName = TABS_TO_FIX[ti];
-      var tabSheet = clientSS.getSheetByName(tabName);
-      if (!tabSheet) { log('  ' + tabName + ': tab not found, skip'); continue; }
-
-      var tabData = tabSheet.getDataRange().getValues();
-      if (tabData.length < 2) { log('  ' + tabName + ': empty, skip'); continue; }
-
-      var tabHeaders = tabData[0];
-      var tabColMap = _mig_buildColMap(tabHeaders);
-
-      var subCol      = tabColMap['submissionId'] !== undefined ? tabColMap['submissionId'] : -1;
-      var dateISOCol  = tabColMap['dateISO'] !== undefined ? tabColMap['dateISO'] : -1;
-      var dateCol     = tabColMap['Date'] !== undefined ? tabColMap['Date']
-                      : tabColMap['date'] !== undefined ? tabColMap['date'] : -1;
-      var therapistCol = tabColMap['Therapist'] !== undefined ? tabColMap['Therapist'] : -1;
-
-      if (subCol === -1) {
-        log('  ' + tabName + ': no submissionId column, skip');
-        continue;
-      }
-
-      var tabFixed = 0;
-      var tabSkipped = 0;
-
-      for (var row = 1; row < tabData.length; row++) {
-        var drow = tabData[row];
-
-        // Resolve dateISO for this row
-        var ddateRaw = '';
-        if (dateISOCol !== -1 && drow[dateISOCol]) {
-          ddateRaw = drow[dateISOCol];
-        } else if (dateCol !== -1 && drow[dateCol]) {
-          ddateRaw = drow[dateCol];
-        }
-        var ddateISO = _chd_parseDateToISO(ddateRaw);
-        if (!ddateISO) { tabSkipped++; continue; }
-
-        var currentSub = String(drow[subCol]).trim();
-
-        // Build session key using Therapist column if available
-        var dtherapist = therapistCol !== -1 ? String(drow[therapistCol]).trim().toLowerCase() : '';
-        var dkey = ddateISO + '|' + dtherapist;
-
-        var authoritativeSub = keyMap[dkey];
-
-        // Therapist column blank or no exact match — try date-only fallback
-        // (only use if exactly one TITO session on that date)
-        if (!authoritativeSub && dtherapist === '') {
-          var dateSubs = dateOnlyMap[ddateISO];
-          if (dateSubs && dateSubs.length === 1) {
-            authoritativeSub = dateSubs[0];
-          }
-        }
-
-        if (!authoritativeSub) { tabSkipped++; continue; }
-        if (currentSub === authoritativeSub) { continue; } // already correct
-
-        // Apply fix
-        var sheetRow = row + 1; // 1-based, row 1 = header
-        var sheetCol = subCol + 1; // 1-based
-
-        if (!isDryRun) {
-          try {
-            tabSheet.getRange(sheetRow, sheetCol).setValue(authoritativeSub);
-          } catch (e) {
-            log('  ' + tabName + ' row ' + sheetRow + ': ERROR ' + e.message);
-            continue;
-          }
-        }
-
-        log('  ' + tabName + ' row ' + sheetRow + ': ' +
-            (currentSub || '[blank]') + ' → ' + authoritativeSub +
-            ' (key=' + dkey + ')' +
-            (isDryRun ? ' [DRY RUN]' : ''));
-        tabFixed++;
-        totalFixed++;
-      }
-
-      log('  ' + tabName + ': fixed=' + tabFixed + ' skipped=' + tabSkipped);
-    }
-
-    // ── Step 3: Write to Audit Log ─────────────────────────────────────────
-    if (!isDryRun && totalFixed > 0) {
-      try {
-        var auditSheet = adminSS.getSheetByName('RT Audit Log');
-        if (auditSheet) {
-          auditSheet.appendRow([
-            new Date(), 'fixOrphanSubmissionIds', 'SYSTEM',
-            'client=' + client.id + ' fixed=' + totalFixed,
-            'fixOrphanSubmissionIds'
-          ]);
-        }
-      } catch (e) {
-        log('  WARNING: audit log write failed: ' + e.message);
-      }
-    }
-  }
-
-  var summary = (isDryRun ? '[DRY RUN] ' : '') +
-      'fixOrphanSubmissionIds complete. fixed=' + totalFixed;
-  log('=== ' + summary + ' ===');
-
-  return {
-    dryRun: isDryRun,
-    summary: summary,
-    fixed: totalFixed,
-    log: logLines
-  };
-}
-
-
-/**
- * diagnoseBehaviorHeaders()
- *
- * READ-ONLY diagnostic. Opens every active client sheet, reads the full
- * header row of the "Behavior Data" tab, and logs:
- *   - Each column index (0-based) + header value; empties flagged with ***EMPTY***
- *   - The first data row (row 2) values aligned with their headers
- *
- * Run from Apps Script editor:
- *   diagnoseBehaviorHeaders();
- *
- * Or via doPost: { action: 'diagnoseBehaviorHeaders' }
- * Results are in Logger output and returned as { log: [...] }.
- */
-function diagnoseBehaviorHeaders() {
-  var logLines = [];
-  function log(msg) { Logger.log(msg); logLines.push(msg); }
-
-  log('=== diagnoseBehaviorHeaders started ' + new Date().toISOString() + ' ===');
-
-  var adminSS = SpreadsheetApp.openById(ADMIN_SHEET_ID);
-  var clientsTabSheet = adminSS.getSheetByName('Clients');
-  if (!clientsTabSheet) {
-    log('ERROR: Clients tab not found in admin spreadsheet (id=' + ADMIN_SHEET_ID + ')');
-    return { log: logLines };
-  }
-
-  var cData = clientsTabSheet.getDataRange().getValues();
-  if (cData.length < 2) {
-    log('ERROR: Clients tab has no data rows');
-    return { log: logLines };
-  }
-
-  // Build column map for Clients tab
-  var cHeaders = cData[0];
-  var cIdCol = -1, cNameCol = -1, cSheetIdCol = -1, cStatusCol = -1;
-  for (var ci = 0; ci < cHeaders.length; ci++) {
-    var ch = String(cHeaders[ci]).trim().toLowerCase();
-    if (ch === 'id') { cIdCol = ci; }
-    else if (ch === 'name') { cNameCol = ci; }
-    else if (ch === 'sheetid') { cSheetIdCol = ci; }
-    else if (ch === 'status') { cStatusCol = ci; }
-  }
-
-  var clients = [];
-  for (var cr = 1; cr < cData.length; cr++) {
-    var crow = cData[cr];
-    var cstatus = cStatusCol !== -1 ? String(crow[cStatusCol]).trim().toLowerCase() : 'active';
-    if (cstatus !== 'active') { continue; }
-    var cid     = cIdCol     !== -1 ? String(crow[cIdCol]).trim()     : '';
-    var cname   = cNameCol   !== -1 ? String(crow[cNameCol]).trim()   : '';
-    var csheetId = cSheetIdCol !== -1 ? String(crow[cSheetIdCol]).trim() : '';
-    if (cid && csheetId) {
-      clients.push({ id: cid, name: cname, sheetId: csheetId });
-    }
-  }
-
-  log('Found ' + clients.length + ' active client(s)');
-
-  for (var cli = 0; cli < clients.length; cli++) {
-    var client = clients[cli];
-    log('');
-    log('━━━ CLIENT: ' + client.name + ' (' + client.id + ') ━━━');
-    log('    sheetId: ' + client.sheetId);
-
-    var clientSS;
-    try {
-      clientSS = SpreadsheetApp.openById(client.sheetId);
-    } catch (e) {
-      log('    ERROR opening sheet ' + client.sheetId + ': ' + e.message);
-      continue;
-    }
-    if (!clientSS) {
-      log('    ERROR: openById returned null for sheetId=' + client.sheetId + ' (check sharing/permissions)');
-      continue;
-    }
-
-    var bdSheet = clientSS.getSheetByName('Behavior Data');
-    if (!bdSheet) {
-      log('    Behavior Data tab not found for ' + client.name + ' (sheetId=' + client.sheetId + ')');
-      continue;
-    }
-
-    var lastCol = bdSheet.getLastColumn();
-    var lastRow = bdSheet.getLastRow();
-    log('    Behavior Data: ' + lastRow + ' rows x ' + lastCol + ' cols');
-
-    if (lastCol === 0) {
-      log('    (empty sheet)');
-      continue;
-    }
-
-    // Read header row
-    var headerRange = bdSheet.getRange(1, 1, 1, lastCol);
-    var headers = headerRange.getValues()[0];
-
-    // Log headers
-    log('    ── HEADERS (' + lastCol + ' columns) ──');
-    var emptyCount = 0;
-    for (var hi = 0; hi < headers.length; hi++) {
-      var hval = String(headers[hi]);
-      var htrim = hval.trim();
-      var flag = '';
-      if (htrim === '') {
-        emptyCount++;
-        flag = '  <<<  ***EMPTY***';
-      }
-      log('    col[' + hi + '] (sheet col ' + (hi + 1) + '): "' + htrim + '"' + flag);
-    }
-    if (emptyCount > 0) {
-      log('    !! ' + emptyCount + ' EMPTY HEADER(S) detected !!');
-    } else {
-      log('    (no empty headers)');
-    }
-
-    // Read first data row (row 2) if it exists
-    if (lastRow < 2) {
-      log('    ── ROW 2: (no data rows) ──');
-      continue;
-    }
-
-    var row2Range = bdSheet.getRange(2, 1, 1, lastCol);
-    var row2 = row2Range.getValues()[0];
-
-    log('    ── ROW 2 (first data row) ──');
-    for (var ri = 0; ri < row2.length; ri++) {
-      var rval = row2[ri];
-      var rstr = (rval instanceof Date) ? rval.toISOString() : String(rval);
-      var rhdr = String(headers[ri]).trim();
-      var rempty = (rhdr === '') ? '  [EMPTY HEADER]' : '';
-      log('    col[' + ri + '] "' + rhdr + '"' + rempty + ' = ' + rstr);
-    }
-  }
-
-  log('');
-  log('=== diagnoseBehaviorHeaders complete ===');
-  return { log: logLines };
-}
-
-
-/**
- * Create a CLEANUP_BACKUP copy of a tab before the first write.
- * No-ops silently if the backup already exists.
- */
-function _chd_backupTab(ss, tabName, log) {
-  try {
-    var sheet = ss.getSheetByName(tabName);
-    if (!sheet) { return; }
-    var backupName = tabName + ' CLEANUP_BACKUP';
-    if (ss.getSheetByName(backupName)) {
-      log('  Backup exists: ' + backupName + ' (kept)');
-      return;
-    }
-    var backup = sheet.copyTo(ss);
-    backup.setName(backupName);
-    log('  Created backup: ' + backupName);
-  } catch (e) {
-    log('  WARNING: backup failed for ' + tabName + ': ' + e.message);
-  }
-}
-
-
-// ═══════════════════════════════════════════════════════════════════════════
-// SHARED HELPERS
-// ═══════════════════════════════════════════════════════════════════════════
-
-/**
- * Load active clients from the admin spreadsheet.
- * Returns [{id, name, sheetId}].
- * If filterClientId is non-empty, returns only that client.
- */
-function _loadActiveClients(adminSS, filterClientId) {
-  var clients = [];
-  var cSheet = adminSS.getSheetByName('Clients');
-  if (!cSheet) { return clients; }
-  var data = cSheet.getDataRange().getValues();
-  if (data.length < 2) { return clients; }
-  var cm = _mig_buildColMap(data[0]);
-  for (var ri = 1; ri < data.length; ri++) {
-    var row = data[ri];
-    var status = cm['status'] !== undefined ? String(row[cm['status']]).trim().toLowerCase() : 'active';
-    if (status !== 'active') { continue; }
-    var cid = cm['id'] !== undefined ? String(row[cm['id']]).trim() : '';
-    if (!cid) { continue; }
-    if (filterClientId && cid !== filterClientId) { continue; }
-    var cname   = cm['name']    !== undefined ? String(row[cm['name']]).trim()    : '';
-    var sheetId = cm['sheetId'] !== undefined ? String(row[cm['sheetId']]).trim() : '';
-    if (sheetId) { clients.push({ id: cid, name: cname, sheetId: sheetId }); }
-  }
-  return clients;
-}
-
-
-// ═══════════════════════════════════════════════════════════════════════════
-// PART B — repairCamilaBehaviorData
-// ═══════════════════════════════════════════════════════════════════════════
-
-/**
- * repairCamilaBehaviorData(dryRun)
- *
- * One-time structural repair of Camila's (C1) Behavior Data sheet.
- *
- * Current layout (24 cols, 0-indexed):
- *   [0-9]  Date..SIB
- *   [10]   Tantrum Frequency
- *   [11]   Tantrum Total (Min)   — some rows have OFF Task count here (wrong)
- *   [12]   [EMPTY header]        — some rows have Tantrum Total value here (wrong)
- *   [13]   OFF Task              — some rows have submissionId UUID here (wrong)
- *   [14]   submissionId          — some rows have dup UUID / clientName here
- *   [15]   clientName            — some rows have clientId "C1" here (double-shifted)
- *   [16-23] analytics...
- *
- * Three row types (detected by col[13] and col[15]):
- *   Type A: col[13] is NOT a UUID — correctly positioned, just needs empty col deleted
- *   Type B: col[13] IS a UUID AND col[15] != 'C1'
- *           swap [11]/[12] for Tantrum/OFFTask, fix submissionId at [14]
- *   Type C: col[13] IS a UUID AND col[15] == 'C1'
- *           analytics block shifted left by 1 — unshift into correct positions
- *
- * After cell-level setValue fixes, deletes the empty column (sheet col 13, 1-indexed)
- * so the 24-col sheet becomes the correct 23-col layout.
- *
- * Run: repairCamilaBehaviorData(true)   // dry run
- *      repairCamilaBehaviorData(false)  // live
- */
-function repairCamilaBehaviorData(dryRun) {
-  var isDryRun = (dryRun !== false);
-  var logLines = [];
-  var totalFixed = 0;
-  function log(msg) { Logger.log(msg); logLines.push(msg); }
-
-  log('=== repairCamilaBehaviorData ' + (isDryRun ? '[DRY RUN]' : '[LIVE]') +
-      ' started ' + new Date().toISOString() + ' ===');
-
-  var adminSS = SpreadsheetApp.openById(ADMIN_SHEET_ID);
-  var clients = _loadActiveClients(adminSS, 'C1');
-  if (!clients.length) {
-    log('ERROR: C1 not found in Clients tab');
-    return { dryRun: isDryRun, summary: 'C1 not found', fixed: 0, log: logLines };
-  }
-  var client = clients[0];
-  log('Client: ' + client.name + ' (' + client.id + ') sheetId=' + client.sheetId);
-
-  var clientSS;
-  try { clientSS = SpreadsheetApp.openById(client.sheetId); } catch (e) {
-    log('ERROR opening client sheet: ' + e.message);
-    return { dryRun: isDryRun, summary: 'cannot open sheet', fixed: 0, log: logLines };
-  }
-  if (!clientSS) {
-    log('ERROR: openById returned null');
-    return { dryRun: isDryRun, summary: 'null sheet', fixed: 0, log: logLines };
-  }
-
-  var bdSheet = clientSS.getSheetByName('Behavior Data');
-  if (!bdSheet) {
-    log('ERROR: Behavior Data tab not found');
-    return { dryRun: isDryRun, summary: 'no BD tab', fixed: 0, log: logLines };
-  }
-
-  // Backup
-  if (!isDryRun) {
-    var backupName = 'Behavior Data REPAIR_BACKUP';
-    if (!clientSS.getSheetByName(backupName)) {
-      var bk = bdSheet.copyTo(clientSS);
-      bk.setName(backupName);
-      log('Created backup: ' + backupName);
-    } else {
-      log('Backup already exists: ' + backupName + ' (kept)');
-    }
-  }
-
-  var lastCol = bdSheet.getLastColumn();
-  var lastRow = bdSheet.getLastRow();
-  log('Sheet: ' + lastRow + ' rows x ' + lastCol + ' cols');
-
-  if (lastCol < 14) {
-    log('ERROR: fewer than 14 cols — unexpected layout, aborting');
-    return { dryRun: isDryRun, summary: 'unexpected layout', fixed: 0, log: logLines };
-  }
-
-  var allData = bdSheet.getRange(1, 1, lastRow, lastCol).getValues();
-  var headers = allData[0];
-  log('Headers[12]="' + headers[12] + '" [13]="' + headers[13] +
-      '" [14]="' + headers[14] + '" [15]="' + headers[15] + '"');
-
-  // Target 23-col headers (after empty col deleted)
-  var TARGET_HEADERS = [
-    'Date', 'Therapist', 'Setting',
-    'Aggression', 'Whining', 'Ingesting Inedibles', 'Elopement', 'Task Refusal',
-    'Out of Area', 'SIB',
-    'Tantrum Frequency', 'Tantrum Total (Min)', 'OFF Task',
-    'submissionId', 'clientName', 'clientId', 'therapistEmail',
-    'sessionType', 'billingCode', 'isDraft', 'payloadHash', 'submittedAt', 'dateISO'
-  ];
-
-  // ── Analyse rows and build correction list ──────────────────────────────
-  // All corrections reference CURRENT (24-col) 1-indexed sheet positions.
-  // They are applied BEFORE the empty column is deleted.
-  // After deletion (sheetCol 13 gone), everything from sheetCol 14+ shifts left by 1,
-  // landing each value in the correct TARGET position.
-  var corrections = []; // {sheetRow, sheetCol(1-based), newVal, note}
-
-  for (var ri = 1; ri < allData.length; ri++) {
-    var row = allData[ri];
-    var sheetRow = ri + 1;
-
-    // Skip completely empty rows
-    if (!row[0] && !row[1] && !row[3]) { continue; }
-
-    var v11 = row[11]; // Tantrum Total header — may have OFF Task count (Type B)
-    var v12 = row[12]; // EMPTY header      — may have Tantrum Total value (Type B)
-    var v13 = row[13]; // OFF Task header   — may have submissionId UUID (Type B/C)
-    var v14 = row[14]; // submissionId hdr  — may have dup UUID or clientName
-
-    var col13uuid = _mig_isUUID(String(v13).trim());
-    var col15isClientId = (String(row[15]).trim() === client.id); // "C1"
-
-    var rowType = 'A';
-    if (col13uuid && col15isClientId) { rowType = 'C'; }
-    else if (col13uuid) { rowType = 'B'; }
-
-    log('  row ' + sheetRow + ' type=' + rowType +
-        ' [11]=' + v11 + ' [12]=' + v12 +
-        ' [13]=' + String(v13).substring(0, 12) +
-        ' [14]=' + String(v14).substring(0, 12) +
-        ' [15]=' + String(row[15]).substring(0, 10));
-
-    if (rowType === 'A') {
-      // No cell fixes needed. Deleting sheetCol 13 will align this row correctly.
-
-    } else if (rowType === 'B') {
-      // col[11] = OFF Task int (wrong — in Tantrum Total col)
-      // col[12] = Tantrum Total value (wrong — in empty col, will be deleted)
-      // col[13] = submissionId UUID (wrong — in OFF Task col)
-      // col[14] = dup UUID (wrong — in submissionId col)
-      // col[15+] = analytics starting at clientName — already correct
-      //
-      // Fix BEFORE deletion (sheetCol = 1-indexed):
-      //   sheetCol 12 ← v12 (Tantrum Total → Tantrum Total column)
-      //   sheetCol 14 ← v11 (OFF Task int → OFF Task column)
-      //   sheetCol 15 ← v13 (submissionId UUID → submissionId column)
-      //   sheetCol 16+ already correct
-      corrections.push({ sheetRow: sheetRow, sheetCol: 12,
-        newVal: (v12 !== '' && v12 !== null) ? v12 : 0,
-        note: 'B: Tantrum Total ← col[12]' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 14,
-        newVal: (v11 !== '' && v11 !== null) ? v11 : 0,
-        note: 'B: OFF Task ← col[11]' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 15,
-        newVal: v13,
-        note: 'B: submissionId ← col[13] UUID' });
-
-    } else { // rowType === 'C'
-      // Type C has TWO overlapping problems:
-      //   1. col[13] (OFF Task hdr) = submissionId UUID — same as Type B
-      //   2. clientName was never written to this row, so col[14] (submissionId hdr)
-      //      has the cleanup-generated duplicate UUID (DISCARD), and from col[15]
-      //      onward all analytics are shifted LEFT by one extra position.
-      //
-      // Current layout:
-      //   col[12] (EMPTY hdr)        = 0  — OFF Task count (will be deleted)
-      //   col[13] (OFF Task hdr)     = original submissionId UUID
-      //   col[14] (submissionId hdr) = cleanup duplicate UUID — DISCARD
-      //   col[15] (clientName hdr)   = "C1" (clientId value; clientName missing)
-      //   col[16] (clientId hdr)     = therapistEmail value
-      //   col[17] (therapistEmail)   = sessionType value
-      //   col[18] (sessionType)      = billingCode value
-      //   col[19] (billingCode)      = wrong value (97153 duplicate); isDraft = false
-      //   col[20] (isDraft)          = payloadHash value
-      //   col[21] (payloadHash)      = submittedAt value
-      //   col[22] (submittedAt)      = dateISO value
-      //   col[23] (dateISO)          = duplicate dateISO (col[22] is authoritative)
-      //
-      // Fix BEFORE deletion (sheetCol = 1-indexed):
-      //   sheetCol 14 ← 0             (OFF Task = 0)
-      //   sheetCol 15 ← v13           (submissionId = original UUID from col[13])
-      //   sheetCol 16 ← client.name   (clientName hardcoded — was never in row)
-      //   sheetCol 17 ← row[15]       (clientId = "C1")
-      //   sheetCol 18 ← row[16]       (therapistEmail)
-      //   sheetCol 19 ← row[17]       (sessionType)
-      //   sheetCol 20 ← row[18]       (billingCode)
-      //   sheetCol 21 ← false         (isDraft — col[19] has wrong value, hardcode)
-      //   sheetCol 22 ← row[20]       (payloadHash)
-      //   sheetCol 23 ← row[21]       (submittedAt)
-      //   sheetCol 24 ← row[22]       (dateISO)
-      corrections.push({ sheetRow: sheetRow, sheetCol: 14, newVal: 0,           note: 'C: OFF Task=0' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 15, newVal: v13,         note: 'C: submissionId ← col[13]' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 16, newVal: client.name, note: 'C: clientName (hardcoded)' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 17, newVal: row[15],     note: 'C: clientId ← col[15]' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 18, newVal: row[16],     note: 'C: therapistEmail ← col[16]' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 19, newVal: row[17],     note: 'C: sessionType ← col[17]' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 20, newVal: row[18],     note: 'C: billingCode ← col[18]' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 21, newVal: false,       note: 'C: isDraft=false (hardcoded)' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 22, newVal: row[20],     note: 'C: payloadHash ← col[20]' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 23, newVal: row[21],     note: 'C: submittedAt ← col[21]' });
-      var dateISOVal = (lastCol >= 24 && row[22] !== undefined) ? row[22] : '';
-      corrections.push({ sheetRow: sheetRow, sheetCol: 24, newVal: dateISOVal,  note: 'C: dateISO ← col[22]' });
-    }
-  }
-
-  log('Corrections planned: ' + corrections.length);
-
-  // ── Apply or preview ────────────────────────────────────────────────────
-  if (isDryRun) {
-    for (var pi = 0; pi < corrections.length; pi++) {
-      var pc = corrections[pi];
-      log('  [DRY RUN] row ' + pc.sheetRow + ' sheetCol ' + pc.sheetCol +
-          ': ' + pc.note + ' → ' + String(pc.newVal).substring(0, 40));
-    }
-    log('[DRY RUN] Would delete empty column (sheet col 13) and rewrite header row');
-  } else {
-    for (var ai = 0; ai < corrections.length; ai++) {
-      var ac = corrections[ai];
-      try {
-        bdSheet.getRange(ac.sheetRow, ac.sheetCol).setValue(ac.newVal);
-        log('  row ' + ac.sheetRow + ' sheetCol ' + ac.sheetCol + ': ' + ac.note);
-        totalFixed++;
-      } catch (e) {
-        log('  ERROR row ' + ac.sheetRow + ' col ' + ac.sheetCol + ': ' + e.message);
-      }
-    }
-    SpreadsheetApp.flush();
-
-    // Delete the empty column (sheet col 13, 1-indexed)
-    log('Deleting empty column (sheet col 13)...');
-    bdSheet.deleteColumn(13);
-    SpreadsheetApp.flush();
-    log('Empty column deleted. Sheet now has ' + bdSheet.getLastColumn() + ' cols.');
-
-    // Rewrite header row to TARGET_HEADERS
-    var newLastCol = bdSheet.getLastColumn();
-    var hdrLen = Math.min(TARGET_HEADERS.length, newLastCol);
-    var hdrRange = bdSheet.getRange(1, 1, 1, hdrLen);
-    hdrRange.setValues([TARGET_HEADERS.slice(0, hdrLen)]);
-    hdrRange.setFontWeight('bold');
-    hdrRange.setBackground('#00A7C7');
-    hdrRange.setFontColor('#FFFFFF');
-    log('Header row rewritten (' + hdrLen + ' cols).');
-
-    // Audit log
-    var auditSheet = adminSS.getSheetByName('RT Audit Log');
-    if (auditSheet) {
-      auditSheet.appendRow([new Date(), 'repairCamilaBehaviorData', 'SYSTEM',
-        'client=C1 corrections=' + corrections.length + ' emptyColDeleted=true',
-        'repairCamilaBehaviorData']);
-    }
-  }
-
-  var summary = (isDryRun ? '[DRY RUN] ' : '') +
-    'repairCamilaBehaviorData complete. corrections=' + corrections.length;
-  log('=== ' + summary + ' ===');
-  return { dryRun: isDryRun, summary: summary, fixed: totalFixed, log: logLines };
-}
-
-
-// ═══════════════════════════════════════════════════════════════════════════
-// PART C — unifySubmissionIds
-// ═══════════════════════════════════════════════════════════════════════════
-
-/**
- * Normalize a date value to YYYY-MM-DD using UTC to avoid timezone boundary issues.
- */
-function _usid_normalizeDateISO(val) {
-  if (!val && val !== 0) { return ''; }
-  if (val instanceof Date) {
-    return Utilities.formatDate(val, 'UTC', 'yyyy-MM-dd');
-  }
-  var s = String(val).trim();
-  if (!s || s === '0') { return ''; }
-  if (/^\d{4}-\d{2}-\d{2}/.test(s)) { return s.substring(0, 10); }
-  var mdy = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (mdy) {
-    return mdy[3] + '-' + ('0' + mdy[1]).slice(-2) + '-' + ('0' + mdy[2]).slice(-2);
-  }
-  var MONTHS = { jan:1, feb:2, mar:3, apr:4, may:5, jun:6, jul:7, aug:8,
-                 sep:9, oct:10, nov:11, dec:12 };
-  var mon = s.match(/^([A-Za-z]{3})\s+(\d{1,2}),?\s+(\d{4})$/);
-  if (mon) {
-    var m = MONTHS[mon[1].toLowerCase()];
-    if (m) { return mon[3] + '-' + ('0' + m).slice(-2) + '-' + ('0' + mon[2]).slice(-2); }
-  }
-  try {
-    var d = new Date(s);
-    if (!isNaN(d.getTime())) { return Utilities.formatDate(d, 'UTC', 'yyyy-MM-dd'); }
-  } catch (ex) {}
-  return '';
-}
-
-
-/**
- * Build TITO session key maps for one client spreadsheet.
- * Returns { keyMap: {dateISO|therapistLower: submissionId},
- *           dateOnlyMap: {dateISO: [submissionId, ...]} }
- */
-function _usid_buildTitoMap(clientSS, log) {
-  var keyMap = {};
-  var dateOnlyMap = {};
-
-  var titoSheet = clientSS.getSheetByName('Time In Time Out');
-  if (!titoSheet) { log('  TITO tab not found'); return { keyMap: keyMap, dateOnlyMap: dateOnlyMap }; }
-
-  var data = titoSheet.getDataRange().getValues();
-  if (data.length < 2) { log('  TITO empty'); return { keyMap: keyMap, dateOnlyMap: dateOnlyMap }; }
-
-  var cm = _mig_buildColMap(data[0]);
-  var subCol      = cm['submissionId'] !== undefined ? cm['submissionId']
-                  : (cm['Submission ID'] !== undefined ? cm['Submission ID'] : -1);
-  var dateISOCol  = cm['dateISO']    !== undefined ? cm['dateISO']    : -1;
-  var dateCol     = cm['Date']       !== undefined ? cm['Date']
-                  : (cm['date']      !== undefined ? cm['date']      : -1);
-  var therapistCol = cm['Therapist'] !== undefined ? cm['Therapist']
-                   : (cm['therapistEmail'] !== undefined ? cm['therapistEmail'] : -1);
-
-  if (subCol === -1) { log('  TITO: no submissionId col'); return { keyMap: keyMap, dateOnlyMap: dateOnlyMap }; }
-
-  for (var ri = 1; ri < data.length; ri++) {
-    var row = data[ri];
-    var sub = String(row[subCol] || '').trim();
-    if (!_mig_isUUID(sub)) { continue; }
-
-    var dateRaw = (dateISOCol !== -1 && row[dateISOCol]) ? row[dateISOCol]
-                : (dateCol !== -1 ? row[dateCol] : '');
-    var dateISO = _usid_normalizeDateISO(dateRaw);
-    if (!dateISO) { continue; }
-
-    var therapist = therapistCol !== -1 ? String(row[therapistCol] || '').trim().toLowerCase() : '';
-    var key = dateISO + '|' + therapist;
-    if (!keyMap[key]) { keyMap[key] = sub; }
-
-    if (!dateOnlyMap[dateISO]) { dateOnlyMap[dateISO] = []; }
-    var already = false;
-    for (var di = 0; di < dateOnlyMap[dateISO].length; di++) {
-      if (dateOnlyMap[dateISO][di] === sub) { already = true; break; }
-    }
-    if (!already) { dateOnlyMap[dateISO].push(sub); }
-  }
-
-  log('  TITO: ' + _chd_objectKeyCount(keyMap) + ' session keys loaded');
-  return { keyMap: keyMap, dateOnlyMap: dateOnlyMap };
-}
-
-
-/**
- * Reconcile submissionIds in one tab against the TITO keyMap.
- * Returns count of rows fixed.
- */
-function _usid_reconcileTab(clientSS, tabName, titoMap, isDryRun, log) {
-  var tabSheet = clientSS.getSheetByName(tabName);
-  if (!tabSheet) { log('  ' + tabName + ': tab not found'); return 0; }
-
-  var data = tabSheet.getDataRange().getValues();
-  if (data.length < 2) { log('  ' + tabName + ': empty'); return 0; }
-
-  var cm = _mig_buildColMap(data[0]);
-  var subCol      = cm['submissionId'] !== undefined ? cm['submissionId'] : -1;
-  var dateISOCol  = cm['dateISO']     !== undefined ? cm['dateISO']     : -1;
-  var dateCol     = cm['Date']        !== undefined ? cm['Date']
-                  : (cm['date']       !== undefined ? cm['date']       : -1);
-  var therapistCol = cm['Therapist']  !== undefined ? cm['Therapist']  : -1;
-
-  if (subCol === -1) { log('  ' + tabName + ': no submissionId col'); return 0; }
-
-  var fixed = 0;
-  for (var ri = 1; ri < data.length; ri++) {
-    var row = data[ri];
-    var dateRaw = (dateISOCol !== -1 && row[dateISOCol]) ? row[dateISOCol]
-                : (dateCol !== -1 ? row[dateCol] : '');
-    var dateISO = _usid_normalizeDateISO(dateRaw);
-    if (!dateISO) { continue; }
-
-    var therapist = therapistCol !== -1 ? String(row[therapistCol] || '').trim().toLowerCase() : '';
-    var key = dateISO + '|' + therapist;
-
-    var currentSub = String(row[subCol] || '').trim();
-    var authSub = titoMap.keyMap[key];
-
-    // Date-only fallback when therapist blank and exactly one TITO session that day
-    if (!authSub && therapist === '') {
-      var dateSubs = titoMap.dateOnlyMap[dateISO];
-      if (dateSubs && dateSubs.length === 1) { authSub = dateSubs[0]; }
-    }
-
-    if (!authSub || currentSub === authSub) { continue; }
-
-    var sheetRow = ri + 1;
-    log('  ' + tabName + ' row ' + sheetRow + ': [' + (currentSub || 'blank') +
-        '] → [' + authSub + ']' + (isDryRun ? ' [DRY RUN]' : ''));
-    if (!isDryRun) {
-      try {
-        tabSheet.getRange(sheetRow, subCol + 1).setValue(authSub);
-        fixed++;
-      } catch (e) { log('  ERROR: ' + e.message); }
-    } else {
-      fixed++;
-    }
-  }
-
-  log('  ' + tabName + ': fixed=' + fixed);
-  return fixed;
-}
-
-
-/**
- * unifySubmissionIds(dryRun, clientId)
- *
- * For each client sheet, reads TITO to build the authoritative
- * dateISO|therapistLower → submissionId map, then reconciles Behavior Data,
- * Trial Data, and ABC Data rows whose submissionId differs from TITO's.
- * TITO's submissionId is always authoritative.
- *
- * Run: unifySubmissionIds(true)          // dry run — all clients
- *      unifySubmissionIds(true,  'C1')   // dry run — C1 only
- *      unifySubmissionIds(false, 'C1')   // live    — C1 only
- */
-function unifySubmissionIds(dryRun, clientId) {
-  var isDryRun = (dryRun !== false);
-  var logLines = [];
-  var totalFixed = 0;
-  function log(msg) { Logger.log(msg); logLines.push(msg); }
-
-  log('=== unifySubmissionIds ' + (isDryRun ? '[DRY RUN]' : '[LIVE]') +
-      ' started ' + new Date().toISOString() +
-      (clientId ? ' clientId=' + clientId : ' all clients') + ' ===');
-
-  var adminSS = SpreadsheetApp.openById(ADMIN_SHEET_ID);
-  var clients = _loadActiveClients(adminSS, clientId || null);
-  log('Clients: ' + clients.length);
-
-  var TABS = ['Behavior Data', 'Trial Data', 'ABC Data'];
-
-  for (var cli = 0; cli < clients.length; cli++) {
-    var client = clients[cli];
-    log('--- Client: ' + client.name + ' (' + client.id + ') ---');
-
-    var clientSS;
-    try { clientSS = SpreadsheetApp.openById(client.sheetId); } catch (e) {
-      log('  ERROR: ' + e.message); continue;
-    }
-    if (!clientSS) { log('  ERROR: null spreadsheet'); continue; }
-
-    var titoMap = _usid_buildTitoMap(clientSS, log);
-    if (!_chd_objectKeyCount(titoMap.keyMap)) {
-      log('  No valid TITO sessions — skipping'); continue;
-    }
-
-    for (var ti = 0; ti < TABS.length; ti++) {
-      totalFixed += _usid_reconcileTab(clientSS, TABS[ti], titoMap, isDryRun, log);
-    }
-  }
-
-  if (!isDryRun && totalFixed > 0) {
-    var auditSheet = adminSS.getSheetByName('RT Audit Log');
-    if (auditSheet) {
-      auditSheet.appendRow([new Date(), 'unifySubmissionIds', 'SYSTEM',
-        'fixed=' + totalFixed + (clientId ? ' clientId=' + clientId : ' all'),
-        'unifySubmissionIds']);
-    }
-  }
-
-  var summary = (isDryRun ? '[DRY RUN] ' : '') +
-    'unifySubmissionIds complete. fixed=' + totalFixed;
-  log('=== ' + summary + ' ===');
-  return { dryRun: isDryRun, summary: summary, fixed: totalFixed, log: logLines };
-}
-
-
-// ═══════════════════════════════════════════════════════════════════════════
-// PART D — fillEmptyAnalytics
-// ═══════════════════════════════════════════════════════════════════════════
-
-/**
- * Build a session detail map from TITO: dateISO|therapistLower → {sessionType, billingCode}.
- */
-function _fea_buildTitoDetailMap(clientSS) {
-  var map = {};
-  var titoSheet = clientSS.getSheetByName('Time In Time Out');
-  if (!titoSheet) { return map; }
-  var data = titoSheet.getDataRange().getValues();
-  if (data.length < 2) { return map; }
-  var cm = _mig_buildColMap(data[0]);
-  var dateISOCol   = cm['dateISO']     !== undefined ? cm['dateISO']     : -1;
-  var dateCol      = cm['Date']        !== undefined ? cm['Date']
-                   : (cm['date']       !== undefined ? cm['date']       : -1);
-  var therapistCol = cm['Therapist']   !== undefined ? cm['Therapist']  : -1;
-  var stCol        = cm['sessionType'] !== undefined ? cm['sessionType'] : -1;
-  var bcCol        = cm['billingCode'] !== undefined ? cm['billingCode'] : -1;
-
-  for (var ri = 1; ri < data.length; ri++) {
-    var row = data[ri];
-    var dateRaw = (dateISOCol !== -1 && row[dateISOCol]) ? row[dateISOCol]
-                : (dateCol !== -1 ? row[dateCol] : '');
-    var dateISO = _usid_normalizeDateISO(dateRaw);
-    if (!dateISO) { continue; }
-    var therapist = therapistCol !== -1 ? String(row[therapistCol] || '').trim().toLowerCase() : '';
-    var key = dateISO + '|' + therapist;
-    if (!map[key]) {
-      map[key] = {
-        sessionType: stCol !== -1 ? String(row[stCol] || '').trim() : '',
-        billingCode: bcCol !== -1 ? String(row[bcCol] || '').trim() : ''
-      };
-    }
-  }
-  return map;
-}
-
-
-/**
- * fillEmptyAnalytics(dryRun, clientId)
- *
- * For all rows in Behavior Data, Trial Data, and ABC Data across all active clients
- * (or a single client if clientId provided), fills:
- *   therapistEmail — from admin Therapists tab, matched by Therapist name
- *   sessionType    — from matching TITO row (same date + therapist)
- *   billingCode    — from matching TITO row
- *   isDraft        — false, when the row has a date and isDraft is currently blank
- *
- * Run: fillEmptyAnalytics(true)          // dry run — all clients
- *      fillEmptyAnalytics(true,  'C1')   // dry run — C1 only
- *      fillEmptyAnalytics(false, 'C1')   // live    — C1 only
- */
-function fillEmptyAnalytics(dryRun, clientId) {
-  var isDryRun = (dryRun !== false);
-  var logLines = [];
-  var totalFixed = 0;
-  function log(msg) { Logger.log(msg); logLines.push(msg); }
-
-  log('=== fillEmptyAnalytics ' + (isDryRun ? '[DRY RUN]' : '[LIVE]') +
-      ' started ' + new Date().toISOString() +
-      (clientId ? ' clientId=' + clientId : ' all clients') + ' ===');
-
-  var adminSS = SpreadsheetApp.openById(ADMIN_SHEET_ID);
-
-  // Build therapist name → email lookup (lowercase keys)
-  var therapistEmailMap = {};
-  var therapists = sheetToObjects(adminSS, 'Therapists');
-  for (var ti2 = 0; ti2 < therapists.length; ti2++) {
-    var t = therapists[ti2];
-    var tname  = String(t.name  || '').trim().toLowerCase();
-    var temail = String(t.email || '').trim();
-    if (tname && temail) { therapistEmailMap[tname] = temail; }
-  }
-
-  var clients = _loadActiveClients(adminSS, clientId || null);
-  var TABS = ['Behavior Data', 'Trial Data', 'ABC Data'];
-
-  for (var cli = 0; cli < clients.length; cli++) {
-    var client = clients[cli];
-    log('--- Client: ' + client.name + ' (' + client.id + ') ---');
-
-    var clientSS;
-    try { clientSS = SpreadsheetApp.openById(client.sheetId); } catch (e) {
-      log('  ERROR: ' + e.message); continue;
-    }
-    if (!clientSS) { log('  ERROR: null spreadsheet'); continue; }
-
-    var titoDetailMap = _fea_buildTitoDetailMap(clientSS);
-
-    for (var tabi = 0; tabi < TABS.length; tabi++) {
-      var tabName = TABS[tabi];
-      var tabSheet = clientSS.getSheetByName(tabName);
-      if (!tabSheet) { continue; }
-
-      var data = tabSheet.getDataRange().getValues();
-      if (data.length < 2) { continue; }
-
-      var cm = _mig_buildColMap(data[0]);
-      var therapistCol      = cm['Therapist']     !== undefined ? cm['Therapist']
-                            : (cm['therapistName'] !== undefined ? cm['therapistName'] : -1);
-      var therapistEmailCol = cm['therapistEmail'] !== undefined ? cm['therapistEmail'] : -1;
-      var sessionTypeCol    = cm['sessionType']   !== undefined ? cm['sessionType']   : -1;
-      var billingCodeCol    = cm['billingCode']   !== undefined ? cm['billingCode']   : -1;
-      var isDraftCol        = cm['isDraft']        !== undefined ? cm['isDraft']       : -1;
-      var dateISOCol        = cm['dateISO']        !== undefined ? cm['dateISO']       : -1;
-      var dateCol           = cm['Date']           !== undefined ? cm['Date']
-                            : (cm['date']          !== undefined ? cm['date']          : -1);
-
-      var tabFixed = 0;
-
-      for (var ri = 1; ri < data.length; ri++) {
-        var row = data[ri];
-        if (!row[0] && !row[1]) { continue; }
-        var sheetRow = ri + 1;
-
-        var dateRaw = (dateISOCol !== -1 && row[dateISOCol]) ? row[dateISOCol]
-                    : (dateCol !== -1 ? row[dateCol] : '');
-        var dateISO = _usid_normalizeDateISO(dateRaw);
-        var therapistName = therapistCol !== -1 ? String(row[therapistCol] || '').trim() : '';
-        var titoKey = dateISO ? (dateISO + '|' + therapistName.toLowerCase()) : '';
-        var titoDetail = titoKey ? titoDetailMap[titoKey] : null;
-
-        // therapistEmail
-        if (therapistEmailCol !== -1) {
-          var curEmail = String(row[therapistEmailCol] || '').trim();
-          if (!curEmail && therapistName) {
-            var lookupEmail = therapistEmailMap[therapistName.toLowerCase()] || '';
-            if (lookupEmail) {
-              log('  ' + tabName + ' r' + sheetRow + ': therapistEmail→' + lookupEmail +
-                  (isDryRun ? ' [DRY]' : ''));
-              if (!isDryRun) {
-                tabSheet.getRange(sheetRow, therapistEmailCol + 1).setValue(lookupEmail);
-              }
-              tabFixed++;
-            }
-          }
-        }
-
-        // sessionType
-        if (sessionTypeCol !== -1 && titoDetail) {
-          var curST = String(row[sessionTypeCol] || '').trim();
-          if (!curST && titoDetail.sessionType) {
-            log('  ' + tabName + ' r' + sheetRow + ': sessionType→' + titoDetail.sessionType +
-                (isDryRun ? ' [DRY]' : ''));
-            if (!isDryRun) {
-              tabSheet.getRange(sheetRow, sessionTypeCol + 1).setValue(titoDetail.sessionType);
-            }
-            tabFixed++;
-          }
-        }
-
-        // billingCode
-        if (billingCodeCol !== -1 && titoDetail) {
-          var curBC = String(row[billingCodeCol] || '').trim();
-          if (!curBC && titoDetail.billingCode) {
-            log('  ' + tabName + ' r' + sheetRow + ': billingCode→' + titoDetail.billingCode +
-                (isDryRun ? ' [DRY]' : ''));
-            if (!isDryRun) {
-              tabSheet.getRange(sheetRow, billingCodeCol + 1).setValue(titoDetail.billingCode);
-            }
-            tabFixed++;
-          }
-        }
-
-        // isDraft = false when row has data and isDraft is blank
-        if (isDraftCol !== -1) {
-          var curDraft = row[isDraftCol];
-          if ((curDraft === '' || curDraft === null || curDraft === undefined) && row[0]) {
-            log('  ' + tabName + ' r' + sheetRow + ': isDraft→false' + (isDryRun ? ' [DRY]' : ''));
-            if (!isDryRun) { tabSheet.getRange(sheetRow, isDraftCol + 1).setValue(false); }
-            tabFixed++;
-          }
-        }
-      }
-
-      log('  ' + tabName + ': fixed=' + tabFixed);
-      totalFixed += tabFixed;
-    }
-  }
-
-  if (!isDryRun && totalFixed > 0) {
-    var auditSheet = adminSS.getSheetByName('RT Audit Log');
-    if (auditSheet) {
-      auditSheet.appendRow([new Date(), 'fillEmptyAnalytics', 'SYSTEM',
-        'fixed=' + totalFixed + (clientId ? ' clientId=' + clientId : ' all'),
-        'fillEmptyAnalytics']);
-    }
-  }
-
-  var summary = (isDryRun ? '[DRY RUN] ' : '') +
-    'fillEmptyAnalytics complete. fixed=' + totalFixed;
-  log('=== ' + summary + ' ===');
-  return { dryRun: isDryRun, summary: summary, fixed: totalFixed, log: logLines };
-}
-
-// ─── diagnoseTITOHeaders ──────────────────────────────────────────────────────
-// Read-only: logs headers + first data row for "Time In Time Out" tab on every
-// active client sheet.  Flags empty or unexpected column positions.
-function diagnoseTITOHeaders() {
-  var logLines = [];
-  function log(msg) { logLines.push(msg); Logger.log(msg); }
-
-  log('=== diagnoseTITOHeaders ===');
-
-  var adminSS = SpreadsheetApp.openById(ADMIN_SHEET_ID);
-  if (!adminSS) {
-    log('ERROR: could not open admin spreadsheet id=' + ADMIN_SHEET_ID);
-    return { log: logLines };
-  }
-
-  var clients = _loadActiveClients(adminSS, null);
-  if (!clients.length) {
-    log('No active clients found.');
-    return { log: logLines };
-  }
-
-  for (var ci = 0; ci < clients.length; ci++) {
-    var client = clients[ci];
-    log('--- ' + client.name + ' (id=' + client.id + ', sheetId=' + client.sheetId + ')');
-
-    var clientSS = null;
-    try { clientSS = SpreadsheetApp.openById(client.sheetId); } catch (e) { clientSS = null; }
-    if (!clientSS) {
-      log('  ERROR: could not open spreadsheet id=' + client.sheetId);
-      continue;
-    }
-
-    var titoSheet = clientSS.getSheetByName('Time In Time Out');
-    if (!titoSheet) {
-      log('  Time In Time Out tab not found for ' + client.name +
-          ' (sheetId=' + client.sheetId + ')');
-      continue;
-    }
-
-    var allData = titoSheet.getDataRange().getValues();
-    if (!allData || allData.length === 0) {
-      log('  Sheet is empty.');
-      continue;
-    }
-
-    var headers = allData[0];
-    log('  Total cols: ' + headers.length + ', Total rows (incl header): ' + allData.length);
-    log('  Headers:');
-    for (var hi = 0; hi < headers.length; hi++) {
-      var hval = String(headers[hi] || '').trim();
-      var flag = (hval === '') ? ' *** EMPTY ***' : '';
-      log('    [' + hi + '] ' + (hval || '(blank)') + flag);
-    }
-
-    // Log first data row aligned with headers
-    if (allData.length > 1) {
-      var row1 = allData[1];
-      log('  Row 2 (first data row):');
-      for (var ri = 0; ri < headers.length; ri++) {
-        var rval = (ri < row1.length) ? String(row1[ri] || '').trim() : '(out of bounds)';
-        log('    [' + ri + '] ' + (String(headers[ri] || '').trim() || '(blank)') + ' = ' + rval);
-      }
-    }
-  }
-
-  log('=== diagnoseTITOHeaders complete ===');
-  return { log: logLines };
-}
-
-// ─── repairCamilaTITO ─────────────────────────────────────────────────────────
-// One-time repair for Camila's "Time In Time Out" tab.
-// Current layout has 2 extra empty columns at positions [11] and [12] (0-indexed)
-// inserted between "Late Start Reason" and "Submission ID".
-//
-// Row types (based on what appears in col[11]):
-//   Type A: col[11] blank → row has no data in wrong cols; just delete empty cols
-//   Type B: col[11] = UUID → submission ID landed in col[11]; col[12]=Notes
-//   Type C: like B but col[15] (clientName header) = client id "C1"
-//           → clientName was never written; analytics shifted left by 1 extra col
-//
-// Target layout (24 cols):
-//   Date, Billing Code, Type of Session, Time In, Time Out, Duration (min),
-//   Location, Therapist, App Start Time, Actual Start Time, Late Start Reason,
-//   Submission ID, Notes, clientName, clientId, therapistEmail, isDraft,
-//   payloadHash, submittedAt, dateISO, Adjusted End Time,
-//   End Time Adjustment Reason, manualEntry, enteredBy
-//
-// Safety: creates "Time In Time Out REPAIR_BACKUP" before ANY writes.
-function repairCamilaTITO(dryRun) {
-  var isDryRun = (dryRun !== false);
-  var logLines = [];
-  function log(msg) { logLines.push(msg); Logger.log(msg); }
-
-  log('=== repairCamilaTITO dryRun=' + isDryRun + ' ===');
-
-  var CAMILA_ID = 'C1';
-  var TARGET_HEADERS = [
-    'Date', 'Billing Code', 'Type of Session', 'Time In', 'Time Out',
-    'Duration (min)', 'Location', 'Therapist', 'App Start Time',
-    'Actual Start Time', 'Late Start Reason',
-    'Submission ID', 'Notes', 'clientName', 'clientId', 'therapistEmail',
-    'isDraft', 'payloadHash', 'submittedAt', 'dateISO',
-    'Adjusted End Time', 'End Time Adjustment Reason', 'manualEntry', 'enteredBy'
-  ];
-
-  var adminSS = SpreadsheetApp.openById(ADMIN_SHEET_ID);
-  if (!adminSS) {
-    log('ERROR: could not open admin spreadsheet id=' + ADMIN_SHEET_ID);
-    return { dryRun: isDryRun, summary: 'ERROR: admin SS not found', fixed: 0, log: logLines };
-  }
-
-  var clients = _loadActiveClients(adminSS, CAMILA_ID);
-  if (!clients.length) {
-    log('ERROR: client C1 not found or not active.');
-    return { dryRun: isDryRun, summary: 'ERROR: C1 not found', fixed: 0, log: logLines };
-  }
-  var client = clients[0];
-  log('Client: ' + client.name + ' (id=' + client.id + ', sheetId=' + client.sheetId + ')');
-
-  var clientSS = null;
-  try { clientSS = SpreadsheetApp.openById(client.sheetId); } catch (e) { clientSS = null; }
-  if (!clientSS) {
-    log('ERROR: could not open client spreadsheet id=' + client.sheetId);
-    return { dryRun: isDryRun, summary: 'ERROR: client SS not found', fixed: 0, log: logLines };
-  }
-
-  var titoSheet = clientSS.getSheetByName('Time In Time Out');
-  if (!titoSheet) {
-    log('ERROR: Time In Time Out tab not found.');
-    return { dryRun: isDryRun, summary: 'ERROR: TITO tab not found', fixed: 0, log: logLines };
-  }
-
-  var allData = titoSheet.getDataRange().getValues();
-  var totalRows = allData.length;
-  log('Total rows (incl header): ' + totalRows);
-  if (totalRows < 2) {
-    log('No data rows — nothing to repair.');
-    return { dryRun: isDryRun, summary: 'No data rows', fixed: 0, log: logLines };
-  }
-
-  var headers = allData[0];
-  log('Current col count: ' + headers.length);
-
-  // Verify expected layout: col[11] and col[12] should be empty headers
-  var h11 = String(headers[11] || '').trim();
-  var h12 = String(headers[12] || '').trim();
-  if (h11 !== '' || h12 !== '') {
-    log('WARNING: expected empty headers at [11]="' + h11 + '" and [12]="' + h12 + '"');
-    log('Sheet may already be repaired or have a different layout. Aborting.');
-    return { dryRun: isDryRun, summary: 'WARNING: unexpected header layout — aborted', fixed: 0, log: logLines };
-  }
-
-  // ── Step 1: Build corrections for data rows ──────────────────────────────
-  var corrections = [];
-
-  for (var ri = 1; ri < totalRows; ri++) {
-    var row = allData[ri];
-    var sheetRow = ri + 1; // 1-indexed
-    var lastCol = row.length - 1;
-
-    // Skip truly empty rows
-    if (!row[0] && !row[3] && !row[11] && !row[13]) { continue; }
-
-    var v11 = String(row[11] || '').trim();
-    var isUUID11 = _mig_isUUID(v11);
-
-    // Determine row type
-    var rowType;
-    if (!isUUID11) {
-      rowType = 'A'; // blank col[11] — no data fix needed, just structural delete
-    } else {
-      // col[11] has a UUID — check col[14] (under "Notes" header) to see if it
-      // contains the client ID instead of session notes text. That means
-      // clientName was never written and analytics shifted left by 1 extra col.
-      var v14 = String(row[14] || '').trim();
-      if (v14 === client.id) {
-        rowType = 'C'; // clientName was never written
-      } else {
-        rowType = 'B'; // normal misalignment — clientName was written
-      }
-    }
-
-    log('  r' + sheetRow + ' type=' + rowType + ' col[11]=' + v11.substring(0, 12));
-
-    if (rowType === 'B') {
-      // col[11]=submissionId UUID, col[12]=Notes text
-      // Target: col[12]=Submission ID, col[13]=Notes (after empty col deletion)
-      // But we write into 1-indexed sheetCol before structural delete
-      corrections.push({ sheetRow: sheetRow, sheetCol: 14, newVal: v11,         note: 'B: Submission ID ← col[11]' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 15, newVal: row[12],     note: 'B: Notes ← col[12]' });
-
-    } else if (rowType === 'C') {
-      // Type C: col[11]=original UUID, col[12]=Notes, col[13]=dup UUID (discard).
-      // clientName was NEVER written, so everything after col[13] is shifted
-      // LEFT by one extra position relative to the header positions:
-      //   col[14] (Notes hdr)     = clientId   ← shift of 1
-      //   col[15] (clientName hdr)= therapistEmail
-      //   col[16] (clientId hdr)  = (clientId again or sessionType — skip)
-      //   col[17] (therapistEmail)= payloadHash
-      //   col[18] (isDraft hdr)   = submittedAt
-      //   col[19] (payloadHash)   = dateISO
-      //   col[20] (submittedAt)   = Adjusted End Time
-      //   col[21] (dateISO)       = End Time Adjustment Reason
-      //   col[22] (Adj End Time)  = manualEntry
-      //   col[23] (End Time Adj)  = enteredBy
-      // isDraft is hardcoded false (it was never written or landed in a discarded position).
-      corrections.push({ sheetRow: sheetRow, sheetCol: 14, newVal: v11,          note: 'C: Submission ID ← col[11]' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 15, newVal: row[12],      note: 'C: Notes ← col[12]' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 16, newVal: client.name,  note: 'C: clientName (hardcoded)' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 17, newVal: row[14],      note: 'C: clientId ← col[14]' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 18, newVal: row[15],      note: 'C: therapistEmail ← col[15]' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 19, newVal: false,        note: 'C: isDraft=false (hardcoded)' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 20, newVal: row[17],      note: 'C: payloadHash ← col[17]' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 21, newVal: row[18],      note: 'C: submittedAt ← col[18]' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 22, newVal: row[19],      note: 'C: dateISO ← col[19]' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 23, newVal: row[20],      note: 'C: Adjusted End Time ← col[20]' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 24, newVal: row[21],      note: 'C: End Time Adjustment Reason ← col[21]' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 25, newVal: row[22],      note: 'C: manualEntry ← col[22]' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 26, newVal: row[23],      note: 'C: enteredBy ← col[23]' });
-    }
-    // Type A: no data corrections needed
-  }
-
-  log('Total corrections: ' + corrections.length);
-  for (var li = 0; li < corrections.length; li++) {
-    log('  [DRY=' + isDryRun + '] ' + corrections[li].note +
-        ' → r' + corrections[li].sheetRow + ' c' + corrections[li].sheetCol);
-  }
-
-  if (isDryRun) {
-    log('[DRY RUN] No changes written.');
-    return { dryRun: true, summary: '[DRY RUN] repairCamilaTITO — corrections=' + corrections.length,
-      fixed: corrections.length, log: logLines };
-  }
-
-  // ── Step 2: Create backup tab ─────────────────────────────────────────────
-  var backupName = 'Time In Time Out REPAIR_BACKUP';
-  var existingBackup = clientSS.getSheetByName(backupName);
-  if (!existingBackup) {
-    var backupSheet = titoSheet.copyTo(clientSS);
-    backupSheet.setName(backupName);
-    log('Backup created: ' + backupName);
-  } else {
-    log('Backup already exists: ' + backupName + ' — skipping copy');
-  }
-
-  // ── Step 3: Apply data corrections (write into current 26-col layout) ────
-  for (var ci2 = 0; ci2 < corrections.length; ci2++) {
-    var c = corrections[ci2];
-    titoSheet.getRange(c.sheetRow, c.sheetCol).setValue(c.newVal);
-  }
-  SpreadsheetApp.flush();
-  log('Data corrections applied: ' + corrections.length);
-
-  // ── Step 4: Delete the 2 empty columns (col index 12, then 12 again) ─────
-  // col[11] (0-indexed) = sheet col 12 (1-indexed) — first empty col
-  titoSheet.deleteColumn(12);
-  SpreadsheetApp.flush();
-  // After deletion col[11] shifts left; the second empty col is now also at
-  // sheet column 12 (was col[12] 0-indexed before deletion).
-  titoSheet.deleteColumn(12);
-  SpreadsheetApp.flush();
-  log('Deleted 2 empty columns (sheet col 12 twice).');
-
-  // ── Step 5: Rewrite header row to TARGET_HEADERS ─────────────────────────
-  var headerRange = titoSheet.getRange(1, 1, 1, TARGET_HEADERS.length);
-  headerRange.setValues([TARGET_HEADERS]);
-  SpreadsheetApp.flush();
-  log('Header row rewritten to ' + TARGET_HEADERS.length + ' columns.');
-
-  // ── Step 6: Audit log ─────────────────────────────────────────────────────
-  var auditSheet = adminSS.getSheetByName('RT Audit Log');
-  if (auditSheet) {
-    auditSheet.appendRow([new Date(), 'repairCamilaTITO', 'SYSTEM',
-      'corrections=' + corrections.length + ' clientId=' + client.id,
-      'repairCamilaTITO']);
-  }
-
-  var summary = 'repairCamilaTITO complete. corrections=' + corrections.length;
-  log('=== ' + summary + ' ===');
-  return { dryRun: false, summary: summary, fixed: corrections.length, log: logLines };
-}
-
-// ─── repairDylanTITO ──────────────────────────────────────────────────────────
-// One-time repair for Dylan's "Time In Time Out" tab.
-// Current layout has 1 extra empty column at position [12] (0-indexed) between
-// "Notes" (col[11]) and "Submission ID" (col[13]).
-//
-// Row types:
-//   Type A: col[11] is NOT a UUID (has notes text or is empty)
-//     — col[11]=notes, col[12]=empty, col[13]=UUID
-//     — After deletion col[11] stays but is under "Submission ID" header in target.
-//     — Fix: write UUID from col[13] to col[11]; write notes from col[11] to col[13]
-//       so after deletion col[11]=UUID and col[12]=notes, matching target headers.
-//   Type B: col[11] IS a UUID (submissionId landed in Notes column)
-//     — col[11]=original UUID, col[12]=actual notes, col[13]=dup UUID
-//     — Fix: write notes from col[12] to col[13]; col[11] UUID stays in place.
-//       After deletion col[11]=UUID, col[12]=notes, col[13]=clientName (correct).
-//
-// Analytics from col[14] onwards are ALREADY CORRECT — no shift.
-//
-// Target layout (24 cols):
-//   Date, Billing Code, Type of Session, Time In, Time Out, Duration (min),
-//   Location, Therapist, App Start Time, Actual Start Time, Late Start Reason,
-//   Submission ID, Notes, clientName, clientId, therapistEmail, isDraft,
-//   payloadHash, submittedAt, dateISO, Adjusted End Time,
-//   End Time Adjustment Reason, manualEntry, enteredBy
-//
-// Safety: creates "Time In Time Out REPAIR_BACKUP" before ANY writes.
-function repairDylanTITO(dryRun) {
-  var isDryRun = (dryRun !== false);
-  var logLines = [];
-  function log(msg) { logLines.push(msg); Logger.log(msg); }
-
-  log('=== repairDylanTITO dryRun=' + isDryRun + ' ===');
-
-  var DYLAN_ID = 'C3';
-  var DYLAN_SHEET_ID = '1YlptamKkt0YPC0lbxlW5680QS5JfBNU7a1KQohdqLus';
-  var TARGET_HEADERS = [
-    'Date', 'Billing Code', 'Type of Session', 'Time In', 'Time Out',
-    'Duration (min)', 'Location', 'Therapist', 'App Start Time',
-    'Actual Start Time', 'Late Start Reason',
-    'Submission ID', 'Notes', 'clientName', 'clientId', 'therapistEmail',
-    'isDraft', 'payloadHash', 'submittedAt', 'dateISO',
-    'Adjusted End Time', 'End Time Adjustment Reason', 'manualEntry', 'enteredBy'
-  ];
-
-  var clientSS = null;
-  try { clientSS = SpreadsheetApp.openById(DYLAN_SHEET_ID); } catch (e) { clientSS = null; }
-  if (!clientSS) {
-    log('ERROR: could not open Dylan spreadsheet id=' + DYLAN_SHEET_ID);
-    return { dryRun: isDryRun, summary: 'ERROR: client SS not found', fixed: 0, log: logLines };
-  }
-  log('Opened Dylan spreadsheet.');
-
-  var titoSheet = clientSS.getSheetByName('Time In Time Out');
-  if (!titoSheet) {
-    log('ERROR: Time In Time Out tab not found.');
-    return { dryRun: isDryRun, summary: 'ERROR: TITO tab not found', fixed: 0, log: logLines };
-  }
-
-  var allData = titoSheet.getDataRange().getValues();
-  var totalRows = allData.length;
-  log('Total rows (incl header): ' + totalRows);
-  if (totalRows < 2) {
-    log('No data rows — nothing to repair.');
-    return { dryRun: isDryRun, summary: 'No data rows', fixed: 0, log: logLines };
-  }
-
-  var headers = allData[0];
-  log('Current col count: ' + headers.length);
-
-  // Verify expected layout: col[12] should be empty, col[11]="Notes", col[13]="Submission ID"
-  var h11 = String(headers[11] || '').trim();
-  var h12 = String(headers[12] || '').trim();
-  var h13 = String(headers[13] || '').trim();
-  if (h12 !== '') {
-    log('WARNING: expected empty header at [12]="' + h12 + '"');
-    log('Sheet may already be repaired or have a different layout. Aborting.');
-    return { dryRun: isDryRun, summary: 'WARNING: unexpected header layout — aborted', fixed: 0, log: logLines };
-  }
-  log('Header check: [11]="' + h11 + '" [12]="' + h12 + '" [13]="' + h13 + '"');
-
-  // ── Step 1: Build corrections for data rows ──────────────────────────────
-  var corrections = [];
-
-  for (var ri = 1; ri < totalRows; ri++) {
-    var row = allData[ri];
-    var sheetRow = ri + 1; // 1-indexed
-
-    // Skip truly empty rows
-    if (!row[0] && !row[3] && !row[11] && !row[13]) { continue; }
-
-    var v11 = String(row[11] || '').trim();
-    var isUUID11 = _mig_isUUID(v11);
-    var v13 = String(row[13] || '').trim();
-    var isUUID13 = _mig_isUUID(v13);
-
-    var rowType = isUUID11 ? 'B' : 'A';
-    log('  r' + sheetRow + ' type=' + rowType +
-        ' col[11]=' + v11.substring(0, 16) + ' col[13]=' + v13.substring(0, 16));
-
-    if (rowType === 'A') {
-      // col[11] = notes text (or empty), col[13] = UUID (Submission ID)
-      // After deletion col[11] stays but will be under "Submission ID" header in target.
-      // Must swap: write UUID to col[11] (sheetCol 12), write notes to col[13] (sheetCol 14).
-      // col[13] (sheetCol 14) will shift left to col[12] after deletion → Notes position.
-      if (isUUID13) {
-        corrections.push({ sheetRow: sheetRow, sheetCol: 12, newVal: v13,   note: 'A: Submission ID ← col[13]' });
-        if (v11 !== '') {
-          corrections.push({ sheetRow: sheetRow, sheetCol: 14, newVal: row[11], note: 'A: Notes ← col[11]' });
-        }
-      }
-      // else: no UUID in col[13] — row predates analytics entirely, skip
-
-    } else {
-      // rowType === 'B'
-      // col[11] = original UUID (already correct for Submission ID position after deletion)
-      // col[12] = actual notes, col[13] = dup UUID (discard)
-      // Write notes to col[13] (sheetCol 14); it shifts to col[12] = Notes position after deletion.
-      corrections.push({ sheetRow: sheetRow, sheetCol: 14, newVal: row[12], note: 'B: Notes ← col[12]' });
-    }
-  }
-
-  log('Total corrections: ' + corrections.length);
-  for (var li = 0; li < corrections.length; li++) {
-    log('  [DRY=' + isDryRun + '] ' + corrections[li].note +
-        ' → r' + corrections[li].sheetRow + ' c' + corrections[li].sheetCol);
-  }
-
-  if (isDryRun) {
-    log('[DRY RUN] No changes written.');
-    return { dryRun: true, summary: '[DRY RUN] repairDylanTITO — corrections=' + corrections.length,
-      fixed: corrections.length, log: logLines };
-  }
-
-  // ── Step 2: Create backup tab ─────────────────────────────────────────────
-  var backupName = 'Time In Time Out REPAIR_BACKUP';
-  var existingBackup = clientSS.getSheetByName(backupName);
-  if (!existingBackup) {
-    var backupSheet = titoSheet.copyTo(clientSS);
-    backupSheet.setName(backupName);
-    log('Backup created: ' + backupName);
-  } else {
-    log('Backup already exists: ' + backupName + ' — skipping copy');
-  }
-
-  // ── Step 3: Apply data corrections (in current 25-col layout) ────────────
-  for (var ci = 0; ci < corrections.length; ci++) {
-    var c = corrections[ci];
-    titoSheet.getRange(c.sheetRow, c.sheetCol).setValue(c.newVal);
-  }
-  SpreadsheetApp.flush();
-  log('Data corrections applied: ' + corrections.length);
-
-  // ── Step 4: Delete the 1 empty column at col[12] (sheetCol 13) ───────────
-  titoSheet.deleteColumn(13);
-  SpreadsheetApp.flush();
-  log('Deleted empty column (sheet col 13).');
-
-  // ── Step 5: Rewrite header row to TARGET_HEADERS ─────────────────────────
-  var headerRange = titoSheet.getRange(1, 1, 1, TARGET_HEADERS.length);
-  headerRange.setValues([TARGET_HEADERS]);
-  SpreadsheetApp.flush();
-  log('Header row rewritten to ' + TARGET_HEADERS.length + ' columns.');
-
-  // ── Step 6: Audit log ─────────────────────────────────────────────────────
-  var adminSS = SpreadsheetApp.openById(ADMIN_SHEET_ID);
-  if (adminSS) {
-    var auditSheet = adminSS.getSheetByName('RT Audit Log');
-    if (auditSheet) {
-      auditSheet.appendRow([new Date(), 'repairDylanTITO', 'SYSTEM',
-        'corrections=' + corrections.length + ' clientId=' + DYLAN_ID,
-        'repairDylanTITO']);
-    }
-  }
-
-  var summary = 'repairDylanTITO complete. corrections=' + corrections.length;
-  log('=== ' + summary + ' ===');
-  return { dryRun: false, summary: summary, fixed: corrections.length, log: logLines };
-}
