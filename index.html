@@ -3791,6 +3791,8 @@ function renderMasteryReportTab(container) {
   html += '</select>' +
       '<button class="btn btn-primary" style="width:auto;padding:12px 20px" onclick="loadMasteryReport()">Load Report</button>' +
       '<button class="btn btn-ghost" style="width:auto;padding:12px 20px" onclick="exportMasteryReportCSV()">Export CSV</button>' +
+      ((AUTH && (AUTH.role === 'admin' || AUTH.role === 'bcba')) ?
+        '<button class="btn btn-ghost" style="width:auto;padding:12px 20px;color:#EF4444;border-color:#EF4444" onclick="runCleanDuplicateMasteries()">Clean Dupes</button>' : '') +
     '</div>' +
     '<div id="mastery-report-body"><div class="empty-msg">Select a month and click Load Report.</div></div>' +
   '</div>';
@@ -3877,7 +3879,7 @@ function renderMasteryReportResults(entries, year, month) {
         var bhClientId = esc(ent.clientId || '');
         // Find sheetId for this client
         var bhClient = (CFG.CLIENTS || []).filter(function(c){ return c.id === ent.clientId; })[0];
-        var bhSheetId = bhClient ? esc(bhClient.sheetId || '') : '';
+        var bhSheetId = bhClient ? esc((bhClient.sheetId || '').trim()) : '';
         actionBtns = '<span style="margin-left:8px">' +
           '<button class="btn btn-sm" style="padding:2px 10px;font-size:11px;background:#16A34A;color:white;border-radius:100px;border:none;cursor:pointer" ' +
             'onclick="masteryApprove(\'' + bhSheetId + '\',\'' + bhClientId + '\',\'' + bhKey + '\',this)">Approve</button> ' +
@@ -3968,6 +3970,34 @@ async function masteryDismiss(clientSheetId, clientId, behaviorKey, btn) {
   } catch(e) {
     toast('Error: ' + e.message, 'err');
     btn.disabled = false; btn.textContent = 'Dismiss';
+  }
+}
+
+async function runCleanDuplicateMasteries() {
+  if (!AUTH.user || (AUTH.role !== 'admin' && AUTH.role !== 'bcba')) {
+    toast('Only BCBA or Admin can run cleanup', 'err'); return;
+  }
+  if (!confirm('This will permanently delete older duplicate mastery log entries, keeping the most recent per behavior. Continue?')) return;
+  var clients = CFG.CLIENTS.map(function(c) { return { id: c.id, name: c.name, sheetId: c.sheetId }; });
+  try {
+    var resp = await fetch(GAS_URL, {
+      method: 'POST', headers: {'Content-Type': 'text/plain'}, redirect: 'follow',
+      body: JSON.stringify({ action: 'cleanDuplicateMasteries', clients: clients })
+    });
+    var data = await resp.json();
+    if (data.success) {
+      var msg = 'Cleaned ' + (data.removed || 0) + ' duplicate row(s)';
+      if (data.details && data.details.length) {
+        msg += ': ' + data.details.map(function(d) { return d.clientName + ' (' + d.removed + ')'; }).join(', ');
+      }
+      toast(msg, 'ok');
+      _masteryReportData = null;
+      loadMasteryReport();
+    } else {
+      toast(data.error || 'Cleanup failed', 'err');
+    }
+  } catch(e) {
+    toast('Error: ' + e.message, 'err');
   }
 }
 

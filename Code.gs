@@ -1546,6 +1546,8 @@ function getMasteryReport(year, month, clients) {
         colMap[String(headers[hi]).trim()] = hi;
       }
 
+      // Collect all matching rows per dedupKey for this client
+      var rowsByKey = {};
       for (var ri = 1; ri < data.length; ri++) {
         var row = data[ri];
         var entryType = String(row[colMap['type']] || '').trim();
@@ -1583,10 +1585,33 @@ function getMasteryReport(year, month, clients) {
           approvalDate:    colMap['approvalDate']     !== undefined ? String(row[colMap['approvalDate']]     || '').trim() : ''
         };
 
-        // Keep LAST row per dedupKey (most recent entry wins — handles dismiss+recovery)
-        var dedupKey = (client.id || '') + '|' + entryType + '|' + entryCode;
-        latestByKey[dedupKey] = { rowIndex: ri, entry: entry };
+        // Normalize code to lowercase for dedup (handles case variance like 'Elopement' vs 'elopement')
+        var dedupKey = (client.id || '') + '|' + entryType + '|' + entryCode.toLowerCase();
+        if (!rowsByKey[dedupKey]) rowsByKey[dedupKey] = [];
+        rowsByKey[dedupKey].push({ rowIndex: ri, entry: entry });
       }
+
+      // For each key: keep the last (most recent) entry; delete older duplicates from the sheet
+      var dupeSheetRows = [];
+      var rowsByKeyKeys = Object.keys(rowsByKey);
+      for (var ki2 = 0; ki2 < rowsByKeyKeys.length; ki2++) {
+        var group = rowsByKey[rowsByKeyKeys[ki2]];
+        // Last entry in the group is the most recent
+        latestByKey[rowsByKeyKeys[ki2]] = group[group.length - 1].entry;
+        // Earlier entries are duplicates — collect for deletion
+        for (var gi = 0; gi < group.length - 1; gi++) {
+          dupeSheetRows.push(group[gi].rowIndex + 1); // convert to 1-based sheet row
+        }
+      }
+
+      // Delete duplicate rows bottom-to-top so row indices stay valid
+      if (dupeSheetRows.length > 0) {
+        dupeSheetRows.sort(function(a, b) { return b - a; });
+        for (var di2 = 0; di2 < dupeSheetRows.length; di2++) {
+          sheet.deleteRow(dupeSheetRows[di2]);
+        }
+      }
+
     } catch(e) {
       // Skip inaccessible client sheets
     }
@@ -1635,18 +1660,18 @@ function cleanDuplicateMasteries(clients) {
       }
       if (typeCol < 0 || codeCol < 0) continue;
 
-      // Identify which rows (1-based sheet row) are duplicates
-      var seen = {};
-      var rowsToDelete = []; // 1-based sheet row indices, collected in order
+      // Identify which rows (1-based sheet row) are duplicates — keep the LAST (most recent) occurrence
+      var lastSeenRow = {}; // key → 1-based sheet row of most recent occurrence
+      var rowsToDelete = []; // 1-based sheet row indices of older duplicates
       for (var ri = 1; ri < data.length; ri++) {
         var row  = data[ri];
-        var key  = String(row[typeCol] || '').trim() + '|' + String(row[codeCol] || '').trim();
+        // Normalize to lowercase to catch case variants (e.g. 'Elopement' vs 'elopement')
+        var key  = String(row[typeCol] || '').trim().toLowerCase() + '|' + String(row[codeCol] || '').trim().toLowerCase();
         if (!key || key === '|') continue; // skip blank rows
-        if (seen[key]) {
-          rowsToDelete.push(ri + 1); // +1 because sheet rows are 1-based
-        } else {
-          seen[key] = true;
+        if (lastSeenRow[key]) {
+          rowsToDelete.push(lastSeenRow[key]); // previous occurrence is the duplicate
         }
+        lastSeenRow[key] = ri + 1; // update to current row (1-based)
       }
 
       // Delete from bottom to top so row indices stay valid
@@ -1677,9 +1702,10 @@ function approveBehaviorMastery(clientSheetId, clientId, behaviorKey, approverEm
   if (!approverRole || (approverRole !== 'Admin' && approverRole !== 'BCBA')) {
     return { success: false, error: 'Unauthorized: BCBA or Admin role required' };
   }
-  if (!clientSheetId) return { success: false, error: 'Missing clientSheetId' };
+  var trimmedSheetId = clientSheetId ? String(clientSheetId).trim() : '';
+  if (!trimmedSheetId || trimmedSheetId.length < 10) return { success: false, error: 'Missing or invalid clientSheetId' };
   try {
-    var ss    = SpreadsheetApp.openById(clientSheetId);
+    var ss    = SpreadsheetApp.openById(trimmedSheetId);
     var sheet = ss.getSheetByName('Mastery Log');
     if (!sheet) return { success: false, error: 'Mastery Log sheet not found' };
     var data = sheet.getDataRange().getValues();
@@ -1741,9 +1767,10 @@ function dismissBehaviorMastery(clientSheetId, clientId, behaviorKey, approverEm
   if (!approverRole || (approverRole !== 'Admin' && approverRole !== 'BCBA')) {
     return { success: false, error: 'Unauthorized: BCBA or Admin role required' };
   }
-  if (!clientSheetId) return { success: false, error: 'Missing clientSheetId' };
+  var trimmedSheetId2 = clientSheetId ? String(clientSheetId).trim() : '';
+  if (!trimmedSheetId2 || trimmedSheetId2.length < 10) return { success: false, error: 'Missing or invalid clientSheetId' };
   try {
-    var ss    = SpreadsheetApp.openById(clientSheetId);
+    var ss    = SpreadsheetApp.openById(trimmedSheetId2);
     var sheet = ss.getSheetByName('Mastery Log');
     if (!sheet) return { success: false, error: 'Mastery Log sheet not found' };
     var data = sheet.getDataRange().getValues();
