@@ -95,6 +95,21 @@ function doPost(e) {
       var dbhResult = diagnoseBehaviorHeaders();
       result = { success: true, log: dbhResult.log };
 
+    } else if (data.action === 'repairCamilaBehaviorData') {
+      var rcbResult = repairCamilaBehaviorData(data.dryRun !== false);
+      result = { success: true, dryRun: rcbResult.dryRun, summary: rcbResult.summary,
+        fixed: rcbResult.fixed, log: rcbResult.log };
+
+    } else if (data.action === 'unifySubmissionIds') {
+      var usiResult = unifySubmissionIds(data.dryRun !== false, data.clientId || null);
+      result = { success: true, dryRun: usiResult.dryRun, summary: usiResult.summary,
+        fixed: usiResult.fixed, log: usiResult.log };
+
+    } else if (data.action === 'fillEmptyAnalytics') {
+      var feaResult = fillEmptyAnalytics(data.dryRun !== false, data.clientId || null);
+      result = { success: true, dryRun: feaResult.dryRun, summary: feaResult.summary,
+        fixed: feaResult.fixed, log: feaResult.log };
+
     } else {
       processSession(data);
       result = { success: true };
@@ -669,11 +684,13 @@ function writeBehaviorData(ss, d) {
 
   var sheet = getOrCreateSheet(ss, 'Behavior Data', allHeaders);
 
-  // For existing sheets: insert new behavior/tantrum cols BEFORE the first
-  // analytics column (so they stay in the logical data section, not after analytics).
-  // Then append any missing analytics cols at the far right.
-  var nonAnalyticsCols = labels.concat(['Tantrum Frequency', 'Tantrum Total (Min)']);
-  _ensureColumnsBefore(sheet, nonAnalyticsCols, analyticsSet);
+  // Step 1: Insert new behavior cols BEFORE Tantrum Frequency (preferred stop).
+  // Falls back to first analytics col if no Tantrum col exists yet.
+  // This keeps behaviors in the right section regardless of client column layout.
+  _ensureColumnsBefore(sheet, labels, analyticsSet, ['Tantrum Frequency', 'Tantrum Total (Min)']);
+  // Step 2: Insert Tantrum cols BEFORE analytics (if missing).
+  _ensureColumnsBefore(sheet, ['Tantrum Frequency', 'Tantrum Total (Min)'], analyticsSet, []);
+  // Step 3: Append any missing analytics cols at the far right.
   ensureSheetColumns(sheet, analyticsHeaders);
   // Flush all pending structural operations (insertColumnsBefore, setValues on headers)
   // before re-reading the header row. Without this GAS may serve a cached pre-insert view.
@@ -1143,7 +1160,19 @@ function ensureSheetColumns(sheet, headers) {
  * Existing columns are never moved or removed.
  * Used by writeBehaviorData to keep behavior cols before analytics cols.
  */
-function _ensureColumnsBefore(sheet, newCols, stopColsMap) {
+/**
+ * Ensure columns in newCols exist in the sheet.
+ * Missing columns are inserted immediately BEFORE the first preferred stop column
+ * (preferredStops array, checked in order). If no preferred stop is found, falls
+ * back to the first column in stopColsMap. If neither exists, appends at the end.
+ * Existing columns are never moved or removed.
+ *
+ * @param {Sheet}    sheet          - target sheet
+ * @param {string[]} newCols        - column names to ensure exist
+ * @param {Object}   stopColsMap    - plain-object set of fallback stop column names
+ * @param {string[]} preferredStops - ordered list of preferred stop column names (optional)
+ */
+function _ensureColumnsBefore(sheet, newCols, stopColsMap, preferredStops) {
   var lastCol = sheet.getLastColumn();
   if (lastCol === 0) return; // empty sheet handled by getOrCreateSheet
   var existing = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
@@ -1158,14 +1187,27 @@ function _ensureColumnsBefore(sheet, newCols, stopColsMap) {
     }
   }
   if (!missing.length) return;
-  // Find 1-based column index of the first stop column
+
+  // Find 1-based insertion point: preferred stops take priority over stopColsMap
   var insertBefore = 0;
-  for (var m = 0; m < existing.length; m++) {
-    if (stopColsMap[String(existing[m]).trim()]) {
-      insertBefore = m + 1;
-      break;
+  if (preferredStops && preferredStops.length) {
+    for (var m = 0; m < existing.length; m++) {
+      var eh = String(existing[m]).trim();
+      for (var p = 0; p < preferredStops.length; p++) {
+        if (eh === preferredStops[p]) { insertBefore = m + 1; break; }
+      }
+      if (insertBefore > 0) { break; }
     }
   }
+  if (!insertBefore) {
+    for (var m2 = 0; m2 < existing.length; m2++) {
+      if (stopColsMap[String(existing[m2]).trim()]) {
+        insertBefore = m2 + 1;
+        break;
+      }
+    }
+  }
+
   var startCol;
   if (insertBefore > 0) {
     sheet.insertColumnsBefore(insertBefore, missing.length);
@@ -3194,4 +3236,686 @@ function _chd_backupTab(ss, tabName, log) {
   } catch (e) {
     log('  WARNING: backup failed for ' + tabName + ': ' + e.message);
   }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SHARED HELPERS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Load active clients from the admin spreadsheet.
+ * Returns [{id, name, sheetId}].
+ * If filterClientId is non-empty, returns only that client.
+ */
+function _loadActiveClients(adminSS, filterClientId) {
+  var clients = [];
+  var cSheet = adminSS.getSheetByName('Clients');
+  if (!cSheet) { return clients; }
+  var data = cSheet.getDataRange().getValues();
+  if (data.length < 2) { return clients; }
+  var cm = _mig_buildColMap(data[0]);
+  for (var ri = 1; ri < data.length; ri++) {
+    var row = data[ri];
+    var status = cm['status'] !== undefined ? String(row[cm['status']]).trim().toLowerCase() : 'active';
+    if (status !== 'active') { continue; }
+    var cid = cm['id'] !== undefined ? String(row[cm['id']]).trim() : '';
+    if (!cid) { continue; }
+    if (filterClientId && cid !== filterClientId) { continue; }
+    var cname   = cm['name']    !== undefined ? String(row[cm['name']]).trim()    : '';
+    var sheetId = cm['sheetId'] !== undefined ? String(row[cm['sheetId']]).trim() : '';
+    if (sheetId) { clients.push({ id: cid, name: cname, sheetId: sheetId }); }
+  }
+  return clients;
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PART B — repairCamilaBehaviorData
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * repairCamilaBehaviorData(dryRun)
+ *
+ * One-time structural repair of Camila's (C1) Behavior Data sheet.
+ *
+ * Current layout (24 cols, 0-indexed):
+ *   [0-9]  Date..SIB
+ *   [10]   Tantrum Frequency
+ *   [11]   Tantrum Total (Min)   — some rows have OFF Task count here (wrong)
+ *   [12]   [EMPTY header]        — some rows have Tantrum Total value here (wrong)
+ *   [13]   OFF Task              — some rows have submissionId UUID here (wrong)
+ *   [14]   submissionId          — some rows have dup UUID / clientName here
+ *   [15]   clientName            — some rows have clientId "C1" here (double-shifted)
+ *   [16-23] analytics...
+ *
+ * Three row types (detected by col[13] and col[15]):
+ *   Type A: col[13] is NOT a UUID — correctly positioned, just needs empty col deleted
+ *   Type B: col[13] IS a UUID AND col[15] != 'C1'
+ *           swap [11]/[12] for Tantrum/OFFTask, fix submissionId at [14]
+ *   Type C: col[13] IS a UUID AND col[15] == 'C1'
+ *           analytics block shifted left by 1 — unshift into correct positions
+ *
+ * After cell-level setValue fixes, deletes the empty column (sheet col 13, 1-indexed)
+ * so the 24-col sheet becomes the correct 23-col layout.
+ *
+ * Run: repairCamilaBehaviorData(true)   // dry run
+ *      repairCamilaBehaviorData(false)  // live
+ */
+function repairCamilaBehaviorData(dryRun) {
+  var isDryRun = (dryRun !== false);
+  var logLines = [];
+  var totalFixed = 0;
+  function log(msg) { Logger.log(msg); logLines.push(msg); }
+
+  log('=== repairCamilaBehaviorData ' + (isDryRun ? '[DRY RUN]' : '[LIVE]') +
+      ' started ' + new Date().toISOString() + ' ===');
+
+  var adminSS = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var clients = _loadActiveClients(adminSS, 'C1');
+  if (!clients.length) {
+    log('ERROR: C1 not found in Clients tab');
+    return { dryRun: isDryRun, summary: 'C1 not found', fixed: 0, log: logLines };
+  }
+  var client = clients[0];
+  log('Client: ' + client.name + ' (' + client.id + ') sheetId=' + client.sheetId);
+
+  var clientSS;
+  try { clientSS = SpreadsheetApp.openById(client.sheetId); } catch (e) {
+    log('ERROR opening client sheet: ' + e.message);
+    return { dryRun: isDryRun, summary: 'cannot open sheet', fixed: 0, log: logLines };
+  }
+  if (!clientSS) {
+    log('ERROR: openById returned null');
+    return { dryRun: isDryRun, summary: 'null sheet', fixed: 0, log: logLines };
+  }
+
+  var bdSheet = clientSS.getSheetByName('Behavior Data');
+  if (!bdSheet) {
+    log('ERROR: Behavior Data tab not found');
+    return { dryRun: isDryRun, summary: 'no BD tab', fixed: 0, log: logLines };
+  }
+
+  // Backup
+  if (!isDryRun) {
+    var backupName = 'Behavior Data REPAIR_BACKUP';
+    if (!clientSS.getSheetByName(backupName)) {
+      var bk = bdSheet.copyTo(clientSS);
+      bk.setName(backupName);
+      log('Created backup: ' + backupName);
+    } else {
+      log('Backup already exists: ' + backupName + ' (kept)');
+    }
+  }
+
+  var lastCol = bdSheet.getLastColumn();
+  var lastRow = bdSheet.getLastRow();
+  log('Sheet: ' + lastRow + ' rows x ' + lastCol + ' cols');
+
+  if (lastCol < 14) {
+    log('ERROR: fewer than 14 cols — unexpected layout, aborting');
+    return { dryRun: isDryRun, summary: 'unexpected layout', fixed: 0, log: logLines };
+  }
+
+  var allData = bdSheet.getRange(1, 1, lastRow, lastCol).getValues();
+  var headers = allData[0];
+  log('Headers[12]="' + headers[12] + '" [13]="' + headers[13] +
+      '" [14]="' + headers[14] + '" [15]="' + headers[15] + '"');
+
+  // Target 23-col headers (after empty col deleted)
+  var TARGET_HEADERS = [
+    'Date', 'Therapist', 'Setting',
+    'Aggression', 'Whining', 'Ingesting Inedibles', 'Elopement', 'Task Refusal',
+    'Out of Area', 'SIB',
+    'Tantrum Frequency', 'Tantrum Total (Min)', 'OFF Task',
+    'submissionId', 'clientName', 'clientId', 'therapistEmail',
+    'sessionType', 'billingCode', 'isDraft', 'payloadHash', 'submittedAt', 'dateISO'
+  ];
+
+  // ── Analyse rows and build correction list ──────────────────────────────
+  // All corrections reference CURRENT (24-col) 1-indexed sheet positions.
+  // They are applied BEFORE the empty column is deleted.
+  // After deletion (sheetCol 13 gone), everything from sheetCol 14+ shifts left by 1,
+  // landing each value in the correct TARGET position.
+  var corrections = []; // {sheetRow, sheetCol(1-based), newVal, note}
+
+  for (var ri = 1; ri < allData.length; ri++) {
+    var row = allData[ri];
+    var sheetRow = ri + 1;
+
+    // Skip completely empty rows
+    if (!row[0] && !row[1] && !row[3]) { continue; }
+
+    var v11 = row[11]; // Tantrum Total header — may have OFF Task count (Type B)
+    var v12 = row[12]; // EMPTY header      — may have Tantrum Total value (Type B)
+    var v13 = row[13]; // OFF Task header   — may have submissionId UUID (Type B/C)
+    var v14 = row[14]; // submissionId hdr  — may have dup UUID or clientName
+
+    var col13uuid = _mig_isUUID(String(v13).trim());
+    var col15isClientId = (String(row[15]).trim() === client.id); // "C1"
+
+    var rowType = 'A';
+    if (col13uuid && col15isClientId) { rowType = 'C'; }
+    else if (col13uuid) { rowType = 'B'; }
+
+    log('  row ' + sheetRow + ' type=' + rowType +
+        ' [11]=' + v11 + ' [12]=' + v12 +
+        ' [13]=' + String(v13).substring(0, 12) +
+        ' [14]=' + String(v14).substring(0, 12) +
+        ' [15]=' + String(row[15]).substring(0, 10));
+
+    if (rowType === 'A') {
+      // No cell fixes needed. Deleting sheetCol 13 will align this row correctly.
+
+    } else if (rowType === 'B') {
+      // col[11] = OFF Task int (wrong — in Tantrum Total col)
+      // col[12] = Tantrum Total value (wrong — in empty col, will be deleted)
+      // col[13] = submissionId UUID (wrong — in OFF Task col)
+      // col[14] = dup UUID (wrong — in submissionId col)
+      // col[15+] = analytics starting at clientName — already correct
+      //
+      // Fix BEFORE deletion (sheetCol = 1-indexed):
+      //   sheetCol 12 ← v12 (Tantrum Total → Tantrum Total column)
+      //   sheetCol 14 ← v11 (OFF Task int → OFF Task column)
+      //   sheetCol 15 ← v13 (submissionId UUID → submissionId column)
+      //   sheetCol 16+ already correct
+      corrections.push({ sheetRow: sheetRow, sheetCol: 12,
+        newVal: (v12 !== '' && v12 !== null) ? v12 : 0,
+        note: 'B: Tantrum Total ← col[12]' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 14,
+        newVal: (v11 !== '' && v11 !== null) ? v11 : 0,
+        note: 'B: OFF Task ← col[11]' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 15,
+        newVal: v13,
+        note: 'B: submissionId ← col[13] UUID' });
+
+    } else { // rowType === 'C'
+      // col[13] = submissionId UUID (in OFF Task col — shifted left 1)
+      // col[14] = clientName (in submissionId col — shifted left 1)
+      // col[15] = clientId "C1" (in clientName col)
+      // col[16..22] = therapistEmail..dateISO (each 1 col too early)
+      // col[23] = blank
+      //
+      // Fix BEFORE deletion:
+      //   sheetCol 14 ← 0      (OFF Task = 0, old session before OFF Task was tracked)
+      //   sheetCol 15 ← v13    (submissionId UUID)
+      //   sheetCol 16 ← v14    (clientName)
+      //   sheetCol 17 ← row[15] (clientId "C1")
+      //   sheetCol 18..24 ← row[16..22] (therapistEmail..dateISO)
+      corrections.push({ sheetRow: sheetRow, sheetCol: 14, newVal: 0,       note: 'C: OFF Task=0' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 15, newVal: v13,     note: 'C: submissionId' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 16, newVal: v14,     note: 'C: clientName' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 17, newVal: row[15], note: 'C: clientId' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 18, newVal: row[16], note: 'C: therapistEmail' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 19, newVal: row[17], note: 'C: sessionType' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 20, newVal: row[18], note: 'C: billingCode' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 21, newVal: row[19], note: 'C: isDraft' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 22, newVal: row[20], note: 'C: payloadHash' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 23, newVal: row[21], note: 'C: submittedAt' });
+      var dateISOVal = (lastCol >= 24 && row[22] !== undefined) ? row[22] : '';
+      corrections.push({ sheetRow: sheetRow, sheetCol: 24, newVal: dateISOVal, note: 'C: dateISO' });
+    }
+  }
+
+  log('Corrections planned: ' + corrections.length);
+
+  // ── Apply or preview ────────────────────────────────────────────────────
+  if (isDryRun) {
+    for (var pi = 0; pi < corrections.length; pi++) {
+      var pc = corrections[pi];
+      log('  [DRY RUN] row ' + pc.sheetRow + ' sheetCol ' + pc.sheetCol +
+          ': ' + pc.note + ' → ' + String(pc.newVal).substring(0, 40));
+    }
+    log('[DRY RUN] Would delete empty column (sheet col 13) and rewrite header row');
+  } else {
+    for (var ai = 0; ai < corrections.length; ai++) {
+      var ac = corrections[ai];
+      try {
+        bdSheet.getRange(ac.sheetRow, ac.sheetCol).setValue(ac.newVal);
+        log('  row ' + ac.sheetRow + ' sheetCol ' + ac.sheetCol + ': ' + ac.note);
+        totalFixed++;
+      } catch (e) {
+        log('  ERROR row ' + ac.sheetRow + ' col ' + ac.sheetCol + ': ' + e.message);
+      }
+    }
+    SpreadsheetApp.flush();
+
+    // Delete the empty column (sheet col 13, 1-indexed)
+    log('Deleting empty column (sheet col 13)...');
+    bdSheet.deleteColumn(13);
+    SpreadsheetApp.flush();
+    log('Empty column deleted. Sheet now has ' + bdSheet.getLastColumn() + ' cols.');
+
+    // Rewrite header row to TARGET_HEADERS
+    var newLastCol = bdSheet.getLastColumn();
+    var hdrLen = Math.min(TARGET_HEADERS.length, newLastCol);
+    var hdrRange = bdSheet.getRange(1, 1, 1, hdrLen);
+    hdrRange.setValues([TARGET_HEADERS.slice(0, hdrLen)]);
+    hdrRange.setFontWeight('bold');
+    hdrRange.setBackground('#00A7C7');
+    hdrRange.setFontColor('#FFFFFF');
+    log('Header row rewritten (' + hdrLen + ' cols).');
+
+    // Audit log
+    var auditSheet = adminSS.getSheetByName('RT Audit Log');
+    if (auditSheet) {
+      auditSheet.appendRow([new Date(), 'repairCamilaBehaviorData', 'SYSTEM',
+        'client=C1 corrections=' + corrections.length + ' emptyColDeleted=true',
+        'repairCamilaBehaviorData']);
+    }
+  }
+
+  var summary = (isDryRun ? '[DRY RUN] ' : '') +
+    'repairCamilaBehaviorData complete. corrections=' + corrections.length;
+  log('=== ' + summary + ' ===');
+  return { dryRun: isDryRun, summary: summary, fixed: totalFixed, log: logLines };
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PART C — unifySubmissionIds
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Normalize a date value to YYYY-MM-DD using UTC to avoid timezone boundary issues.
+ */
+function _usid_normalizeDateISO(val) {
+  if (!val && val !== 0) { return ''; }
+  if (val instanceof Date) {
+    return Utilities.formatDate(val, 'UTC', 'yyyy-MM-dd');
+  }
+  var s = String(val).trim();
+  if (!s || s === '0') { return ''; }
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) { return s.substring(0, 10); }
+  var mdy = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (mdy) {
+    return mdy[3] + '-' + ('0' + mdy[1]).slice(-2) + '-' + ('0' + mdy[2]).slice(-2);
+  }
+  var MONTHS = { jan:1, feb:2, mar:3, apr:4, may:5, jun:6, jul:7, aug:8,
+                 sep:9, oct:10, nov:11, dec:12 };
+  var mon = s.match(/^([A-Za-z]{3})\s+(\d{1,2}),?\s+(\d{4})$/);
+  if (mon) {
+    var m = MONTHS[mon[1].toLowerCase()];
+    if (m) { return mon[3] + '-' + ('0' + m).slice(-2) + '-' + ('0' + mon[2]).slice(-2); }
+  }
+  try {
+    var d = new Date(s);
+    if (!isNaN(d.getTime())) { return Utilities.formatDate(d, 'UTC', 'yyyy-MM-dd'); }
+  } catch (ex) {}
+  return '';
+}
+
+
+/**
+ * Build TITO session key maps for one client spreadsheet.
+ * Returns { keyMap: {dateISO|therapistLower: submissionId},
+ *           dateOnlyMap: {dateISO: [submissionId, ...]} }
+ */
+function _usid_buildTitoMap(clientSS, log) {
+  var keyMap = {};
+  var dateOnlyMap = {};
+
+  var titoSheet = clientSS.getSheetByName('Time In Time Out');
+  if (!titoSheet) { log('  TITO tab not found'); return { keyMap: keyMap, dateOnlyMap: dateOnlyMap }; }
+
+  var data = titoSheet.getDataRange().getValues();
+  if (data.length < 2) { log('  TITO empty'); return { keyMap: keyMap, dateOnlyMap: dateOnlyMap }; }
+
+  var cm = _mig_buildColMap(data[0]);
+  var subCol      = cm['submissionId'] !== undefined ? cm['submissionId']
+                  : (cm['Submission ID'] !== undefined ? cm['Submission ID'] : -1);
+  var dateISOCol  = cm['dateISO']    !== undefined ? cm['dateISO']    : -1;
+  var dateCol     = cm['Date']       !== undefined ? cm['Date']
+                  : (cm['date']      !== undefined ? cm['date']      : -1);
+  var therapistCol = cm['Therapist'] !== undefined ? cm['Therapist']
+                   : (cm['therapistEmail'] !== undefined ? cm['therapistEmail'] : -1);
+
+  if (subCol === -1) { log('  TITO: no submissionId col'); return { keyMap: keyMap, dateOnlyMap: dateOnlyMap }; }
+
+  for (var ri = 1; ri < data.length; ri++) {
+    var row = data[ri];
+    var sub = String(row[subCol] || '').trim();
+    if (!_mig_isUUID(sub)) { continue; }
+
+    var dateRaw = (dateISOCol !== -1 && row[dateISOCol]) ? row[dateISOCol]
+                : (dateCol !== -1 ? row[dateCol] : '');
+    var dateISO = _usid_normalizeDateISO(dateRaw);
+    if (!dateISO) { continue; }
+
+    var therapist = therapistCol !== -1 ? String(row[therapistCol] || '').trim().toLowerCase() : '';
+    var key = dateISO + '|' + therapist;
+    if (!keyMap[key]) { keyMap[key] = sub; }
+
+    if (!dateOnlyMap[dateISO]) { dateOnlyMap[dateISO] = []; }
+    var already = false;
+    for (var di = 0; di < dateOnlyMap[dateISO].length; di++) {
+      if (dateOnlyMap[dateISO][di] === sub) { already = true; break; }
+    }
+    if (!already) { dateOnlyMap[dateISO].push(sub); }
+  }
+
+  log('  TITO: ' + _chd_objectKeyCount(keyMap) + ' session keys loaded');
+  return { keyMap: keyMap, dateOnlyMap: dateOnlyMap };
+}
+
+
+/**
+ * Reconcile submissionIds in one tab against the TITO keyMap.
+ * Returns count of rows fixed.
+ */
+function _usid_reconcileTab(clientSS, tabName, titoMap, isDryRun, log) {
+  var tabSheet = clientSS.getSheetByName(tabName);
+  if (!tabSheet) { log('  ' + tabName + ': tab not found'); return 0; }
+
+  var data = tabSheet.getDataRange().getValues();
+  if (data.length < 2) { log('  ' + tabName + ': empty'); return 0; }
+
+  var cm = _mig_buildColMap(data[0]);
+  var subCol      = cm['submissionId'] !== undefined ? cm['submissionId'] : -1;
+  var dateISOCol  = cm['dateISO']     !== undefined ? cm['dateISO']     : -1;
+  var dateCol     = cm['Date']        !== undefined ? cm['Date']
+                  : (cm['date']       !== undefined ? cm['date']       : -1);
+  var therapistCol = cm['Therapist']  !== undefined ? cm['Therapist']  : -1;
+
+  if (subCol === -1) { log('  ' + tabName + ': no submissionId col'); return 0; }
+
+  var fixed = 0;
+  for (var ri = 1; ri < data.length; ri++) {
+    var row = data[ri];
+    var dateRaw = (dateISOCol !== -1 && row[dateISOCol]) ? row[dateISOCol]
+                : (dateCol !== -1 ? row[dateCol] : '');
+    var dateISO = _usid_normalizeDateISO(dateRaw);
+    if (!dateISO) { continue; }
+
+    var therapist = therapistCol !== -1 ? String(row[therapistCol] || '').trim().toLowerCase() : '';
+    var key = dateISO + '|' + therapist;
+
+    var currentSub = String(row[subCol] || '').trim();
+    var authSub = titoMap.keyMap[key];
+
+    // Date-only fallback when therapist blank and exactly one TITO session that day
+    if (!authSub && therapist === '') {
+      var dateSubs = titoMap.dateOnlyMap[dateISO];
+      if (dateSubs && dateSubs.length === 1) { authSub = dateSubs[0]; }
+    }
+
+    if (!authSub || currentSub === authSub) { continue; }
+
+    var sheetRow = ri + 1;
+    log('  ' + tabName + ' row ' + sheetRow + ': [' + (currentSub || 'blank') +
+        '] → [' + authSub + ']' + (isDryRun ? ' [DRY RUN]' : ''));
+    if (!isDryRun) {
+      try {
+        tabSheet.getRange(sheetRow, subCol + 1).setValue(authSub);
+        fixed++;
+      } catch (e) { log('  ERROR: ' + e.message); }
+    } else {
+      fixed++;
+    }
+  }
+
+  log('  ' + tabName + ': fixed=' + fixed);
+  return fixed;
+}
+
+
+/**
+ * unifySubmissionIds(dryRun, clientId)
+ *
+ * For each client sheet, reads TITO to build the authoritative
+ * dateISO|therapistLower → submissionId map, then reconciles Behavior Data,
+ * Trial Data, and ABC Data rows whose submissionId differs from TITO's.
+ * TITO's submissionId is always authoritative.
+ *
+ * Run: unifySubmissionIds(true)          // dry run — all clients
+ *      unifySubmissionIds(true,  'C1')   // dry run — C1 only
+ *      unifySubmissionIds(false, 'C1')   // live    — C1 only
+ */
+function unifySubmissionIds(dryRun, clientId) {
+  var isDryRun = (dryRun !== false);
+  var logLines = [];
+  var totalFixed = 0;
+  function log(msg) { Logger.log(msg); logLines.push(msg); }
+
+  log('=== unifySubmissionIds ' + (isDryRun ? '[DRY RUN]' : '[LIVE]') +
+      ' started ' + new Date().toISOString() +
+      (clientId ? ' clientId=' + clientId : ' all clients') + ' ===');
+
+  var adminSS = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var clients = _loadActiveClients(adminSS, clientId || null);
+  log('Clients: ' + clients.length);
+
+  var TABS = ['Behavior Data', 'Trial Data', 'ABC Data'];
+
+  for (var cli = 0; cli < clients.length; cli++) {
+    var client = clients[cli];
+    log('--- Client: ' + client.name + ' (' + client.id + ') ---');
+
+    var clientSS;
+    try { clientSS = SpreadsheetApp.openById(client.sheetId); } catch (e) {
+      log('  ERROR: ' + e.message); continue;
+    }
+    if (!clientSS) { log('  ERROR: null spreadsheet'); continue; }
+
+    var titoMap = _usid_buildTitoMap(clientSS, log);
+    if (!_chd_objectKeyCount(titoMap.keyMap)) {
+      log('  No valid TITO sessions — skipping'); continue;
+    }
+
+    for (var ti = 0; ti < TABS.length; ti++) {
+      totalFixed += _usid_reconcileTab(clientSS, TABS[ti], titoMap, isDryRun, log);
+    }
+  }
+
+  if (!isDryRun && totalFixed > 0) {
+    var auditSheet = adminSS.getSheetByName('RT Audit Log');
+    if (auditSheet) {
+      auditSheet.appendRow([new Date(), 'unifySubmissionIds', 'SYSTEM',
+        'fixed=' + totalFixed + (clientId ? ' clientId=' + clientId : ' all'),
+        'unifySubmissionIds']);
+    }
+  }
+
+  var summary = (isDryRun ? '[DRY RUN] ' : '') +
+    'unifySubmissionIds complete. fixed=' + totalFixed;
+  log('=== ' + summary + ' ===');
+  return { dryRun: isDryRun, summary: summary, fixed: totalFixed, log: logLines };
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PART D — fillEmptyAnalytics
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Build a session detail map from TITO: dateISO|therapistLower → {sessionType, billingCode}.
+ */
+function _fea_buildTitoDetailMap(clientSS) {
+  var map = {};
+  var titoSheet = clientSS.getSheetByName('Time In Time Out');
+  if (!titoSheet) { return map; }
+  var data = titoSheet.getDataRange().getValues();
+  if (data.length < 2) { return map; }
+  var cm = _mig_buildColMap(data[0]);
+  var dateISOCol   = cm['dateISO']     !== undefined ? cm['dateISO']     : -1;
+  var dateCol      = cm['Date']        !== undefined ? cm['Date']
+                   : (cm['date']       !== undefined ? cm['date']       : -1);
+  var therapistCol = cm['Therapist']   !== undefined ? cm['Therapist']  : -1;
+  var stCol        = cm['sessionType'] !== undefined ? cm['sessionType'] : -1;
+  var bcCol        = cm['billingCode'] !== undefined ? cm['billingCode'] : -1;
+
+  for (var ri = 1; ri < data.length; ri++) {
+    var row = data[ri];
+    var dateRaw = (dateISOCol !== -1 && row[dateISOCol]) ? row[dateISOCol]
+                : (dateCol !== -1 ? row[dateCol] : '');
+    var dateISO = _usid_normalizeDateISO(dateRaw);
+    if (!dateISO) { continue; }
+    var therapist = therapistCol !== -1 ? String(row[therapistCol] || '').trim().toLowerCase() : '';
+    var key = dateISO + '|' + therapist;
+    if (!map[key]) {
+      map[key] = {
+        sessionType: stCol !== -1 ? String(row[stCol] || '').trim() : '',
+        billingCode: bcCol !== -1 ? String(row[bcCol] || '').trim() : ''
+      };
+    }
+  }
+  return map;
+}
+
+
+/**
+ * fillEmptyAnalytics(dryRun, clientId)
+ *
+ * For all rows in Behavior Data, Trial Data, and ABC Data across all active clients
+ * (or a single client if clientId provided), fills:
+ *   therapistEmail — from admin Therapists tab, matched by Therapist name
+ *   sessionType    — from matching TITO row (same date + therapist)
+ *   billingCode    — from matching TITO row
+ *   isDraft        — false, when the row has a date and isDraft is currently blank
+ *
+ * Run: fillEmptyAnalytics(true)          // dry run — all clients
+ *      fillEmptyAnalytics(true,  'C1')   // dry run — C1 only
+ *      fillEmptyAnalytics(false, 'C1')   // live    — C1 only
+ */
+function fillEmptyAnalytics(dryRun, clientId) {
+  var isDryRun = (dryRun !== false);
+  var logLines = [];
+  var totalFixed = 0;
+  function log(msg) { Logger.log(msg); logLines.push(msg); }
+
+  log('=== fillEmptyAnalytics ' + (isDryRun ? '[DRY RUN]' : '[LIVE]') +
+      ' started ' + new Date().toISOString() +
+      (clientId ? ' clientId=' + clientId : ' all clients') + ' ===');
+
+  var adminSS = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+
+  // Build therapist name → email lookup (lowercase keys)
+  var therapistEmailMap = {};
+  var therapists = sheetToObjects(adminSS, 'Therapists');
+  for (var ti2 = 0; ti2 < therapists.length; ti2++) {
+    var t = therapists[ti2];
+    var tname  = String(t.name  || '').trim().toLowerCase();
+    var temail = String(t.email || '').trim();
+    if (tname && temail) { therapistEmailMap[tname] = temail; }
+  }
+
+  var clients = _loadActiveClients(adminSS, clientId || null);
+  var TABS = ['Behavior Data', 'Trial Data', 'ABC Data'];
+
+  for (var cli = 0; cli < clients.length; cli++) {
+    var client = clients[cli];
+    log('--- Client: ' + client.name + ' (' + client.id + ') ---');
+
+    var clientSS;
+    try { clientSS = SpreadsheetApp.openById(client.sheetId); } catch (e) {
+      log('  ERROR: ' + e.message); continue;
+    }
+    if (!clientSS) { log('  ERROR: null spreadsheet'); continue; }
+
+    var titoDetailMap = _fea_buildTitoDetailMap(clientSS);
+
+    for (var tabi = 0; tabi < TABS.length; tabi++) {
+      var tabName = TABS[tabi];
+      var tabSheet = clientSS.getSheetByName(tabName);
+      if (!tabSheet) { continue; }
+
+      var data = tabSheet.getDataRange().getValues();
+      if (data.length < 2) { continue; }
+
+      var cm = _mig_buildColMap(data[0]);
+      var therapistCol      = cm['Therapist']     !== undefined ? cm['Therapist']
+                            : (cm['therapistName'] !== undefined ? cm['therapistName'] : -1);
+      var therapistEmailCol = cm['therapistEmail'] !== undefined ? cm['therapistEmail'] : -1;
+      var sessionTypeCol    = cm['sessionType']   !== undefined ? cm['sessionType']   : -1;
+      var billingCodeCol    = cm['billingCode']   !== undefined ? cm['billingCode']   : -1;
+      var isDraftCol        = cm['isDraft']        !== undefined ? cm['isDraft']       : -1;
+      var dateISOCol        = cm['dateISO']        !== undefined ? cm['dateISO']       : -1;
+      var dateCol           = cm['Date']           !== undefined ? cm['Date']
+                            : (cm['date']          !== undefined ? cm['date']          : -1);
+
+      var tabFixed = 0;
+
+      for (var ri = 1; ri < data.length; ri++) {
+        var row = data[ri];
+        if (!row[0] && !row[1]) { continue; }
+        var sheetRow = ri + 1;
+
+        var dateRaw = (dateISOCol !== -1 && row[dateISOCol]) ? row[dateISOCol]
+                    : (dateCol !== -1 ? row[dateCol] : '');
+        var dateISO = _usid_normalizeDateISO(dateRaw);
+        var therapistName = therapistCol !== -1 ? String(row[therapistCol] || '').trim() : '';
+        var titoKey = dateISO ? (dateISO + '|' + therapistName.toLowerCase()) : '';
+        var titoDetail = titoKey ? titoDetailMap[titoKey] : null;
+
+        // therapistEmail
+        if (therapistEmailCol !== -1) {
+          var curEmail = String(row[therapistEmailCol] || '').trim();
+          if (!curEmail && therapistName) {
+            var lookupEmail = therapistEmailMap[therapistName.toLowerCase()] || '';
+            if (lookupEmail) {
+              log('  ' + tabName + ' r' + sheetRow + ': therapistEmail→' + lookupEmail +
+                  (isDryRun ? ' [DRY]' : ''));
+              if (!isDryRun) {
+                tabSheet.getRange(sheetRow, therapistEmailCol + 1).setValue(lookupEmail);
+              }
+              tabFixed++;
+            }
+          }
+        }
+
+        // sessionType
+        if (sessionTypeCol !== -1 && titoDetail) {
+          var curST = String(row[sessionTypeCol] || '').trim();
+          if (!curST && titoDetail.sessionType) {
+            log('  ' + tabName + ' r' + sheetRow + ': sessionType→' + titoDetail.sessionType +
+                (isDryRun ? ' [DRY]' : ''));
+            if (!isDryRun) {
+              tabSheet.getRange(sheetRow, sessionTypeCol + 1).setValue(titoDetail.sessionType);
+            }
+            tabFixed++;
+          }
+        }
+
+        // billingCode
+        if (billingCodeCol !== -1 && titoDetail) {
+          var curBC = String(row[billingCodeCol] || '').trim();
+          if (!curBC && titoDetail.billingCode) {
+            log('  ' + tabName + ' r' + sheetRow + ': billingCode→' + titoDetail.billingCode +
+                (isDryRun ? ' [DRY]' : ''));
+            if (!isDryRun) {
+              tabSheet.getRange(sheetRow, billingCodeCol + 1).setValue(titoDetail.billingCode);
+            }
+            tabFixed++;
+          }
+        }
+
+        // isDraft = false when row has data and isDraft is blank
+        if (isDraftCol !== -1) {
+          var curDraft = row[isDraftCol];
+          if ((curDraft === '' || curDraft === null || curDraft === undefined) && row[0]) {
+            log('  ' + tabName + ' r' + sheetRow + ': isDraft→false' + (isDryRun ? ' [DRY]' : ''));
+            if (!isDryRun) { tabSheet.getRange(sheetRow, isDraftCol + 1).setValue(false); }
+            tabFixed++;
+          }
+        }
+      }
+
+      log('  ' + tabName + ': fixed=' + tabFixed);
+      totalFixed += tabFixed;
+    }
+  }
+
+  if (!isDryRun && totalFixed > 0) {
+    var auditSheet = adminSS.getSheetByName('RT Audit Log');
+    if (auditSheet) {
+      auditSheet.appendRow([new Date(), 'fillEmptyAnalytics', 'SYSTEM',
+        'fixed=' + totalFixed + (clientId ? ' clientId=' + clientId : ' all'),
+        'fillEmptyAnalytics']);
+    }
+  }
+
+  var summary = (isDryRun ? '[DRY RUN] ' : '') +
+    'fillEmptyAnalytics complete. fixed=' + totalFixed;
+  log('=== ' + summary + ' ===');
+  return { dryRun: isDryRun, summary: summary, fixed: totalFixed, log: logLines };
 }
