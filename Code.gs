@@ -3123,7 +3123,11 @@ function diagnoseBehaviorHeaders() {
     try {
       clientSS = SpreadsheetApp.openById(client.sheetId);
     } catch (e) {
-      log('    ERROR opening sheet: ' + e.message);
+      log('    ERROR opening sheet ' + client.sheetId + ': ' + e.message);
+      continue;
+    }
+    if (!clientSS) {
+      log('    ERROR: openById returned null for sheetId=' + client.sheetId + ' (check sharing/permissions)');
       continue;
     }
 
