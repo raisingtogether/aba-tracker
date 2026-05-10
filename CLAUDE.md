@@ -8,8 +8,9 @@ Deployed on Firebase Hosting at `rt-aba-tracker`.
 ## File map
 | File | Purpose |
 |------|---------|
-| `index.html` | Complete frontend (all JS/CSS inline, ~5500 lines) |
-| `Code.gs` | Google Apps Script backend (ES5 strict, ~2200 lines) |
+| `index.html` | Complete frontend (all JS/CSS inline, ~5600 lines) |
+| `Code.gs` | Google Apps Script backend (ES5 strict, ~1800 lines — migration code removed) |
+| `BigQuerySync.gs` | BigQuery sync (ES5 strict, ~1050 lines — separate file, same GAS project) |
 | `manifest.json` | PWA manifest for Add to Home Screen |
 | `sw.js` | Service worker (offline support) |
 | `firebase.json` | Firebase Hosting config — site must be `rt-aba-tracker` |
@@ -51,7 +52,7 @@ ES5 for consistency and safety.
 
 `Trial Data`: Date, Therapist, \<goal code columns\>, Percent Correct (JSON), submissionId, ...analytics
 
-`Mastery Log`: type, code, description, masteryDate, lastScores, therapistName, therapistEmail, clientName, clientId, dateISO
+`Mastery Log`: type, code, description, masteryDate, lastScores, therapistName, therapistEmail, clientName, clientId, dateISO, **status**, **approvedBy**, **approvalDate**, **settingsObserved**
 
 ### Column alignment pattern
 All sheet writes use `ensureSheetColumns` + colMap-based row building. **Never hardcode column positions.** Read the actual header row, build `{header: colIndex}` map, write by key. `sheetToObjects` returns raw cell values (not String-cast).
@@ -62,13 +63,16 @@ All sheet writes use `ensureSheetColumns` + colMap-based row building. **Never h
 | `doPost(e)` | Router — dispatches on `data.action` |
 | `verifyLogin(email, pin, totp)` | Tier 2 auth; never returns pin/totpSecret |
 | `hashPin(email, pin)` | SHA-256 of `email:pin` → 64-char hex |
-| `migratePins()` | One-time: hash all plaintext PINs in Therapists sheet |
 | `saveConfig(cfg)` | LockService-protected; hashes new PINs; checks duplicate goal codes |
 | `getWeeklyHours` / `getBiweeklyHours` | Prefer `dateISO` column; fallback to `date` |
-| `checkBehaviorMastery` | Derives behavior column range from headers (not hardcoded startCol=3) |
-| `writeMasteryLog` | colMap-based row write |
+| `checkBehaviorMastery` | 10 consecutive sessions ≤1; reads Setting column; returns status string |
+| `getMasteryLogStatus` | Returns most recent mastery status for type+code; backfills old entries |
+| `writeMasteryLog` | colMap-based row write; includes status, approvedBy, approvalDate, settingsObserved |
+| `approveBehaviorMastery` | BCBA/Admin only; sets status='confirmed' on mastery log row |
+| `dismissBehaviorMastery` | BCBA/Admin only; sets status='dismissed'; allows recovery recommendation |
 | `checkGoalUsage` | Reads header row first; only scans full data when goal column found |
-| `getMasteryStatus` | Goal mastery: 80%+ for 5 consecutive; Behavior: ≤1 for 8 consecutive |
+| `getMasteryStatus` | Goal mastery: 80%+ for 5 consecutive → 'confirmed'; Behavior: ≤1 for 10 consecutive |
+| `getMasteryReport` | Aggregates mastery log across all clients; keeps most recent entry per behavior |
 | `processSession` | Writes all 4 tabs + audit log |
 
 ### Key index.html globals/functions
@@ -96,8 +100,8 @@ All sheet writes use `ensureSheetColumns` + colMap-based row building. **Never h
 - Session timer visible (elapsed time in turquesa)
 - Session notes guided template (8 sections, 150 word minimum)
 - Goal mastery detection (80% × 5 consecutive sessions, gold star badge)
-- Behavior mastery detection (≤1 × 8 consecutive sessions, green checkmark)
-- Monthly mastery report (admin panel, CSV export)
+- Behavior mastery detection — BCBA-reviewed system (≤1 × 10 consecutive, 3-state badge)
+- Monthly mastery report (admin panel, CSV export, Approve/Dismiss workflow)
 - Authorization multi-code cards (multiple billing codes per authorization with unit/hourly rates)
 - Weekly billing report (admin panel, CSV export)
 - Admin manual session entry (backdated up to 24 hours)
@@ -109,6 +113,38 @@ All sheet writes use `ensureSheetColumns` + colMap-based row building. **Never h
 - PWA standalone Google Sign-In fix (55-min token cache)
 - Double-submission guard (`_submitting` flag in `doSubmitSession`)
 - Behaviors filtered by client assignment (only assigned behaviors appear in session)
+- ABC incidents: behaviors filtered by client; Hypothesized Function multi-select
+- Trial screen displays goal description names (not just codes)
+
+---
+
+## Data Repairs Completed (May 2026)
+
+- **Code audit**: 30 issues found and fixed (1 CRITICAL, 8 HIGH, 10 MEDIUM, 11 LOW)
+- **BigQuerySync audit**: 15 issues found and fixed
+- **Camila Behavior Data**: structural repair (empty column removed, Type A/B/C row shifts corrected)
+- **Camila TITO**: structural repair (2 empty columns removed, Type B/C data realigned)
+- **Dylan TITO**: structural repair (1 empty column removed, Type A/B data realigned)
+- **Submission ID unification**: 117 IDs reconciled across all tabs for all 5 clients (TITO as source of truth)
+- **Historical data cleanup**: 417 fields filled, 3 duplicates removed
+- **isDraft backfill**: 70 fields set to false
+- **Migration code removed**: all one-time repair/migration functions deleted from production (2,714 lines removed)
+
+---
+
+## Behavior Mastery System (Updated May 2026)
+
+- Changed from auto-declaration to BCBA-reviewed recommendation system
+- **Threshold**: 10 consecutive sessions with count ≤1 (was 8)
+- **Generalization**: 2+ distinct settings observed = `'recommended'`; 1 setting = `'pendingGeneralization'`
+- **BCBA Approve/Dismiss workflow**: Admin mastery report shows action buttons for pending recommendations
+- **Role-gated**: only `Admin`/`BCBA` can approve/dismiss (enforced at UI and server level; server checks `approverRole` param)
+- **Goal mastery unchanged**: 80% × 5 sessions → auto-set to `'confirmed'` status
+- **Mastery log new columns**: `status`, `approvedBy`, `approvalDate`, `settingsObserved`
+- **BigQuery**: all 4 new fields synced in `mastery_log` table
+- **Duplicate prevention**: no re-recommendation while status is `recommended`, `pendingGeneralization`, or `confirmed`
+- **Recovery after dismiss**: if behavior meets threshold again after dismissal, a new recommendation row is created
+- **Dedup fix**: mastery report keeps the most recent entry per behavior (last row wins), so recover-after-dismiss shows the new entry
 
 ---
 
@@ -121,6 +157,8 @@ All sheet writes use `ensureSheetColumns` + colMap-based row building. **Never h
 - `verifyLogin` strips `pin`/`totpSecret` from response object
 - OAuth token cache reduced to 55 minutes (was 24 hours)
 - `saveConfig` wrapped with `LockService.getScriptLock()` to prevent concurrent-write races
+- Mastery approve/dismiss: role check at UI level (early return) AND server level; `approverRole` sends actual role, not hardcoded 'BCBA'
+- onclick JS string embedding uses `esc()` (escapes `'` and `\`), not `escAttr()` (which only escapes HTML chars)
 
 ---
 
@@ -139,12 +177,16 @@ All sheet writes use `ensureSheetColumns` + colMap-based row building. **Never h
 
 ## Known issues resolved
 
-- Column misalignment in Behavior Data / Trial Data tabs (colMap fix + `fixShiftedAnalytics` migration)
-- Mastery log duplicate entries (`cleanDuplicateMasteries` action + `isMasteryLogged` guard)
-- `g.name` blank goal name everywhere — goals use `g.description` not `g.name`
+- Column misalignment in Behavior Data / Trial Data tabs (colMap fix + structural repairs)
+- Mastery log: first-entry dedup kept dismissed entry after recovery (fixed: last-row-wins dedup)
+- Goal mastery entries incorrectly shown as 'recommended' (fixed: type-aware status defaulting)
+- `g.name` blank goal name everywhere — `applyConfig` maps `g.description` → `name`; `buildTrials` uses `g.name`
 - Submit Session not responding on mobile (Back→End navigation bug — `cancelEndTimeModal` was stopping timer)
 - Session timer stopping on modal cancel (fixed: restart interval if not running)
 - Supervision toggle resetting on Back→End navigation
+- ABC behaviors showing all behaviors instead of client-assigned only — fixed `renderABCList` to use `S.client.behaviors`
+- Hypothesized Function was single-select — now multi-select (`inc.fns[]` array)
+- `masteryApprove`/`masteryDismiss` sent `approverRole:'BCBA'` for all non-admin roles (security fix)
 - `verifyTOTPSetup` double fetch (wasted first call removed)
 - ABC pill tap rebuilding DOM (confirmed not a bug — `setABCField` only updates CSS)
 - `authAutoHourly` removed (referenced non-existent DOM IDs `auth-unitrate`/`auth-hourlyrate`)
@@ -196,9 +238,12 @@ When Sheets latency becomes noticeable:
 ### Data Integrity Safeguards (current)
 - `validateRowAlignment`: safety net on every write, logs misalignment to Audit Log
 - colMap-based row building: never hardcoded column positions
+- `_ensureColumnsBefore`: inserts new behavior columns before analytics section, respects each client's existing layout
 - `LockService`: prevents concurrent config saves
 - Double-submission guard: prevents duplicate session records
+- Mastery duplicate prevention: no re-recommendation while status is recommended/pendingGeneralization/confirmed
 - BigQuery reconciliation query: run periodically to verify data quality
+- BigQuery sync email alerts: tatiana@raising2gether.org notified on sync errors
 
 ---
 
