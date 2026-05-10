@@ -110,6 +110,15 @@ function doPost(e) {
       result = { success: true, dryRun: feaResult.dryRun, summary: feaResult.summary,
         fixed: feaResult.fixed, log: feaResult.log };
 
+    } else if (data.action === 'diagnoseTITOHeaders') {
+      var dthResult = diagnoseTITOHeaders();
+      result = { success: true, log: dthResult.log };
+
+    } else if (data.action === 'repairCamilaTITO') {
+      var rctResult = repairCamilaTITO(data.dryRun !== false);
+      result = { success: true, dryRun: rctResult.dryRun, summary: rctResult.summary,
+        fixed: rctResult.fixed, log: rctResult.log };
+
     } else {
       processSession(data);
       result = { success: true };
@@ -3938,4 +3947,274 @@ function fillEmptyAnalytics(dryRun, clientId) {
     'fillEmptyAnalytics complete. fixed=' + totalFixed;
   log('=== ' + summary + ' ===');
   return { dryRun: isDryRun, summary: summary, fixed: totalFixed, log: logLines };
+}
+
+// ─── diagnoseTITOHeaders ──────────────────────────────────────────────────────
+// Read-only: logs headers + first data row for "Time In Time Out" tab on every
+// active client sheet.  Flags empty or unexpected column positions.
+function diagnoseTITOHeaders() {
+  var logLines = [];
+  function log(msg) { logLines.push(msg); Logger.log(msg); }
+
+  log('=== diagnoseTITOHeaders ===');
+
+  var adminSS = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  if (!adminSS) {
+    log('ERROR: could not open admin spreadsheet id=' + ADMIN_SHEET_ID);
+    return { log: logLines };
+  }
+
+  var clients = _loadActiveClients(adminSS, null);
+  if (!clients.length) {
+    log('No active clients found.');
+    return { log: logLines };
+  }
+
+  for (var ci = 0; ci < clients.length; ci++) {
+    var client = clients[ci];
+    log('--- ' + client.name + ' (id=' + client.id + ', sheetId=' + client.sheetId + ')');
+
+    var clientSS = null;
+    try { clientSS = SpreadsheetApp.openById(client.sheetId); } catch (e) { clientSS = null; }
+    if (!clientSS) {
+      log('  ERROR: could not open spreadsheet id=' + client.sheetId);
+      continue;
+    }
+
+    var titoSheet = clientSS.getSheetByName('Time In Time Out');
+    if (!titoSheet) {
+      log('  Time In Time Out tab not found for ' + client.name +
+          ' (sheetId=' + client.sheetId + ')');
+      continue;
+    }
+
+    var allData = titoSheet.getDataRange().getValues();
+    if (!allData || allData.length === 0) {
+      log('  Sheet is empty.');
+      continue;
+    }
+
+    var headers = allData[0];
+    log('  Total cols: ' + headers.length + ', Total rows (incl header): ' + allData.length);
+    log('  Headers:');
+    for (var hi = 0; hi < headers.length; hi++) {
+      var hval = String(headers[hi] || '').trim();
+      var flag = (hval === '') ? ' *** EMPTY ***' : '';
+      log('    [' + hi + '] ' + (hval || '(blank)') + flag);
+    }
+
+    // Log first data row aligned with headers
+    if (allData.length > 1) {
+      var row1 = allData[1];
+      log('  Row 2 (first data row):');
+      for (var ri = 0; ri < headers.length; ri++) {
+        var rval = (ri < row1.length) ? String(row1[ri] || '').trim() : '(out of bounds)';
+        log('    [' + ri + '] ' + (String(headers[ri] || '').trim() || '(blank)') + ' = ' + rval);
+      }
+    }
+  }
+
+  log('=== diagnoseTITOHeaders complete ===');
+  return { log: logLines };
+}
+
+// ─── repairCamilaTITO ─────────────────────────────────────────────────────────
+// One-time repair for Camila's "Time In Time Out" tab.
+// Current layout has 2 extra empty columns at positions [11] and [12] (0-indexed)
+// inserted between "Late Start Reason" and "Submission ID".
+//
+// Row types (based on what appears in col[11]):
+//   Type A: col[11] blank → row has no data in wrong cols; just delete empty cols
+//   Type B: col[11] = UUID → submission ID landed in col[11]; col[12]=Notes
+//   Type C: like B but col[15] (clientName header) = client id "C1"
+//           → clientName was never written; analytics shifted left by 1 extra col
+//
+// Target layout (24 cols):
+//   Date, Billing Code, Type of Session, Time In, Time Out, Duration (min),
+//   Location, Therapist, App Start Time, Actual Start Time, Late Start Reason,
+//   Submission ID, Notes, clientName, clientId, therapistEmail, isDraft,
+//   payloadHash, submittedAt, dateISO, Adjusted End Time,
+//   End Time Adjustment Reason, manualEntry, enteredBy
+//
+// Safety: creates "Time In Time Out REPAIR_BACKUP" before ANY writes.
+function repairCamilaTITO(dryRun) {
+  var isDryRun = (dryRun !== false);
+  var logLines = [];
+  function log(msg) { logLines.push(msg); Logger.log(msg); }
+
+  log('=== repairCamilaTITO dryRun=' + isDryRun + ' ===');
+
+  var CAMILA_ID = 'C1';
+  var TARGET_HEADERS = [
+    'Date', 'Billing Code', 'Type of Session', 'Time In', 'Time Out',
+    'Duration (min)', 'Location', 'Therapist', 'App Start Time',
+    'Actual Start Time', 'Late Start Reason',
+    'Submission ID', 'Notes', 'clientName', 'clientId', 'therapistEmail',
+    'isDraft', 'payloadHash', 'submittedAt', 'dateISO',
+    'Adjusted End Time', 'End Time Adjustment Reason', 'manualEntry', 'enteredBy'
+  ];
+
+  var adminSS = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  if (!adminSS) {
+    log('ERROR: could not open admin spreadsheet id=' + ADMIN_SHEET_ID);
+    return { dryRun: isDryRun, summary: 'ERROR: admin SS not found', fixed: 0, log: logLines };
+  }
+
+  var clients = _loadActiveClients(adminSS, CAMILA_ID);
+  if (!clients.length) {
+    log('ERROR: client C1 not found or not active.');
+    return { dryRun: isDryRun, summary: 'ERROR: C1 not found', fixed: 0, log: logLines };
+  }
+  var client = clients[0];
+  log('Client: ' + client.name + ' (id=' + client.id + ', sheetId=' + client.sheetId + ')');
+
+  var clientSS = null;
+  try { clientSS = SpreadsheetApp.openById(client.sheetId); } catch (e) { clientSS = null; }
+  if (!clientSS) {
+    log('ERROR: could not open client spreadsheet id=' + client.sheetId);
+    return { dryRun: isDryRun, summary: 'ERROR: client SS not found', fixed: 0, log: logLines };
+  }
+
+  var titoSheet = clientSS.getSheetByName('Time In Time Out');
+  if (!titoSheet) {
+    log('ERROR: Time In Time Out tab not found.');
+    return { dryRun: isDryRun, summary: 'ERROR: TITO tab not found', fixed: 0, log: logLines };
+  }
+
+  var allData = titoSheet.getDataRange().getValues();
+  var totalRows = allData.length;
+  log('Total rows (incl header): ' + totalRows);
+  if (totalRows < 2) {
+    log('No data rows — nothing to repair.');
+    return { dryRun: isDryRun, summary: 'No data rows', fixed: 0, log: logLines };
+  }
+
+  var headers = allData[0];
+  log('Current col count: ' + headers.length);
+
+  // Verify expected layout: col[11] and col[12] should be empty headers
+  var h11 = String(headers[11] || '').trim();
+  var h12 = String(headers[12] || '').trim();
+  if (h11 !== '' || h12 !== '') {
+    log('WARNING: expected empty headers at [11]="' + h11 + '" and [12]="' + h12 + '"');
+    log('Sheet may already be repaired or have a different layout. Aborting.');
+    return { dryRun: isDryRun, summary: 'WARNING: unexpected header layout — aborted', fixed: 0, log: logLines };
+  }
+
+  // ── Step 1: Build corrections for data rows ──────────────────────────────
+  var corrections = [];
+
+  for (var ri = 1; ri < totalRows; ri++) {
+    var row = allData[ri];
+    var sheetRow = ri + 1; // 1-indexed
+    var lastCol = row.length - 1;
+
+    // Skip truly empty rows
+    if (!row[0] && !row[3] && !row[11] && !row[13]) { continue; }
+
+    var v11 = String(row[11] || '').trim();
+    var isUUID11 = _mig_isUUID(v11);
+
+    // Determine row type
+    var rowType;
+    if (!isUUID11) {
+      rowType = 'A'; // blank col[11] — no data fix needed, just structural delete
+    } else {
+      // col[11] has a UUID — check col[15] to see if it matches the client id
+      var v15 = String(row[15] || '').trim();
+      if (v15 === client.id) {
+        rowType = 'C'; // clientName was never written
+      } else {
+        rowType = 'B'; // normal misalignment
+      }
+    }
+
+    log('  r' + sheetRow + ' type=' + rowType + ' col[11]=' + v11.substring(0, 12));
+
+    if (rowType === 'B') {
+      // col[11]=submissionId UUID, col[12]=Notes text
+      // Target: col[12]=Submission ID, col[13]=Notes (after empty col deletion)
+      // But we write into 1-indexed sheetCol before structural delete
+      corrections.push({ sheetRow: sheetRow, sheetCol: 14, newVal: v11,         note: 'B: Submission ID ← col[11]' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 15, newVal: row[12],     note: 'B: Notes ← col[12]' });
+
+    } else if (rowType === 'C') {
+      // Type C: same UUID in col[11], Notes in col[12],
+      // clientName was never written so col[13]=dup UUID (discard),
+      // col[14]=blank (gap), col[15]=clientId, col[16]=therapistEmail, ...
+      corrections.push({ sheetRow: sheetRow, sheetCol: 14, newVal: v11,          note: 'C: Submission ID ← col[11]' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 15, newVal: row[12],      note: 'C: Notes ← col[12]' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 16, newVal: client.name,  note: 'C: clientName (hardcoded)' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 17, newVal: row[15],      note: 'C: clientId ← col[15]' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 18, newVal: row[16],      note: 'C: therapistEmail ← col[16]' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 19, newVal: row[17],      note: 'C: isDraft ← col[17]' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 20, newVal: row[18],      note: 'C: payloadHash ← col[18]' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 21, newVal: row[19],      note: 'C: submittedAt ← col[19]' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 22, newVal: row[20],      note: 'C: dateISO ← col[20]' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 23, newVal: row[21],      note: 'C: Adjusted End Time ← col[21]' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 24, newVal: row[22],      note: 'C: End Time Adjustment Reason ← col[22]' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 25, newVal: row[23],      note: 'C: manualEntry ← col[23]' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 26, newVal: row[24],      note: 'C: enteredBy ← col[24]' });
+    }
+    // Type A: no data corrections needed
+  }
+
+  log('Total corrections: ' + corrections.length);
+  for (var li = 0; li < corrections.length; li++) {
+    log('  [DRY=' + isDryRun + '] ' + corrections[li].note +
+        ' → r' + corrections[li].sheetRow + ' c' + corrections[li].sheetCol);
+  }
+
+  if (isDryRun) {
+    log('[DRY RUN] No changes written.');
+    return { dryRun: true, summary: '[DRY RUN] repairCamilaTITO — corrections=' + corrections.length,
+      fixed: corrections.length, log: logLines };
+  }
+
+  // ── Step 2: Create backup tab ─────────────────────────────────────────────
+  var backupName = 'Time In Time Out REPAIR_BACKUP';
+  var existingBackup = clientSS.getSheetByName(backupName);
+  if (!existingBackup) {
+    var backupSheet = titoSheet.copyTo(clientSS);
+    backupSheet.setName(backupName);
+    log('Backup created: ' + backupName);
+  } else {
+    log('Backup already exists: ' + backupName + ' — skipping copy');
+  }
+
+  // ── Step 3: Apply data corrections (write into current 26-col layout) ────
+  for (var ci2 = 0; ci2 < corrections.length; ci2++) {
+    var c = corrections[ci2];
+    titoSheet.getRange(c.sheetRow, c.sheetCol).setValue(c.newVal);
+  }
+  SpreadsheetApp.flush();
+  log('Data corrections applied: ' + corrections.length);
+
+  // ── Step 4: Delete the 2 empty columns (col index 12, then 12 again) ─────
+  // col[11] (0-indexed) = sheet col 12 (1-indexed) — first empty col
+  titoSheet.deleteColumn(12);
+  SpreadsheetApp.flush();
+  // After deletion col[11] shifts left; the second empty col is now also at
+  // sheet column 12 (was col[12] 0-indexed before deletion).
+  titoSheet.deleteColumn(12);
+  SpreadsheetApp.flush();
+  log('Deleted 2 empty columns (sheet col 12 twice).');
+
+  // ── Step 5: Rewrite header row to TARGET_HEADERS ─────────────────────────
+  var headerRange = titoSheet.getRange(1, 1, 1, TARGET_HEADERS.length);
+  headerRange.setValues([TARGET_HEADERS]);
+  SpreadsheetApp.flush();
+  log('Header row rewritten to ' + TARGET_HEADERS.length + ' columns.');
+
+  // ── Step 6: Audit log ─────────────────────────────────────────────────────
+  var auditSheet = adminSS.getSheetByName('RT Audit Log');
+  if (auditSheet) {
+    auditSheet.appendRow([new Date(), 'repairCamilaTITO', 'SYSTEM',
+      'corrections=' + corrections.length + ' clientId=' + client.id,
+      'repairCamilaTITO']);
+  }
+
+  var summary = 'repairCamilaTITO complete. corrections=' + corrections.length;
+  log('=== ' + summary + ' ===');
+  return { dryRun: false, summary: summary, fixed: corrections.length, log: logLines };
 }
