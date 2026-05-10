@@ -119,6 +119,11 @@ function doPost(e) {
       result = { success: true, dryRun: rctResult.dryRun, summary: rctResult.summary,
         fixed: rctResult.fixed, log: rctResult.log };
 
+    } else if (data.action === 'repairDylanTITO') {
+      var rdtResult = repairDylanTITO(data.dryRun !== false);
+      result = { success: true, dryRun: rdtResult.dryRun, summary: rdtResult.summary,
+        fixed: rdtResult.fixed, log: rdtResult.log };
+
     } else {
       processSession(data);
       result = { success: true };
@@ -4228,6 +4233,185 @@ function repairCamilaTITO(dryRun) {
   }
 
   var summary = 'repairCamilaTITO complete. corrections=' + corrections.length;
+  log('=== ' + summary + ' ===');
+  return { dryRun: false, summary: summary, fixed: corrections.length, log: logLines };
+}
+
+// ─── repairDylanTITO ──────────────────────────────────────────────────────────
+// One-time repair for Dylan's "Time In Time Out" tab.
+// Current layout has 1 extra empty column at position [12] (0-indexed) between
+// "Notes" (col[11]) and "Submission ID" (col[13]).
+//
+// Row types:
+//   Type A: col[11] is NOT a UUID (has notes text or is empty)
+//     — col[11]=notes, col[12]=empty, col[13]=UUID
+//     — After deletion col[11] stays but is under "Submission ID" header in target.
+//     — Fix: write UUID from col[13] to col[11]; write notes from col[11] to col[13]
+//       so after deletion col[11]=UUID and col[12]=notes, matching target headers.
+//   Type B: col[11] IS a UUID (submissionId landed in Notes column)
+//     — col[11]=original UUID, col[12]=actual notes, col[13]=dup UUID
+//     — Fix: write notes from col[12] to col[13]; col[11] UUID stays in place.
+//       After deletion col[11]=UUID, col[12]=notes, col[13]=clientName (correct).
+//
+// Analytics from col[14] onwards are ALREADY CORRECT — no shift.
+//
+// Target layout (24 cols):
+//   Date, Billing Code, Type of Session, Time In, Time Out, Duration (min),
+//   Location, Therapist, App Start Time, Actual Start Time, Late Start Reason,
+//   Submission ID, Notes, clientName, clientId, therapistEmail, isDraft,
+//   payloadHash, submittedAt, dateISO, Adjusted End Time,
+//   End Time Adjustment Reason, manualEntry, enteredBy
+//
+// Safety: creates "Time In Time Out REPAIR_BACKUP" before ANY writes.
+function repairDylanTITO(dryRun) {
+  var isDryRun = (dryRun !== false);
+  var logLines = [];
+  function log(msg) { logLines.push(msg); Logger.log(msg); }
+
+  log('=== repairDylanTITO dryRun=' + isDryRun + ' ===');
+
+  var DYLAN_ID = 'C3';
+  var DYLAN_SHEET_ID = '1YlptamKkt0YPC0lbxlW5680QS5JfBNU7a1KQohdqLus';
+  var TARGET_HEADERS = [
+    'Date', 'Billing Code', 'Type of Session', 'Time In', 'Time Out',
+    'Duration (min)', 'Location', 'Therapist', 'App Start Time',
+    'Actual Start Time', 'Late Start Reason',
+    'Submission ID', 'Notes', 'clientName', 'clientId', 'therapistEmail',
+    'isDraft', 'payloadHash', 'submittedAt', 'dateISO',
+    'Adjusted End Time', 'End Time Adjustment Reason', 'manualEntry', 'enteredBy'
+  ];
+
+  var clientSS = null;
+  try { clientSS = SpreadsheetApp.openById(DYLAN_SHEET_ID); } catch (e) { clientSS = null; }
+  if (!clientSS) {
+    log('ERROR: could not open Dylan spreadsheet id=' + DYLAN_SHEET_ID);
+    return { dryRun: isDryRun, summary: 'ERROR: client SS not found', fixed: 0, log: logLines };
+  }
+  log('Opened Dylan spreadsheet.');
+
+  var titoSheet = clientSS.getSheetByName('Time In Time Out');
+  if (!titoSheet) {
+    log('ERROR: Time In Time Out tab not found.');
+    return { dryRun: isDryRun, summary: 'ERROR: TITO tab not found', fixed: 0, log: logLines };
+  }
+
+  var allData = titoSheet.getDataRange().getValues();
+  var totalRows = allData.length;
+  log('Total rows (incl header): ' + totalRows);
+  if (totalRows < 2) {
+    log('No data rows — nothing to repair.');
+    return { dryRun: isDryRun, summary: 'No data rows', fixed: 0, log: logLines };
+  }
+
+  var headers = allData[0];
+  log('Current col count: ' + headers.length);
+
+  // Verify expected layout: col[12] should be empty, col[11]="Notes", col[13]="Submission ID"
+  var h11 = String(headers[11] || '').trim();
+  var h12 = String(headers[12] || '').trim();
+  var h13 = String(headers[13] || '').trim();
+  if (h12 !== '') {
+    log('WARNING: expected empty header at [12]="' + h12 + '"');
+    log('Sheet may already be repaired or have a different layout. Aborting.');
+    return { dryRun: isDryRun, summary: 'WARNING: unexpected header layout — aborted', fixed: 0, log: logLines };
+  }
+  log('Header check: [11]="' + h11 + '" [12]="' + h12 + '" [13]="' + h13 + '"');
+
+  // ── Step 1: Build corrections for data rows ──────────────────────────────
+  var corrections = [];
+
+  for (var ri = 1; ri < totalRows; ri++) {
+    var row = allData[ri];
+    var sheetRow = ri + 1; // 1-indexed
+
+    // Skip truly empty rows
+    if (!row[0] && !row[3] && !row[11] && !row[13]) { continue; }
+
+    var v11 = String(row[11] || '').trim();
+    var isUUID11 = _mig_isUUID(v11);
+    var v13 = String(row[13] || '').trim();
+    var isUUID13 = _mig_isUUID(v13);
+
+    var rowType = isUUID11 ? 'B' : 'A';
+    log('  r' + sheetRow + ' type=' + rowType +
+        ' col[11]=' + v11.substring(0, 16) + ' col[13]=' + v13.substring(0, 16));
+
+    if (rowType === 'A') {
+      // col[11] = notes text (or empty), col[13] = UUID (Submission ID)
+      // After deletion col[11] stays but will be under "Submission ID" header in target.
+      // Must swap: write UUID to col[11] (sheetCol 12), write notes to col[13] (sheetCol 14).
+      // col[13] (sheetCol 14) will shift left to col[12] after deletion → Notes position.
+      if (isUUID13) {
+        corrections.push({ sheetRow: sheetRow, sheetCol: 12, newVal: v13,   note: 'A: Submission ID ← col[13]' });
+        if (v11 !== '') {
+          corrections.push({ sheetRow: sheetRow, sheetCol: 14, newVal: row[11], note: 'A: Notes ← col[11]' });
+        }
+      }
+      // else: no UUID in col[13] — row predates analytics entirely, skip
+
+    } else {
+      // rowType === 'B'
+      // col[11] = original UUID (already correct for Submission ID position after deletion)
+      // col[12] = actual notes, col[13] = dup UUID (discard)
+      // Write notes to col[13] (sheetCol 14); it shifts to col[12] = Notes position after deletion.
+      corrections.push({ sheetRow: sheetRow, sheetCol: 14, newVal: row[12], note: 'B: Notes ← col[12]' });
+    }
+  }
+
+  log('Total corrections: ' + corrections.length);
+  for (var li = 0; li < corrections.length; li++) {
+    log('  [DRY=' + isDryRun + '] ' + corrections[li].note +
+        ' → r' + corrections[li].sheetRow + ' c' + corrections[li].sheetCol);
+  }
+
+  if (isDryRun) {
+    log('[DRY RUN] No changes written.');
+    return { dryRun: true, summary: '[DRY RUN] repairDylanTITO — corrections=' + corrections.length,
+      fixed: corrections.length, log: logLines };
+  }
+
+  // ── Step 2: Create backup tab ─────────────────────────────────────────────
+  var backupName = 'Time In Time Out REPAIR_BACKUP';
+  var existingBackup = clientSS.getSheetByName(backupName);
+  if (!existingBackup) {
+    var backupSheet = titoSheet.copyTo(clientSS);
+    backupSheet.setName(backupName);
+    log('Backup created: ' + backupName);
+  } else {
+    log('Backup already exists: ' + backupName + ' — skipping copy');
+  }
+
+  // ── Step 3: Apply data corrections (in current 25-col layout) ────────────
+  for (var ci = 0; ci < corrections.length; ci++) {
+    var c = corrections[ci];
+    titoSheet.getRange(c.sheetRow, c.sheetCol).setValue(c.newVal);
+  }
+  SpreadsheetApp.flush();
+  log('Data corrections applied: ' + corrections.length);
+
+  // ── Step 4: Delete the 1 empty column at col[12] (sheetCol 13) ───────────
+  titoSheet.deleteColumn(13);
+  SpreadsheetApp.flush();
+  log('Deleted empty column (sheet col 13).');
+
+  // ── Step 5: Rewrite header row to TARGET_HEADERS ─────────────────────────
+  var headerRange = titoSheet.getRange(1, 1, 1, TARGET_HEADERS.length);
+  headerRange.setValues([TARGET_HEADERS]);
+  SpreadsheetApp.flush();
+  log('Header row rewritten to ' + TARGET_HEADERS.length + ' columns.');
+
+  // ── Step 6: Audit log ─────────────────────────────────────────────────────
+  var adminSS = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  if (adminSS) {
+    var auditSheet = adminSS.getSheetByName('RT Audit Log');
+    if (auditSheet) {
+      auditSheet.appendRow([new Date(), 'repairDylanTITO', 'SYSTEM',
+        'corrections=' + corrections.length + ' clientId=' + DYLAN_ID,
+        'repairDylanTITO']);
+    }
+  }
+
+  var summary = 'repairDylanTITO complete. corrections=' + corrections.length;
   log('=== ' + summary + ' ===');
   return { dryRun: false, summary: summary, fixed: corrections.length, log: logLines };
 }
