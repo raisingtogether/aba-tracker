@@ -2804,27 +2804,8 @@ function fixOrphanSubmissionIds(dryRun) {
   log('=== fixOrphanSubmissionIds ' + (isDryRun ? '[DRY RUN]' : '[LIVE]') +
       ' started ' + ts + ' ===');
 
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var adminSheet = ss.getSheetByName('RT Admin');
-  if (!adminSheet) {
-    log('ERROR: RT Admin sheet not found');
-    return { dryRun: isDryRun, summary: 'RT Admin not found', fixed: 0, log: logLines };
-  }
-
-  // Read clients from RT Admin > Clients tab
-  var clientsSheet = null;
-  var adminSheets = ss.getSheets();
-  // RT Admin is a spreadsheet containing named tabs; clients are in a separate sheet named 'Clients'
-  // In this project the admin data lives in the single RT Admin spreadsheet, so read it directly
-  var clientRows = adminSheet.getDataRange().getValues();
-  // clientRows header: id, name, initials, sheetId, status
-  // But RT Admin is one sheet with all tabs merged as rows under section headers.
-  // The real client list is on the 'Clients' named range / dedicated sheet.
-  // Use getSheetByName pattern consistent with rest of Code.gs (sheetToObjects / getConfigSheets).
-  var configSS = SpreadsheetApp.getActiveSpreadsheet();
-
-  // Re-use existing getConfig pattern: read Clients tab
-  var clientsTabSheet = configSS.getSheetByName('Clients');
+  var adminSS = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var clientsTabSheet = adminSS.getSheetByName('Clients');
   var clients = [];
   if (clientsTabSheet) {
     var cData = clientsTabSheet.getDataRange().getValues();
@@ -3027,7 +3008,7 @@ function fixOrphanSubmissionIds(dryRun) {
     // ── Step 3: Write to Audit Log ─────────────────────────────────────────
     if (!isDryRun && totalFixed > 0) {
       try {
-        var auditSheet = ss.getSheetByName('RT Audit Log');
+        var auditSheet = adminSS.getSheetByName('RT Audit Log');
         if (auditSheet) {
           auditSheet.appendRow([
             new Date(), 'fixOrphanSubmissionIds', 'SYSTEM',
@@ -3074,14 +3055,10 @@ function diagnoseBehaviorHeaders() {
 
   log('=== diagnoseBehaviorHeaders started ' + new Date().toISOString() + ' ===');
 
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  if (!ss) {
-    log('ERROR: getActiveSpreadsheet() returned null — run this from the bound spreadsheet script editor');
-    return { log: logLines };
-  }
-  var clientsTabSheet = ss.getSheetByName('Clients');
+  var adminSS = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var clientsTabSheet = adminSS.getSheetByName('Clients');
   if (!clientsTabSheet) {
-    log('ERROR: Clients tab not found in active spreadsheet (name="' + ss.getName() + '")');
+    log('ERROR: Clients tab not found in admin spreadsheet (id=' + ADMIN_SHEET_ID + ')');
     return { log: logLines };
   }
 
