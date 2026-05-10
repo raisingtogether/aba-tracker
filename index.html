@@ -1752,7 +1752,7 @@ function buildTrials() {
     card.innerHTML =
       '<div class="goal-hdr">' +
         '<span class="goal-code">' + g.code + '</span>' +
-        '<span class="goal-name">' + escHtml(g.description) +
+        '<span class="goal-name">' + escHtml(g.name) +
           '<span class="mastery-loading" id="mastery-loading-goal-' + g.code + '" title="Checking mastery...">&#9203;</span>' +
           '<span class="mastery-badge-goal" id="mastery-goal-' + g.code + '" style="display:none">&#11088; MASTERED</span>' +
         '</span>' +
@@ -1785,7 +1785,7 @@ function calcPct(code) {
 
 // ─── ABC INCIDENTS ────────────────────────────────────────────────────
 function addABC() {
-  S.abc.push({ id: ++abcIdSeq, behavior:null, setting:S.location||null, antecedent:'', consequence:'', fn:null, time: fmtTime(new Date()) });
+  S.abc.push({ id: ++abcIdSeq, behavior:null, setting:S.location||null, antecedent:'', consequence:'', fns:[], time: fmtTime(new Date()) });
   renderABCList();
   setTimeout(() => { const c = document.getElementById('tab-abc'); c.scrollTop = c.scrollHeight; }, 80);
   EventBus.emit('abc:added', { id: abcIdSeq });
@@ -1799,15 +1799,20 @@ function deleteABC(id) {
 function renderABCList() {
   const list = document.getElementById('abc-list');
   list.innerHTML = '';
+  // Use client-filtered behaviors; fall back to global list if session not yet started
+  const clientBhvrs = (S.client && S.client.behaviors && S.client.behaviors.length)
+    ? S.client.behaviors.map(b => b.label)
+    : CFG.ABC_BEHAVIORS;
   S.abc.forEach((inc, idx) => {
     const card = document.createElement('div');
     card.className = 'abc-card';
-    const bPills = CFG.ABC_BEHAVIORS.map(b =>
-      `<button class="pill${inc.behavior===b?' sel':''}" onclick="setABCField(${inc.id},'behavior','${esc(b)}',this)">${b}</button>`).join('');
+    const bPills = clientBhvrs.map(b =>
+      `<button class="pill${inc.behavior===b?' sel':''}" onclick="setABCField(${inc.id},'behavior','${esc(b)}',this)">${escHtml(b)}</button>`).join('');
     const sPills = CFG.ABC_SETTINGS.map(s =>
       `<button class="pill${inc.setting===s?' sel':''}" onclick="setABCField(${inc.id},'setting','${esc(s)}',this)">${s}</button>`).join('');
+    const fns = inc.fns || [];
     const fPills = CFG.ABC_FUNCTIONS.map(f =>
-      `<button class="pill${inc.fn===f?' sel':''}" onclick="setABCField(${inc.id},'fn','${esc(f)}',this)">${f}</button>`).join('');
+      `<button class="pill${fns.indexOf(f)>=0?' sel':''}" onclick="toggleABCFn(${inc.id},'${esc(f)}',this)">${f}</button>`).join('');
     card.innerHTML = `
       <div class="abc-card-hdr"><div class="abc-num">Incident ${idx+1}</div><button class="abc-del" onclick="deleteABC(${inc.id})">\u2715</button></div>
       <div class="form-group" style="margin-bottom:13px"><div class="form-lbl">Behavior</div><div class="pill-group">${bPills}</div></div>
@@ -1832,6 +1837,15 @@ function setABCField(id, field, value, btn) {
   inc[field] = value;
   btn.parentElement.querySelectorAll('.pill').forEach(p => p.classList.remove('sel'));
   btn.classList.add('sel');
+}
+
+function toggleABCFn(id, fn, btn) {
+  const inc = S.abc.find(i => i.id === id);
+  if (!inc) return;
+  if (!inc.fns) inc.fns = [];
+  const idx = inc.fns.indexOf(fn);
+  if (idx >= 0) { inc.fns.splice(idx, 1); btn.classList.remove('sel'); }
+  else           { inc.fns.push(fn);       btn.classList.add('sel'); }
 }
 
 function setABCText(id, field, value) {
@@ -1895,7 +1909,7 @@ function buildEndScreen() {
     abcDiv.innerHTML = '<div class="sum-empty">No incidents recorded</div>';
   } else {
     abcDiv.innerHTML = '';
-    S.abc.forEach((inc, i) => abcDiv.appendChild(sumRow(`#${i+1}: ${inc.behavior||'Unknown'}`, inc.fn||'\u2014', false)));
+    S.abc.forEach((inc, i) => abcDiv.appendChild(sumRow(`#${i+1}: ${inc.behavior||'Unknown'}`, (inc.fns && inc.fns.length ? inc.fns.join(', ') : '\u2014'), false)));
   }
 
   // Sync word count display with whatever is already in the textarea.
@@ -2185,7 +2199,8 @@ function buildPayload() {
     behaviorKeys, behaviorLabels, behaviorData, trialData,
     abcData: S.abc.map(inc => ({
       behavior:inc.behavior, setting:inc.setting, antecedent:inc.antecedent,
-      consequence:inc.consequence, hypothesizedFunction:inc.fn,
+      consequence:inc.consequence,
+      hypothesizedFunction: (inc.fns && inc.fns.length) ? inc.fns.join(', ') : '',
       time: inc.time || '',
     })),
     submissionId: _subId,
@@ -4850,7 +4865,7 @@ function mePctCalc(code) {
 
 function meAddABC() {
   _meState.abcSeq++;
-  _meState.abc.push({ id: _meState.abcSeq, behavior:'', setting:'', antecedent:'', consequence:'', fn:'', time:'' });
+  _meState.abc.push({ id: _meState.abcSeq, behavior:'', setting:'', antecedent:'', consequence:'', fns:[], time:'' });
   meRenderABC();
 }
 
@@ -4871,6 +4886,16 @@ function meSetABCField(id, field, val, btn) {
   }
 }
 
+function meToggleABCFn(id, fn, btn) {
+  var inc = null;
+  _meState.abc.forEach(function(a) { if (a.id === id) inc = a; });
+  if (!inc) return;
+  if (!inc.fns) inc.fns = [];
+  var idx = inc.fns.indexOf(fn);
+  if (idx >= 0) { inc.fns.splice(idx, 1); btn.classList.remove('sel'); }
+  else           { inc.fns.push(fn);       btn.classList.add('sel'); }
+}
+
 function meSetABCText(id, field, val) {
   _meState.abc.forEach(function(a) { if (a.id === id) a[field] = val; });
 }
@@ -4879,17 +4904,29 @@ function meRenderABC() {
   var wrap = document.getElementById('me-abc-wrap');
   if (!wrap) return;
   wrap.innerHTML = '';
+  // Use behaviors for the currently selected client
+  var meClientId = document.getElementById('me-client') ? document.getElementById('me-client').value : '';
+  var meBhvrs = CFG.ABC_BEHAVIORS;
+  if (meClientId && CFG.CLIENTS) {
+    for (var ci = 0; ci < CFG.CLIENTS.length; ci++) {
+      if (CFG.CLIENTS[ci].id === meClientId && CFG.CLIENTS[ci].behaviors && CFG.CLIENTS[ci].behaviors.length) {
+        meBhvrs = CFG.CLIENTS[ci].behaviors.map(function(b) { return b.label; });
+        break;
+      }
+    }
+  }
   _meState.abc.forEach(function(inc, idx) {
     var card = document.createElement('div');
     card.className = 'abc-card';
-    var bPills = CFG.ABC_BEHAVIORS.map(function(b) {
-      return '<button class="pill' + (inc.behavior === b ? ' sel' : '') + '" onclick="meSetABCField(' + inc.id + ',\'behavior\',\'' + esc(b) + '\',this)">' + b + '</button>';
+    var bPills = meBhvrs.map(function(b) {
+      return '<button class="pill' + (inc.behavior === b ? ' sel' : '') + '" onclick="meSetABCField(' + inc.id + ',\'behavior\',\'' + esc(b) + '\',this)">' + escHtml(b) + '</button>';
     }).join('');
     var sPills = CFG.ABC_SETTINGS.map(function(s) {
       return '<button class="pill' + (inc.setting === s ? ' sel' : '') + '" onclick="meSetABCField(' + inc.id + ',\'setting\',\'' + esc(s) + '\',this)">' + s + '</button>';
     }).join('');
+    var meFns = inc.fns || [];
     var fPills = CFG.ABC_FUNCTIONS.map(function(f) {
-      return '<button class="pill' + (inc.fn === f ? ' sel' : '') + '" onclick="meSetABCField(' + inc.id + ',\'fn\',\'' + esc(f) + '\',this)">' + f + '</button>';
+      return '<button class="pill' + (meFns.indexOf(f) >= 0 ? ' sel' : '') + '" onclick="meToggleABCFn(' + inc.id + ',\'' + esc(f) + '\',this)">' + f + '</button>';
     }).join('');
     card.innerHTML =
       '<div class="abc-card-hdr"><div class="abc-num">Incident ' + (idx+1) + '</div>' +
@@ -5036,7 +5073,9 @@ async function submitManualSession() {
     trialData:        trialData,
     abcData: _meState.abc.map(function(inc) {
       return { behavior: inc.behavior, setting: inc.setting, antecedent: inc.antecedent,
-               consequence: inc.consequence, hypothesizedFunction: inc.fn, time: inc.time || '' };
+               consequence: inc.consequence,
+               hypothesizedFunction: (inc.fns && inc.fns.length) ? inc.fns.join(', ') : '',
+               time: inc.time || '' };
     }),
     submissionId: subId,
     payloadHash:  simpleHash(coreStr + subId),
