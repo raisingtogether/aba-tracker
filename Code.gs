@@ -1524,7 +1524,7 @@ function writeMasteryLog(ss, type, code, description, masteryDate, lastScores, t
  */
 function getMasteryReport(year, month, clients) {
   if (!clients || !clients.length) return [];
-  // latestByKey: maps dedupKey → { rowIndex, entry } — always keeps the last (most recent) row
+  // latestByKey: dedupKey → entry — keeps one entry per client+type+code
   var latestByKey = {};
   var monthStr = String(month).length < 2 ? ('0' + month) : String(month);
   var prefix   = year + '-' + monthStr;
@@ -1546,25 +1546,54 @@ function getMasteryReport(year, month, clients) {
         colMap[String(headers[hi]).trim()] = hi;
       }
 
-      // Collect all matching rows per dedupKey for this client
-      var rowsByKey = {};
+      // PASS 1: full scan of ALL rows (no date filter) — group by type+code to find duplicates
+      // This catches duplicates spread across different months.
+      var allByKey = {}; // normalized key → array of { rowIndex, row }
       for (var ri = 1; ri < data.length; ri++) {
         var row = data[ri];
-        var entryType = String(row[colMap['type']] || '').trim();
-        var entryCode = String(row[colMap['code']] || '').trim();
-        if (!entryType || !entryCode) continue;
+        var rType = String(row[colMap['type']] || '').trim();
+        var rCode = String(row[colMap['code']] || '').trim();
+        if (!rType || !rCode) continue;
+        var rKey = rType + '|' + rCode.toLowerCase();
+        if (!allByKey[rKey]) allByKey[rKey] = [];
+        allByKey[rKey].push({ rowIndex: ri, row: row });
+      }
 
-        // Normalize dateISO — Google Sheets may store ISO strings as Date objects
-        var dateISO = toDateISO(colMap['dateISO'] !== undefined ? row[colMap['dateISO']] : '');
-        // Fall back to masteryDate column if dateISO is missing
+      // Collect duplicate sheet rows to delete (keep LAST per key — most recent)
+      var dupeSheetRows = [];
+      var allKeys = Object.keys(allByKey);
+      for (var ak = 0; ak < allKeys.length; ak++) {
+        var grp = allByKey[allKeys[ak]];
+        for (var gj = 0; gj < grp.length - 1; gj++) { // all but the last
+          dupeSheetRows.push(grp[gj].rowIndex + 1); // convert to 1-based
+        }
+      }
+
+      // Delete duplicate rows bottom-to-top so indices stay valid
+      if (dupeSheetRows.length > 0) {
+        dupeSheetRows.sort(function(a, b) { return b - a; });
+        for (var di2 = 0; di2 < dupeSheetRows.length; di2++) {
+          sheet.deleteRow(dupeSheetRows[di2]);
+        }
+      }
+
+      // PASS 2: from the surviving rows (last per key), apply date filter for display
+      for (var ak2 = 0; ak2 < allKeys.length; ak2++) {
+        var grp2 = allByKey[allKeys[ak2]];
+        var survivor = grp2[grp2.length - 1]; // last = most recent
+        var row2 = survivor.row;
+        var entryType = String(row2[colMap['type']] || '').trim();
+        var entryCode = String(row2[colMap['code']] || '').trim();
+
+        // Apply date filter
+        var dateISO = toDateISO(colMap['dateISO'] !== undefined ? row2[colMap['dateISO']] : '');
         if (!dateISO && colMap['masteryDate'] !== undefined) {
-          dateISO = toDateISO(row[colMap['masteryDate']]);
+          dateISO = toDateISO(row2[colMap['masteryDate']]);
         }
         if (!dateISO || dateISO.indexOf(prefix) !== 0) continue;
-        var masteryDateVal = colMap['masteryDate'] !== undefined ? toDateISO(row[colMap['masteryDate']]) : dateISO;
+        var masteryDateVal = colMap['masteryDate'] !== undefined ? toDateISO(row2[colMap['masteryDate']]) : dateISO;
 
-        var entryStatus = colMap['status'] !== undefined ? String(row[colMap['status']] || '').trim() : '';
-        // Default status by type: goal entries are auto-confirmed; behavior entries default to recommended
+        var entryStatus = colMap['status'] !== undefined ? String(row2[colMap['status']] || '').trim() : '';
         if (!entryStatus) {
           entryStatus = (entryType === 'goal') ? 'confirmed' : 'recommended';
         }
@@ -1572,44 +1601,22 @@ function getMasteryReport(year, month, clients) {
         var entry = {
           clientId:        client.id || '',
           clientName:      client.name || '',
+          sheetId:         client.sheetId || '',
           type:            entryType,
           code:            entryCode,
-          description:     String(row[colMap['description']]        || '').trim(),
+          description:     String(row2[colMap['description']]        || '').trim(),
           masteryDate:     masteryDateVal,
-          lastScores:      String(row[colMap['lastScores']]         || '').trim(),
-          therapistName:   String(row[colMap['therapistName']]      || '').trim(),
-          therapistEmail:  String(row[colMap['therapistEmail']]     || '').trim(),
+          lastScores:      String(row2[colMap['lastScores']]         || '').trim(),
+          therapistName:   String(row2[colMap['therapistName']]      || '').trim(),
+          therapistEmail:  String(row2[colMap['therapistEmail']]     || '').trim(),
           status:          entryStatus,
-          settingsObserved:colMap['settingsObserved'] !== undefined ? String(row[colMap['settingsObserved']] || '').trim() : '',
-          approvedBy:      colMap['approvedBy']       !== undefined ? String(row[colMap['approvedBy']]       || '').trim() : '',
-          approvalDate:    colMap['approvalDate']     !== undefined ? String(row[colMap['approvalDate']]     || '').trim() : ''
+          settingsObserved:colMap['settingsObserved'] !== undefined ? String(row2[colMap['settingsObserved']] || '').trim() : '',
+          approvedBy:      colMap['approvedBy']       !== undefined ? String(row2[colMap['approvedBy']]       || '').trim() : '',
+          approvalDate:    colMap['approvalDate']     !== undefined ? String(row2[colMap['approvalDate']]     || '').trim() : ''
         };
 
-        // Normalize code to lowercase for dedup (handles case variance like 'Elopement' vs 'elopement')
         var dedupKey = (client.id || '') + '|' + entryType + '|' + entryCode.toLowerCase();
-        if (!rowsByKey[dedupKey]) rowsByKey[dedupKey] = [];
-        rowsByKey[dedupKey].push({ rowIndex: ri, entry: entry });
-      }
-
-      // For each key: keep the last (most recent) entry; delete older duplicates from the sheet
-      var dupeSheetRows = [];
-      var rowsByKeyKeys = Object.keys(rowsByKey);
-      for (var ki2 = 0; ki2 < rowsByKeyKeys.length; ki2++) {
-        var group = rowsByKey[rowsByKeyKeys[ki2]];
-        // Last entry in the group is the most recent
-        latestByKey[rowsByKeyKeys[ki2]] = group[group.length - 1].entry;
-        // Earlier entries are duplicates — collect for deletion
-        for (var gi = 0; gi < group.length - 1; gi++) {
-          dupeSheetRows.push(group[gi].rowIndex + 1); // convert to 1-based sheet row
-        }
-      }
-
-      // Delete duplicate rows bottom-to-top so row indices stay valid
-      if (dupeSheetRows.length > 0) {
-        dupeSheetRows.sort(function(a, b) { return b - a; });
-        for (var di2 = 0; di2 < dupeSheetRows.length; di2++) {
-          sheet.deleteRow(dupeSheetRows[di2]);
-        }
+        latestByKey[dedupKey] = entry;
       }
 
     } catch(e) {
@@ -1699,6 +1706,7 @@ function cleanDuplicateMasteries(clients) {
  * matching mastery log row.
  */
 function approveBehaviorMastery(clientSheetId, clientId, behaviorKey, approverEmail, approverRole) {
+  Logger.log('MASTERY ACTION approve: sheetId=[' + String(clientSheetId) + '] len=' + String(clientSheetId ? String(clientSheetId).length : 0) + ' clientId=[' + String(clientId) + '] key=[' + String(behaviorKey) + '] role=[' + String(approverRole) + ']');
   if (!approverRole || (approverRole !== 'Admin' && approverRole !== 'BCBA')) {
     return { success: false, error: 'Unauthorized: BCBA or Admin role required' };
   }
@@ -1764,6 +1772,7 @@ function approveBehaviorMastery(clientSheetId, clientId, behaviorKey, approverEm
  * Sets status = 'dismissed' on the most recent matching mastery log row.
  */
 function dismissBehaviorMastery(clientSheetId, clientId, behaviorKey, approverEmail, approverRole) {
+  Logger.log('MASTERY ACTION dismiss: sheetId=[' + String(clientSheetId) + '] len=' + String(clientSheetId ? String(clientSheetId).length : 0) + ' clientId=[' + String(clientId) + '] key=[' + String(behaviorKey) + '] role=[' + String(approverRole) + ']');
   if (!approverRole || (approverRole !== 'Admin' && approverRole !== 'BCBA')) {
     return { success: false, error: 'Unauthorized: BCBA or Admin role required' };
   }
