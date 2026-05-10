@@ -4120,12 +4120,14 @@ function repairCamilaTITO(dryRun) {
     if (!isUUID11) {
       rowType = 'A'; // blank col[11] — no data fix needed, just structural delete
     } else {
-      // col[11] has a UUID — check col[15] to see if it matches the client id
-      var v15 = String(row[15] || '').trim();
-      if (v15 === client.id) {
+      // col[11] has a UUID — check col[14] (under "Notes" header) to see if it
+      // contains the client ID instead of session notes text. That means
+      // clientName was never written and analytics shifted left by 1 extra col.
+      var v14 = String(row[14] || '').trim();
+      if (v14 === client.id) {
         rowType = 'C'; // clientName was never written
       } else {
-        rowType = 'B'; // normal misalignment
+        rowType = 'B'; // normal misalignment — clientName was written
       }
     }
 
@@ -4139,22 +4141,33 @@ function repairCamilaTITO(dryRun) {
       corrections.push({ sheetRow: sheetRow, sheetCol: 15, newVal: row[12],     note: 'B: Notes ← col[12]' });
 
     } else if (rowType === 'C') {
-      // Type C: same UUID in col[11], Notes in col[12],
-      // clientName was never written so col[13]=dup UUID (discard),
-      // col[14]=blank (gap), col[15]=clientId, col[16]=therapistEmail, ...
+      // Type C: col[11]=original UUID, col[12]=Notes, col[13]=dup UUID (discard).
+      // clientName was NEVER written, so everything after col[13] is shifted
+      // LEFT by one extra position relative to the header positions:
+      //   col[14] (Notes hdr)     = clientId   ← shift of 1
+      //   col[15] (clientName hdr)= therapistEmail
+      //   col[16] (clientId hdr)  = (clientId again or sessionType — skip)
+      //   col[17] (therapistEmail)= payloadHash
+      //   col[18] (isDraft hdr)   = submittedAt
+      //   col[19] (payloadHash)   = dateISO
+      //   col[20] (submittedAt)   = Adjusted End Time
+      //   col[21] (dateISO)       = End Time Adjustment Reason
+      //   col[22] (Adj End Time)  = manualEntry
+      //   col[23] (End Time Adj)  = enteredBy
+      // isDraft is hardcoded false (it was never written or landed in a discarded position).
       corrections.push({ sheetRow: sheetRow, sheetCol: 14, newVal: v11,          note: 'C: Submission ID ← col[11]' });
       corrections.push({ sheetRow: sheetRow, sheetCol: 15, newVal: row[12],      note: 'C: Notes ← col[12]' });
       corrections.push({ sheetRow: sheetRow, sheetCol: 16, newVal: client.name,  note: 'C: clientName (hardcoded)' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 17, newVal: row[15],      note: 'C: clientId ← col[15]' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 18, newVal: row[16],      note: 'C: therapistEmail ← col[16]' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 19, newVal: row[17],      note: 'C: isDraft ← col[17]' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 20, newVal: row[18],      note: 'C: payloadHash ← col[18]' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 21, newVal: row[19],      note: 'C: submittedAt ← col[19]' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 22, newVal: row[20],      note: 'C: dateISO ← col[20]' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 23, newVal: row[21],      note: 'C: Adjusted End Time ← col[21]' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 24, newVal: row[22],      note: 'C: End Time Adjustment Reason ← col[22]' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 25, newVal: row[23],      note: 'C: manualEntry ← col[23]' });
-      corrections.push({ sheetRow: sheetRow, sheetCol: 26, newVal: row[24],      note: 'C: enteredBy ← col[24]' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 17, newVal: row[14],      note: 'C: clientId ← col[14]' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 18, newVal: row[15],      note: 'C: therapistEmail ← col[15]' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 19, newVal: false,        note: 'C: isDraft=false (hardcoded)' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 20, newVal: row[17],      note: 'C: payloadHash ← col[17]' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 21, newVal: row[18],      note: 'C: submittedAt ← col[18]' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 22, newVal: row[19],      note: 'C: dateISO ← col[19]' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 23, newVal: row[20],      note: 'C: Adjusted End Time ← col[20]' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 24, newVal: row[21],      note: 'C: End Time Adjustment Reason ← col[21]' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 25, newVal: row[22],      note: 'C: manualEntry ← col[22]' });
+      corrections.push({ sheetRow: sheetRow, sheetCol: 26, newVal: row[23],      note: 'C: enteredBy ← col[23]' });
     }
     // Type A: no data corrections needed
   }
