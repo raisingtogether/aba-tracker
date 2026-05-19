@@ -2303,7 +2303,8 @@ function recoverTrialData(dryRun) {
     'End Time Adjustment Reason': true, 'Adjusted End Time': true, 'goalName': true
   };
 
-  // First analytics column name encountered stops goal-group scanning
+  // Analytics column names — first occurrence stops pre-analytics scanning;
+  // last occurrence marks where post-analytics scanning begins.
   var ANALYTICS_STOP = {
     'submissionId': true, 'clientName': true, 'clientId': true,
     'therapistEmail': true, 'sessionType': true, 'billingCode': true,
@@ -2313,34 +2314,35 @@ function recoverTrialData(dryRun) {
 
   var tz = Session.getScriptTimeZone();
 
-  // ── Inner helpers (defined as named functions inside outer scope) ──
+  // ── Inner helpers ──
 
   function looksLikeGoalCode(str) {
-    // Returns true if str resembles a goal code: short, has at least one
-    // letter, is not a number, UUID, date, boolean, or percentage string.
     if (!str) return false;
     str = String(str).trim();
     if (str.length === 0 || str.length >= 30) return false;
     if (str === 'true' || str === 'false') return false;
-    // Strip trailing % — percentage values are not goal codes
     if (str.charAt(str.length - 1) === '%') return false;
-    // UUID: 36 chars with dashes at exact positions 8,13,18,23
     if (str.length === 36 &&
         str.charAt(8)  === '-' && str.charAt(13) === '-' &&
         str.charAt(18) === '-' && str.charAt(23) === '-') return false;
-    // Pure number (integer or decimal)
     if (/^\d+(\.\d+)?$/.test(str)) return false;
-    // ISO date: YYYY-MM-DD...
     if (/^\d{4}-\d{2}-\d{2}/.test(str)) return false;
-    // Spreadsheet date: M/D/YYYY or MM/DD/YYYY
     if (/^\d{1,2}\/\d{1,2}\/\d{4}/.test(str)) return false;
-    // Must contain at least one letter to be a goal code
     if (!/[A-Za-z]/.test(str)) return false;
     return true;
   }
 
+  function isUUID(str) {
+    // Returns true for 36-char UUID strings (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)
+    if (!str) return false;
+    str = String(str).trim();
+    return str.length === 36 &&
+      str.charAt(8)  === '-' && str.charAt(13) === '-' &&
+      str.charAt(18) === '-' && str.charAt(23) === '-' &&
+      /^[0-9a-fA-F-]+$/.test(str);
+  }
+
   function formatDisplayDate(val) {
-    // Returns MM/dd/yyyy string for any date-like value.
     if (val === null || val === undefined || val === '') return '';
     if (Object.prototype.toString.call(val) === '[object Date]') {
       if (isNaN(val.getTime())) return '';
@@ -2348,15 +2350,12 @@ function recoverTrialData(dryRun) {
     }
     var s = String(val).trim();
     if (!s) return '';
-    // ISO: YYYY-MM-DD → MM/DD/YYYY
     var m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
     if (m) return m[2] + '/' + m[3] + '/' + m[1];
-    // Already a display-format date or other string — keep as-is
     return s;
   }
 
   function toSortKey(val) {
-    // Returns epoch milliseconds for date comparison; 0 if unparseable.
     if (Object.prototype.toString.call(val) === '[object Date]') {
       return isNaN(val.getTime()) ? 0 : val.getTime();
     }
@@ -2367,8 +2366,6 @@ function recoverTrialData(dryRun) {
   }
 
   function formatPct(val) {
-    // Returns rounded integer percentage, or '' if not parseable.
-    // Handles: 0.6 → 60, 60 → 60, "60%" → 60, "" → ""
     if (val === null || val === undefined || val === '') return '';
     var s = String(val).trim();
     if (!s) return '';
@@ -2377,20 +2374,46 @@ function recoverTrialData(dryRun) {
     }
     var n = parseFloat(s);
     if (isNaN(n)) return '';
-    // Values from writeTrialData are stored as "g2.percentage + '%'" where
-    // g2.percentage is 0–100 (not 0–1). Guard: if genuinely 0–1 fractional,
-    // multiply by 100 (e.g. a raw decimal that slipped through).
     if (n >= 0 && n <= 1) return Math.round(n * 100);
     return Math.round(n);
   }
 
+  // Extract trial records from a goal group for a single data row.
+  // Shared by both pre- and post-analytics passes.
+  function extractGroupRecord(drow, grp, realGoal, sortKey, displayDate,
+                              therapist, setting, sid, goalDescMap) {
+    var trials = [];
+    for (var ti = 0; ti < grp.trialColIndices.length; ti++) {
+      var tci = grp.trialColIndices[ti];
+      trials.push(tci < drow.length ? drow[tci] : '');
+    }
+    while (trials.length < 5) { trials.push(''); }
+
+    var rawPct = '';
+    if (grp.pctColIndex >= 0 && grp.pctColIndex < drow.length) {
+      rawPct = drow[grp.pctColIndex];
+    }
+
+    return {
+      sortKey:     sortKey,
+      displayDate: displayDate,
+      therapist:   therapist,
+      setting:     setting,
+      goalCode:    realGoal,
+      desc:        goalDescMap[realGoal.toUpperCase()] || realGoal,
+      t1: trials[0], t2: trials[1], t3: trials[2],
+      t4: trials[3], t5: trials[4],
+      pct:         formatPct(rawPct),
+      sessionId:   sid
+    };
+  }
+
   // ── Read admin data ──
 
-  var adminSS   = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var adminSS    = SpreadsheetApp.openById(ADMIN_SHEET_ID);
   var allClients = sheetToObjects(adminSS, 'Clients');
   var goalsRaw   = sheetToObjects(adminSS, 'Goals');
 
-  // goal code (uppercase) → description
   var goalDescMap = {};
   for (var gdi = 0; gdi < goalsRaw.length; gdi++) {
     var gdCode = String(goalsRaw[gdi].code || '').trim().toUpperCase();
@@ -2399,7 +2422,6 @@ function recoverTrialData(dryRun) {
     }
   }
 
-  // Active clients only
   var activeClients = [];
   for (var aci = 0; aci < allClients.length; aci++) {
     var ac = allClients[aci];
@@ -2408,7 +2430,11 @@ function recoverTrialData(dryRun) {
     }
   }
 
-  var grandStats  = { caseB: 0, caseC: 0, caseA: 0, caseD: 0, written: 0 };
+  var grandStats = {
+    preB: 0, preC: 0, preA: 0, preD: 0,
+    postB: 0, postC: 0, postA: 0, postD: 0,
+    written: 0
+  };
   var clientReports = [];
 
   Logger.log('=== recoverTrialData START dryRun=' + dryRun +
@@ -2418,14 +2444,15 @@ function recoverTrialData(dryRun) {
   // ── Per-client loop ──
 
   for (var cli = 0; cli < activeClients.length; cli++) {
-    var client     = activeClients[cli];
-    var cName      = String(client.name || '').trim();
-    var cSheetId   = String(client.sheetId || '').trim();
+    var client   = activeClients[cli];
+    var cName    = String(client.name || '').trim();
+    var cSheetId = String(client.sheetId || '').trim();
 
     var cStats = {
       name: cName, id: String(client.id || ''),
-      caseB: 0, caseC: 0, caseA: 0, caseD: 0, written: 0,
-      warnings: []
+      preB: 0, preC: 0, preA: 0, preD: 0,
+      postB: 0, postC: 0, postA: 0, postD: 0,
+      written: 0, warnings: []
     };
 
     try {
@@ -2449,7 +2476,7 @@ function recoverTrialData(dryRun) {
         continue;
       }
 
-      // Read all data at once — single API call
+      // Single API call reads everything
       var allData   = trialSheet.getRange(1, 1, lastRow, lastCol).getValues();
       var headerRow = allData[0];
       var dataRows  = allData.slice(1);
@@ -2457,29 +2484,25 @@ function recoverTrialData(dryRun) {
       Logger.log('[' + cName + '] Read ' + dataRows.length +
                  ' data rows x ' + lastCol + ' cols');
 
-      // Build colMap for meta/analytics columns (first-occurrence-wins)
+      // colMap: first-occurrence-wins for named headers
       var colMap = {};
       for (var hmi = 0; hmi < headerRow.length; hmi++) {
         var hmv = String(headerRow[hmi] || '').trim();
         if (hmv && colMap[hmv] === undefined) { colMap[hmv] = hmi; }
       }
 
-      // ── Step 2: Parse goal groups from header row ──
-      // Scan left to right; stop at first analytics boundary column.
-      // Empty headers, Trial N, and % without a preceding goal are skipped.
+      // ── PASS 1: Pre-analytics goal groups ──
+      // Scan left→right, stop at first ANALYTICS_STOP column.
+      // Uses named "Trial N" and "%" headers to identify trial slots.
       var goalGroups = [];
       var ghi = 0;
       while (ghi < headerRow.length) {
         var ghv = String(headerRow[ghi] || '').trim();
+        if (!ghv)             { ghi++; continue; }
+        if (ANALYTICS_STOP[ghv]) { break; }
+        if (META_COLS[ghv])   { ghi++; continue; }
+        if (/^Trial \d+$/i.test(ghv) || ghv === '%') { ghi++; continue; }
 
-        if (!ghv)            { ghi++; continue; }  // blank — skip
-        if (ANALYTICS_STOP[ghv]) { break; }         // analytics boundary — done
-        if (META_COLS[ghv])  { ghi++; continue; }  // base meta col — skip
-        if (/^Trial \d+$/i.test(ghv) || ghv === '%') {
-          ghi++; continue;                          // orphan trial/pct col — skip
-        }
-
-        // Found a goal code header — now collect its trial and % columns
         var grp = {
           headerGoalCode:  ghv,
           goalColIndex:    ghi,
@@ -2490,32 +2513,86 @@ function recoverTrialData(dryRun) {
         while (gj < headerRow.length) {
           var gjv = String(headerRow[gj] || '').trim();
           if (!gjv || ANALYTICS_STOP[gjv]) { break; }
-          if (/^Trial \d+$/i.test(gjv)) {
-            grp.trialColIndices.push(gj);
-            gj++;
-          } else if (gjv === '%') {
-            grp.pctColIndex = gj;
-            gj++;
-            break; // % marks end of this goal group
-          } else {
-            break; // next goal code or unexpected header
-          }
+          if (/^Trial \d+$/i.test(gjv)) { grp.trialColIndices.push(gj); gj++; }
+          else if (gjv === '%')          { grp.pctColIndex = gj; gj++; break; }
+          else                           { break; }
         }
         goalGroups.push(grp);
         ghi = gj;
       }
 
-      Logger.log('[' + cName + '] Goal groups parsed: ' + goalGroups.length);
+      Logger.log('[' + cName + '] Pre-analytics goal groups: ' + goalGroups.length);
       for (var ggl = 0; ggl < goalGroups.length; ggl++) {
         var gg = goalGroups[ggl];
-        Logger.log('  "' + gg.headerGoalCode + '" col=' + (gg.goalColIndex + 1) +
+        Logger.log('  PRE "' + gg.headerGoalCode + '" col=' + (gg.goalColIndex + 1) +
                    ' trials=' + gg.trialColIndices.length +
                    ' pct=' + (gg.pctColIndex >= 0 ? 'col' + (gg.pctColIndex + 1) : 'none'));
       }
 
-      if (!goalGroups.length) {
-        Logger.log('[' + cName + '] No goal groups in header — skipping');
-        cStats.warnings.push('No goal groups found in header');
+      // ── Find analytics block end ──
+      // Scan every column; the LAST analytics column position is our boundary.
+      var analyticsEnd = -1;
+      for (var aei = 0; aei < headerRow.length; aei++) {
+        if (ANALYTICS_STOP[String(headerRow[aei] || '').trim()]) {
+          analyticsEnd = aei;
+        }
+      }
+
+      // ── PASS 2: Post-analytics goal groups ──
+      // After analytics end, goal code headers are named but their trial/pct
+      // slots have BLANK headers (ensureSheetColumns only added the goal code
+      // column; the trial values overflowed positionally into adjacent cells).
+      // Strategy: a named goal code header owns all immediately-following
+      // blank-header columns. The LAST blank column = %; earlier = Trial 1..N.
+      // Groups with no blank-header columns have no recoverable trial data → skip.
+      var postGoalGroups = [];
+      if (analyticsEnd >= 0 && analyticsEnd + 1 < headerRow.length) {
+        var phi = analyticsEnd + 1;
+        while (phi < headerRow.length) {
+          var phv = String(headerRow[phi] || '').trim();
+
+          // Skip stray blank or non-goal headers between groups
+          if (!phv)                   { phi++; continue; }
+          if (META_COLS[phv] || ANALYTICS_STOP[phv]) { phi++; continue; }
+          if (/^Trial \d+$/i.test(phv) || phv === '%') { phi++; continue; }
+
+          // Named goal code header — collect following blank-header columns
+          var pgrp = {
+            headerGoalCode:  phv,
+            goalColIndex:    phi,
+            trialColIndices: [],
+            pctColIndex:     -1
+          };
+          var pj = phi + 1;
+          while (pj < headerRow.length) {
+            var pjv = String(headerRow[pj] || '').trim();
+            if (pjv) { break; } // next named header — this group ends here
+            pgrp.trialColIndices.push(pj);
+            pj++;
+          }
+          // Last blank col = %; earlier blank cols = trials
+          if (pgrp.trialColIndices.length > 0) {
+            pgrp.pctColIndex = pgrp.trialColIndices.pop();
+          }
+          // Only include groups that have at least a pct column (1+ blank cols)
+          if (pgrp.pctColIndex >= 0) {
+            postGoalGroups.push(pgrp);
+          }
+          phi = pj;
+        }
+      }
+
+      Logger.log('[' + cName + '] Post-analytics goal groups: ' + postGoalGroups.length);
+      for (var pgl = 0; pgl < postGoalGroups.length; pgl++) {
+        var pg = postGoalGroups[pgl];
+        Logger.log('  POST "' + pg.headerGoalCode + '" col=' + (pg.goalColIndex + 1) +
+                   ' trials=' + pg.trialColIndices.length +
+                   ' pct=' + (pg.pctColIndex >= 0 ? 'col' + (pg.pctColIndex + 1) : 'none'));
+      }
+
+      if (!goalGroups.length && !postGoalGroups.length) {
+        Logger.log('[' + cName + '] No goal groups found anywhere — skipping');
+        cStats.warnings.push('No goal groups found');
         clientReports.push(cStats);
         continue;
       }
@@ -2526,103 +2603,124 @@ function recoverTrialData(dryRun) {
       for (var ri = 0; ri < dataRows.length; ri++) {
         var drow = dataRows[ri];
 
-        // Analytics: submissionId
+        // ── UUID-aware submissionId reading ──
+        // First try the known submissionId column. If not a valid UUID
+        // (analytics may be corrupted by trial data overflow), scan the
+        // entire row for the first UUID-shaped value.
         var sid = '';
-        if (colMap['submissionId'] !== undefined &&
-            colMap['submissionId'] < drow.length) {
-          sid = String(drow[colMap['submissionId']] || '').trim();
+        var sidColIdx = colMap['submissionId'];
+        if (sidColIdx !== undefined && sidColIdx < drow.length) {
+          var rawSid = String(drow[sidColIdx] || '').trim();
+          if (isUUID(rawSid)) { sid = rawSid; }
         }
         if (!sid) {
-          cStats.warnings.push('Row ' + (ri + 2) + ': empty submissionId');
+          for (var sidScan = 0; sidScan < drow.length; sidScan++) {
+            if (isUUID(String(drow[sidScan] || '').trim())) {
+              sid = String(drow[sidScan]).trim();
+              break;
+            }
+          }
+        }
+        if (!sid) {
+          if (cStats.warnings.length < 50) {
+            cStats.warnings.push('Row ' + (ri + 2) + ': no UUID submissionId found');
+          }
           sid = 'NO_SESSION_ID';
         }
 
-        // Analytics: clientName (fall back to admin-sheet name)
-        var rowClientName = cName;
-        if (colMap['clientName'] !== undefined &&
-            colMap['clientName'] < drow.length) {
-          var cn2 = String(drow[colMap['clientName']] || '').trim();
-          if (cn2) rowClientName = cn2;
-        }
-
-        // Base metadata
+        // Base metadata (Date, Therapist, Setting always from their named columns)
         var rawDate   = (colMap['Date']      !== undefined && colMap['Date']      < drow.length) ? drow[colMap['Date']]      : '';
         var therapist = (colMap['Therapist'] !== undefined && colMap['Therapist'] < drow.length) ? String(drow[colMap['Therapist']] || '').trim() : '';
         var setting   = (colMap['Setting']   !== undefined && colMap['Setting']   < drow.length) ? String(drow[colMap['Setting']]   || '').trim() : '';
-
         var sortKey     = toSortKey(rawDate);
         var displayDate = formatDisplayDate(rawDate);
 
-        // Per goal group
+        // ── Pre-analytics groups ──
         for (var gi2 = 0; gi2 < goalGroups.length; gi2++) {
           var grp2 = goalGroups[gi2];
 
-          // Safety: goal column must be within row width
-          if (grp2.goalColIndex >= drow.length) {
-            cStats.caseA++;
-            continue;
-          }
+          if (grp2.goalColIndex >= drow.length) { cStats.preA++; continue; }
 
           var cellVal = drow[grp2.goalColIndex];
-
-          // ── Case A: empty ──
           if (cellVal === null || cellVal === undefined ||
               String(cellVal).trim() === '') {
-            cStats.caseA++;
+            cStats.preA++;
             continue;
           }
 
-          var cellStr    = String(cellVal).trim();
+          var cellStr = String(cellVal).trim();
           var realGoal;
 
           if (cellStr.toLowerCase() === grp2.headerGoalCode.toLowerCase()) {
-            // ── Case B: correctly aligned ──
-            cStats.caseB++;
+            cStats.preB++;
             realGoal = grp2.headerGoalCode;
           } else if (looksLikeGoalCode(cellStr)) {
-            // ── Case C: remapped — real goal code is the cell value ──
-            cStats.caseC++;
+            cStats.preC++;
             realGoal = cellStr;
           } else {
-            // ── Case D: unrecoverable ──
-            cStats.caseD++;
-            if (cStats.warnings.length < 50) { // cap warnings per client
-              cStats.warnings.push('Row ' + (ri + 2) + ' grp "' +
-                grp2.headerGoalCode + '": unrecoverable value "' + cellStr + '"');
+            cStats.preD++;
+            if (cStats.warnings.length < 50) {
+              cStats.warnings.push('PRE row ' + (ri + 2) + ' grp "' +
+                grp2.headerGoalCode + '": unrecoverable "' + cellStr + '"');
             }
             continue;
           }
 
-          // Extract trial values (pad to 5 if fewer trial columns exist)
-          var trials = [];
-          for (var ti = 0; ti < grp2.trialColIndices.length; ti++) {
-            var tci = grp2.trialColIndices[ti];
-            trials.push(tci < drow.length ? drow[tci] : '');
+          records.push(extractGroupRecord(
+            drow, grp2, realGoal, sortKey, displayDate,
+            therapist, setting, sid, goalDescMap));
+        }
+
+        // ── Post-analytics groups ──
+        for (var pgi = 0; pgi < postGoalGroups.length; pgi++) {
+          var pgrp2 = postGoalGroups[pgi];
+
+          if (pgrp2.goalColIndex >= drow.length) { cStats.postA++; continue; }
+
+          var pcellVal = drow[pgrp2.goalColIndex];
+          if (pcellVal === null || pcellVal === undefined ||
+              String(pcellVal).trim() === '') {
+            cStats.postA++;
+            continue;
           }
-          while (trials.length < 5) { trials.push(''); }
 
-          // Extract percentage
-          var rawPct = '';
-          if (grp2.pctColIndex >= 0 && grp2.pctColIndex < drow.length) {
-            rawPct = drow[grp2.pctColIndex];
+          var pcellStr = String(pcellVal).trim();
+          var prealGoal;
+
+          if (pcellStr.toLowerCase() === pgrp2.headerGoalCode.toLowerCase()) {
+            cStats.postB++;
+            prealGoal = pgrp2.headerGoalCode;
+          } else if (looksLikeGoalCode(pcellStr)) {
+            cStats.postC++;
+            prealGoal = pcellStr;
+          } else {
+            cStats.postD++;
+            if (cStats.warnings.length < 50) {
+              cStats.warnings.push('POST row ' + (ri + 2) + ' grp "' +
+                pgrp2.headerGoalCode + '": unrecoverable "' + pcellStr + '"');
+            }
+            continue;
           }
-          var pct = formatPct(rawPct);
 
-          // Goal description (fall back to goal code if not in admin sheet)
-          var desc = goalDescMap[realGoal.toUpperCase()] || realGoal;
+          var postRec = extractGroupRecord(
+            drow, pgrp2, prealGoal, sortKey, displayDate,
+            therapist, setting, sid, goalDescMap);
 
-          records.push({
-            sortKey:     sortKey,
-            displayDate: displayDate,
-            therapist:   therapist,
-            setting:     setting,
-            goalCode:    realGoal,
-            desc:        desc,
-            t1: trials[0], t2: trials[1], t3: trials[2],
-            t4: trials[3], t5: trials[4],
-            pct:         pct,
-            sessionId:   sid
-          });
+          // Skip post-analytics records where all trial slots AND pct are
+          // empty — these are goal-code-only rows with no actual data.
+          var hasPostData = (postRec.pct !== '' && postRec.pct !== null &&
+                             postRec.pct !== undefined);
+          if (!hasPostData) {
+            var pt = [postRec.t1, postRec.t2, postRec.t3, postRec.t4, postRec.t5];
+            for (var ptc = 0; ptc < pt.length; ptc++) {
+              if (pt[ptc] !== '' && pt[ptc] !== null && pt[ptc] !== undefined) {
+                hasPostData = true; break;
+              }
+            }
+          }
+          if (!hasPostData) { cStats.postA++; continue; }
+
+          records.push(postRec);
         }
       }
 
@@ -2638,7 +2736,7 @@ function recoverTrialData(dryRun) {
 
       cStats.written = records.length;
 
-      // Collect unique goal codes for the log
+      // Unique goal codes for the log
       var seenGoals = {};
       for (var ugi = 0; ugi < records.length; ugi++) {
         seenGoals[records[ugi].goalCode] = true;
@@ -2656,13 +2754,12 @@ function recoverTrialData(dryRun) {
         var existingSum = cSS.getSheetByName(TRIAL_SUMMARY_TAB);
         var sumSheet;
         if (existingSum) {
-          existingSum.clear(); // clears all content and formatting
+          existingSum.clear();
           sumSheet = existingSum;
         } else {
           sumSheet = cSS.insertSheet(TRIAL_SUMMARY_TAB);
         }
 
-        // Header row
         var hdrRange = sumSheet.getRange(1, 1, 1, NUM_SUMMARY_COLS);
         hdrRange.setValues([SUMMARY_HEADERS]);
         hdrRange.setFontWeight('bold');
@@ -2670,7 +2767,6 @@ function recoverTrialData(dryRun) {
         hdrRange.setFontColor('#FFFFFF');
         sumSheet.setFrozenRows(1);
 
-        // Build output 2-D array
         if (records.length > 0) {
           var outputRows = [];
           for (var oi = 0; oi < records.length; oi++) {
@@ -2691,7 +2787,6 @@ function recoverTrialData(dryRun) {
             ]);
           }
 
-          // Write in chunks of 5000 to stay within API limits
           var CHUNK = 5000;
           var writeRow = 2;
           for (var cs = 0; cs < outputRows.length; cs += CHUNK) {
@@ -2713,11 +2808,11 @@ function recoverTrialData(dryRun) {
       // ── Step 6: Per-client report ──
       Logger.log('[' + cName + '] STATS:' +
         ' rows_scanned=' + dataRows.length +
-        ' correct(B)=' + cStats.caseB +
-        ' recovered(C)=' + cStats.caseC +
-        ' skipped_empty(A)=' + cStats.caseA +
-        ' unrecoverable(D)=' + cStats.caseD +
-        ' total_records=' + cStats.written);
+        ' PRE: B=' + cStats.preB + ' C=' + cStats.preC +
+        ' A=' + cStats.preA + ' D=' + cStats.preD +
+        ' POST: B=' + cStats.postB + ' C=' + cStats.postC +
+        ' A=' + cStats.postA + ' D=' + cStats.postD +
+        ' total_written=' + cStats.written);
       Logger.log('[' + cName + '] Unique goal codes (' +
                  uniqueGoalList.length + '): ' + uniqueGoalList.join(', '));
       if (cStats.warnings.length) {
@@ -2731,20 +2826,24 @@ function recoverTrialData(dryRun) {
       cStats.warnings.push('FATAL: ' + e.message);
     }
 
-    grandStats.caseB   += cStats.caseB;
-    grandStats.caseC   += cStats.caseC;
-    grandStats.caseA   += cStats.caseA;
-    grandStats.caseD   += cStats.caseD;
+    grandStats.preB    += cStats.preB;
+    grandStats.preC    += cStats.preC;
+    grandStats.preA    += cStats.preA;
+    grandStats.preD    += cStats.preD;
+    grandStats.postB   += cStats.postB;
+    grandStats.postC   += cStats.postC;
+    grandStats.postA   += cStats.postA;
+    grandStats.postD   += cStats.postD;
     grandStats.written += cStats.written;
     clientReports.push(cStats);
   }
 
   // ── Grand total report ──
   Logger.log('=== GRAND TOTALS ===');
-  Logger.log('correct(B)='       + grandStats.caseB +
-             ' recovered(C)='    + grandStats.caseC +
-             ' skipped_empty(A)='+ grandStats.caseA +
-             ' unrecoverable(D)='+ grandStats.caseD);
+  Logger.log('PRE:  B=' + grandStats.preB  + ' C=' + grandStats.preC  +
+             ' A=' + grandStats.preA  + ' D=' + grandStats.preD);
+  Logger.log('POST: B=' + grandStats.postB + ' C=' + grandStats.postC +
+             ' A=' + grandStats.postA + ' D=' + grandStats.postD);
   Logger.log('Total records written across all clients: ' + grandStats.written);
   Logger.log('=== recoverTrialData END ===');
 
