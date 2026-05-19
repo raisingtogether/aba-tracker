@@ -2689,8 +2689,8 @@ function saveEntity() {
     const codeUpper = code.toUpperCase();
     const isDup = (raw.goals || []).some(function(g) {
       // Skip the goal currently being edited (identified by clientId + code)
-      if (editModalItem && g.clientId === editModalItem.clientId && g.code === editModalItem.code) return false;
-      return (g.code || '').toUpperCase() === codeUpper;
+      if (editModalItem && g.clientId === editModalItem.clientId && String(g.code || '') === String(editModalItem.code || '')) return false;
+      return String(g.code || '').toUpperCase() === codeUpper;
     });
     if (isDup) {
       const codeInput = document.getElementById('ef-code');
@@ -2710,7 +2710,7 @@ function saveEntity() {
   if (editModalItem) {
     // Goals: find by code only (globally unique). Do NOT match on clientId — it changes
     // when a goal is reassigned to different clients, causing a duplicate entry bug.
-    if (type === 'goals')      idx = list.findIndex(x => x.code === editModalItem.code);
+    if (type === 'goals')      idx = list.findIndex(x => String(x.code || '') === String(editModalItem.code || ''));
     else if (type==='behaviors') idx = list.findIndex(x => x.key===editModalItem.key);
     else                       idx = list.findIndex(x => x.id===editModalItem.id);
   }
