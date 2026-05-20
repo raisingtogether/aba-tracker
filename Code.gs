@@ -515,6 +515,12 @@ function saveConfig(cfg) {
         cfg.behaviors);
 
     if (cfg.goals !== undefined) {
+      // Diagnostic: log all goals with code F15
+      for (var di = 0; di < cfg.goals.length; di++) {
+        if (String(cfg.goals[di].code || '').toUpperCase() === 'F15') {
+          Logger.log('F15 FOUND at index ' + di + ': ' + JSON.stringify(cfg.goals[di]));
+        }
+      }
       // Server-side duplicate goal code check
       var seenCodes = {};
       for (var gi = 0; gi < cfg.goals.length; gi++) {
