@@ -2295,9 +2295,9 @@ function recoverTrialData(dryRun) {
   var SUMMARY_HEADERS = [
     'Date', 'Therapist', 'Setting', 'Goal Code', 'Goal Description',
     'Trial 1', 'Trial 2', 'Trial 3', 'Trial 4', 'Trial 5',
-    'Percentage', 'Session ID'
+    'Percentage', 'Source', 'Session ID'
   ];
-  var NUM_SUMMARY_COLS = SUMMARY_HEADERS.length; // 12
+  var NUM_SUMMARY_COLS = SUMMARY_HEADERS.length; // 13
 
   // All columns that are NOT goal codes — used to skip non-goal headers
   var META_COLS = {
@@ -2410,6 +2410,7 @@ function recoverTrialData(dryRun) {
       t1: trials[0], t2: trials[1], t3: trials[2],
       t4: trials[3], t5: trials[4],
       pct:         formatPct(rawPct),
+      source:      'Sheet',
       sessionId:   sid
     };
   }
@@ -2439,6 +2440,7 @@ function recoverTrialData(dryRun) {
   var grandStats = {
     preB: 0, preC: 0, preA: 0, preD: 0,
     postB: 0, postC: 0, postA: 0, postD: 0,
+    jsonParsed: 0, jsonRecovered: 0, jsonSkipped: 0,
     written: 0
   };
   var clientReports = [];
@@ -2458,6 +2460,7 @@ function recoverTrialData(dryRun) {
       name: cName, id: String(client.id || ''),
       preB: 0, preC: 0, preA: 0, preD: 0,
       postB: 0, postC: 0, postA: 0, postD: 0,
+      jsonParsed: 0, jsonRecovered: 0, jsonSkipped: 0,
       written: 0, warnings: []
     };
 
@@ -2730,6 +2733,119 @@ function recoverTrialData(dryRun) {
         }
       }
 
+      // ── PASS 3: JSON recovery from "Percent Correct" column ──
+      // Recovers goals whose trial data exists only as aggregated percentages
+      // in the Percent Correct JSON. Skips any goal already recovered from
+      // sheet columns for the same session (pre- or post-analytics pass).
+      var pctColIdx = colMap['Percent Correct'];
+      var jsonSamples = [];     // up to 3 sample recovered records for dryRun log
+      var jsonSkipExample = ''; // first case where a goal appeared in both sheet and JSON
+
+      // Build O(1) dedup lookup from all sheet-recovered records: sid|GOALCODE
+      var seenSet = {};
+      for (var ssi = 0; ssi < records.length; ssi++) {
+        var ssKey = records[ssi].sessionId + '|' +
+                    String(records[ssi].goalCode || '').toUpperCase();
+        seenSet[ssKey] = true;
+      }
+
+      if (pctColIdx !== undefined) {
+        for (var jri = 0; jri < dataRows.length; jri++) {
+          var jrow = dataRows[jri];
+          if (pctColIdx >= jrow.length) { continue; }
+
+          var rawPctCell = jrow[pctColIdx];
+          if (rawPctCell === null || rawPctCell === undefined) { continue; }
+          var pctStr = String(rawPctCell).trim();
+          if (!pctStr || pctStr.charAt(0) !== '{') { continue; }
+
+          var pctJson;
+          try { pctJson = JSON.parse(pctStr); } catch (je) { continue; }
+
+          cStats.jsonParsed++;
+
+          // Resolve submissionId for this row (same UUID-scan logic as main loop)
+          var jsid = '';
+          var jSidColIdx = colMap['submissionId'];
+          if (jSidColIdx !== undefined && jSidColIdx < jrow.length) {
+            var jRawSid = String(jrow[jSidColIdx] || '').trim();
+            if (isUUID(jRawSid)) { jsid = jRawSid; }
+          }
+          if (!jsid) {
+            for (var jss = 0; jss < jrow.length; jss++) {
+              if (isUUID(String(jrow[jss] || '').trim())) {
+                jsid = String(jrow[jss]).trim();
+                break;
+              }
+            }
+          }
+          if (!jsid) { jsid = 'NO_SESSION_ID'; }
+
+          var jRawDate    = (colMap['Date']      !== undefined && colMap['Date']      < jrow.length) ? jrow[colMap['Date']]      : '';
+          var jTherapist  = (colMap['Therapist'] !== undefined && colMap['Therapist'] < jrow.length) ? String(jrow[colMap['Therapist']] || '').trim() : '';
+          var jSetting    = (colMap['Setting']   !== undefined && colMap['Setting']   < jrow.length) ? String(jrow[colMap['Setting']]   || '').trim() : '';
+          var jSortKey    = toSortKey(jRawDate);
+          var jDisplayDate = formatDisplayDate(jRawDate);
+
+          for (var jk in pctJson) {
+            if (!Object.prototype.hasOwnProperty.call(pctJson, jk)) { continue; }
+            var jCode = String(jk).trim();
+            // Skip empty, UUID-shaped, or non-goal-code keys
+            if (!jCode || !looksLikeGoalCode(jCode)) { continue; }
+
+            var jVal = pctJson[jk];
+            if (jVal === null || jVal === undefined) { continue; }
+            var jPct = Math.round(Number(jVal));
+            if (isNaN(jPct)) { continue; }
+
+            var dupKey = jsid + '|' + jCode.toUpperCase();
+            if (seenSet[dupKey]) {
+              cStats.jsonSkipped++;
+              if (!jsonSkipExample) {
+                jsonSkipExample = 'goalCode=' + jCode + ' sid=' +
+                                  jsid.substring(0, 8) + '...';
+              }
+              continue;
+            }
+
+            seenSet[dupKey] = true;
+            cStats.jsonRecovered++;
+
+            var jRec = {
+              sortKey:     jSortKey,
+              displayDate: jDisplayDate,
+              therapist:   jTherapist,
+              setting:     jSetting,
+              goalCode:    jCode,
+              desc:        goalDescMap[jCode.toUpperCase()] || jCode,
+              t1: '', t2: '', t3: '', t4: '', t5: '',
+              pct:         jPct,
+              source:      'JSON',
+              sessionId:   jsid
+            };
+            records.push(jRec);
+
+            if (jsonSamples.length < 3) {
+              jsonSamples.push('goalCode=' + jCode + ' pct=' + jPct +
+                               ' sid=' + jsid.substring(0, 8) + '...');
+            }
+          }
+        }
+      } else {
+        Logger.log('[' + cName + '] No "Percent Correct" column — JSON pass skipped');
+      }
+
+      Logger.log('[' + cName + '] JSON PASS:' +
+        ' rowsParsed=' + cStats.jsonParsed +
+        ' recovered=' + cStats.jsonRecovered +
+        ' skipped=' + cStats.jsonSkipped);
+      if (jsonSamples.length) {
+        Logger.log('[' + cName + '] JSON samples: ' + jsonSamples.join(' | '));
+      }
+      if (jsonSkipExample) {
+        Logger.log('[' + cName + '] JSON dedup example (in sheet+JSON): ' + jsonSkipExample);
+      }
+
       // ── Sort: date descending, then goal code ascending ──
       records.sort(function(a, b) {
         if (b.sortKey !== a.sortKey) { return b.sortKey - a.sortKey; }
@@ -2789,6 +2905,7 @@ function recoverTrialData(dryRun) {
               rec.t4 !== undefined ? rec.t4 : '',
               rec.t5 !== undefined ? rec.t5 : '',
               rec.pct !== null && rec.pct !== undefined ? rec.pct : '',
+              rec.source || 'Sheet',
               rec.sessionId
             ]);
           }
@@ -2818,6 +2935,9 @@ function recoverTrialData(dryRun) {
         ' A=' + cStats.preA + ' D=' + cStats.preD +
         ' POST: B=' + cStats.postB + ' C=' + cStats.postC +
         ' A=' + cStats.postA + ' D=' + cStats.postD +
+        ' JSON: parsed=' + cStats.jsonParsed +
+        ' recovered=' + cStats.jsonRecovered +
+        ' skipped=' + cStats.jsonSkipped +
         ' total_written=' + cStats.written);
       Logger.log('[' + cName + '] Unique goal codes (' +
                  uniqueGoalList.length + '): ' + uniqueGoalList.join(', '));
@@ -2832,15 +2952,18 @@ function recoverTrialData(dryRun) {
       cStats.warnings.push('FATAL: ' + e.message);
     }
 
-    grandStats.preB    += cStats.preB;
-    grandStats.preC    += cStats.preC;
-    grandStats.preA    += cStats.preA;
-    grandStats.preD    += cStats.preD;
-    grandStats.postB   += cStats.postB;
-    grandStats.postC   += cStats.postC;
-    grandStats.postA   += cStats.postA;
-    grandStats.postD   += cStats.postD;
-    grandStats.written += cStats.written;
+    grandStats.preB          += cStats.preB;
+    grandStats.preC          += cStats.preC;
+    grandStats.preA          += cStats.preA;
+    grandStats.preD          += cStats.preD;
+    grandStats.postB         += cStats.postB;
+    grandStats.postC         += cStats.postC;
+    grandStats.postA         += cStats.postA;
+    grandStats.postD         += cStats.postD;
+    grandStats.jsonParsed    += cStats.jsonParsed;
+    grandStats.jsonRecovered += cStats.jsonRecovered;
+    grandStats.jsonSkipped   += cStats.jsonSkipped;
+    grandStats.written       += cStats.written;
     clientReports.push(cStats);
   }
 
@@ -2850,6 +2973,9 @@ function recoverTrialData(dryRun) {
              ' A=' + grandStats.preA  + ' D=' + grandStats.preD);
   Logger.log('POST: B=' + grandStats.postB + ' C=' + grandStats.postC +
              ' A=' + grandStats.postA + ' D=' + grandStats.postD);
+  Logger.log('JSON: parsed=' + grandStats.jsonParsed +
+             ' recovered=' + grandStats.jsonRecovered +
+             ' skipped=' + grandStats.jsonSkipped);
   Logger.log('Total records written across all clients: ' + grandStats.written);
   Logger.log('=== recoverTrialData END ===');
 
