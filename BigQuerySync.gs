@@ -471,14 +471,18 @@ function bqReadTrialRows(clientSS, client, goalDescMap) {
   }
 
   // Parse goal groups from header row.
-  // Structure: Date | Setting | Therapist | [GoalCode, Trial 1..N, %]... | analytics...
-  // MEDIUM-10: detect start of goal columns dynamically instead of hardcoding hi2=3
+  // Structure: Date | Therapist | [GoalCode, Trial 1..N, %]... | analytics...
+  // TRIAL_META_COLS: every column that is NOT a goal code, Trial N, or %
   var TRIAL_META_COLS = {
-    'Date': true, 'Setting': true, 'Therapist': true, 'Location': true
+    'Date': true, 'Setting': true, 'Therapist': true, 'Location': true,
+    'Notes': true, 'End Time Adjustment Reason': true, 'Adjusted End Time': true,
+    'goalName': true
   };
   for (var tai2 = 0; tai2 < BQ_TRIAL_ANALYTICS.length; tai2++) {
     TRIAL_META_COLS[BQ_TRIAL_ANALYTICS[tai2]] = true;
   }
+
+  // Advance past leading meta / empty columns to find the first goal code
   var hi2 = 0;
   while (hi2 < headers.length && (TRIAL_META_COLS[headers[hi2]] || headers[hi2] === '')) {
     hi2++;
@@ -487,16 +491,23 @@ function bqReadTrialRows(clientSS, client, goalDescMap) {
   var goalGroups = [];
   while (hi2 < headers.length) {
     var hdr = headers[hi2];
-    if (trialAnalyticsMap[hdr]) break; // entered analytics section
-    if (hdr === '%' || /^Trial \d+$/i.test(hdr)) { hi2++; continue; } // orphan column
-    // This column is a goal code
+    // Empty header — skip entirely (never a goal code)
+    if (hdr === '') { hi2++; continue; }
+    // Entered analytics section — stop
+    if (trialAnalyticsMap[hdr]) break;
+    // Any remaining meta column — skip
+    if (TRIAL_META_COLS[hdr]) { hi2++; continue; }
+    // Orphan Trial/% column without a preceding goal code — skip
+    if (hdr === '%' || /^Trial \d+$/i.test(hdr)) { hi2++; continue; }
+
+    // This column is a goal code — collect its Trial N and % columns
     var goalCode     = hdr;
     var trialColIdxs = [];
     var pctColIdx    = -1;
     var j            = hi2 + 1;
     while (j < headers.length) {
       var h2 = headers[j];
-      if (trialAnalyticsMap[h2]) break;
+      if (h2 === '' || trialAnalyticsMap[h2] || TRIAL_META_COLS[h2]) break;
       if (/^Trial \d+$/i.test(h2)) {
         trialColIdxs.push(j);
         j++;
@@ -508,9 +519,16 @@ function bqReadTrialRows(clientSS, client, goalDescMap) {
         break; // next goal code starts here
       }
     }
-    goalGroups.push({ code: goalCode, trialCols: trialColIdxs, pctCol: pctColIdx });
+    // Only add the group if it has at least one Trial column OR a % column
+    if (trialColIdxs.length > 0 || pctColIdx >= 0) {
+      goalGroups.push({ code: goalCode, trialCols: trialColIdxs, pctCol: pctColIdx });
+    }
     hi2 = j;
   }
+
+  Logger.log('[BQ TRIAL PARSE] Client: ' + client.name +
+             ' | Goals found: ' + goalGroups.length +
+             ' | Headers scanned: ' + headers.length);
 
   if (!goalGroups.length) return [];
 
