@@ -790,101 +790,145 @@ function writeSessionLog(ss, d) {
  * Analytics columns (appended, backward-compatible):
  *   submissionId | clientName | clientId | therapistEmail | sessionType |
  *   billingCode | isDraft | payloadHash | submittedAt | dateISO | Percent Correct
- * "Percent Correct" is a JSON string mapping goal codes to numeric percentages,
+ * "Percent Correct" is a JSON string mapping goal codes to whole-number percentages,
  * e.g. {"G1":80,"G2":100} — use JSON_EXTRACT in BigQuery for clean numerics.
+ *
+ * Column placement: goal groups are always inserted BEFORE the analytics block
+ * via _ensureTrialGoalColumns, never appended after. The entire column-management
+ * and row-write sequence is wrapped in a ScriptLock to prevent concurrent inserts
+ * of duplicate columns when two sessions submit simultaneously.
  */
 function writeTrialData(ss, d) {
   if (!d.trialData || !d.trialData.length) return;
 
+  var tz = Session.getScriptTimeZone();
   var baseHeaders = ['Date', 'Setting', 'Therapist'];
-  var goalHeaders = [];
-
-  for (var gi = 0; gi < d.trialData.length; gi++) {
-    var g = d.trialData[gi];
-    var n = (g.trials && g.trials.length) ? g.trials.length : 5;
-    goalHeaders.push(g.goalCode);
-    for (var ti = 0; ti < n; ti++) {
-      goalHeaders.push('Trial ' + (ti + 1));
-    }
-    goalHeaders.push('%');
-  }
-
   var analyticsHeaders = [
     'submissionId', 'clientName', 'clientId', 'therapistEmail',
     'sessionType', 'billingCode', 'isDraft', 'payloadHash',
     'submittedAt', 'dateISO', 'Percent Correct'
   ];
-  var allHeaders = baseHeaders.concat(goalHeaders, analyticsHeaders);
 
-  var sheet = getOrCreateSheet(ss, 'Trial Data', allHeaders);
-  ensureSheetColumns(sheet, allHeaders); // was analyticsHeaders — fixed to ensure goal columns too
+  // Per-goal trial count map (goal code upper → numTrials)
+  var trialCountMap = {};
+  var goalCodesList = [];
+  for (var gi = 0; gi < d.trialData.length; gi++) {
+    var g = d.trialData[gi];
+    var gCode = String(g.goalCode || '');
+    var n = (g.trials && g.trials.length) ? g.trials.length : 5;
+    trialCountMap[gCode.toUpperCase()] = n;
+    goalCodesList.push(gCode);
+  }
 
-  // Build numeric percentages map for the Percent Correct column
+  // Percent Correct JSON — values are whole numbers (multiply if decimal 0-1)
   var pctMap = {};
   for (var gi3 = 0; gi3 < d.trialData.length; gi3++) {
     var gp = d.trialData[gi3];
     if (gp.percentage !== null && gp.percentage !== undefined) {
-      pctMap[gp.goalCode] = gp.percentage;
+      var pv = Number(gp.percentage);
+      if (!isNaN(pv)) {
+        pctMap[String(gp.goalCode)] = (pv >= 0 && pv <= 1) ? Math.round(pv * 100) : Math.round(pv);
+      }
     }
   }
   var percentCorrectJSON = JSON.stringify(pctMap);
 
-  // Read ACTUAL header row — source of truth for column positions.
-  // New goal or analytics columns may have been appended in different order
-  // than allHeaders if goals changed between sessions.
-  var lastCol = sheet.getLastColumn();
-  var actualHeaders = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
-
-  // Build a map of unique headers (first occurrence wins).
-  // Trial N and % repeat per goal — we address those relative to each goal code column.
-  var colMap = {};
-  for (var hi2 = 0; hi2 < actualHeaders.length; hi2++) {
-    var h2 = String(actualHeaders[hi2]).trim();
-    if (h2 && colMap[h2] === undefined) { colMap[h2] = hi2; }
+  // Load goal descriptions for Trial Summary (one read; failure is non-fatal)
+  var goalDescMap = {};
+  try {
+    var adminSS  = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+    var goalsRaw = sheetToObjects(adminSS, 'Goals');
+    for (var gdi = 0; gdi < goalsRaw.length; gdi++) {
+      var gdCode = String(goalsRaw[gdi].code || '').trim().toUpperCase();
+      if (gdCode) { goalDescMap[gdCode] = String(goalsRaw[gdi].description || '').trim(); }
+    }
+  } catch (e) {
+    Logger.log('[writeTrialData] goalDescMap load failed: ' + e.message);
   }
 
-  // Build row sized to actual header count
-  var row = [];
-  for (var ri2 = 0; ri2 < lastCol; ri2++) { row.push(''); }
+  // Create sheet if brand new (base + analytics only; goal cols added below)
+  var sheet = getOrCreateSheet(ss, 'Trial Data', baseHeaders.concat(analyticsHeaders));
 
-  if (colMap['Date']      !== undefined) { row[colMap['Date']]      = d.date; }
-  if (colMap['Setting']   !== undefined) { row[colMap['Setting']]   = d.location; }
-  if (colMap['Therapist'] !== undefined) { row[colMap['Therapist']] = d.therapist; }
-
-  // For each goal: find its goal-code column by scanning for an exact match,
-  // then write trial values and % in the immediately following columns.
-  for (var gi2 = 0; gi2 < d.trialData.length; gi2++) {
-    var g2 = d.trialData[gi2];
-    var goalCol = -1;
-    for (var hj = 0; hj < actualHeaders.length; hj++) {
-      if (String(actualHeaders[hj]).trim() === String(g2.goalCode).trim()) { goalCol = hj; break; }
-    }
-    if (goalCol < 0) { continue; } // goal column not present in sheet — skip safely
-    row[goalCol] = g2.goalCode;
-    var trials = g2.trials || [];
-    for (var ti2 = 0; ti2 < trials.length; ti2++) {
-      if (goalCol + 1 + ti2 < row.length) { row[goalCol + 1 + ti2] = trials[ti2]; }
-    }
-    var pct    = (g2.percentage !== null && g2.percentage !== undefined) ? g2.percentage + '%' : '';
-    var pctPos = goalCol + 1 + trials.length;
-    if (pctPos < row.length) { row[pctPos] = pct; }
+  // Warn if approaching Google Sheets column limit (1000)
+  var preCheckCol = sheet.getLastColumn();
+  if (preCheckCol > 500) {
+    writeAuditLog(new Date().toISOString(), 'system', 'column_warning', d.clientName || '',
+      'Trial Data has ' + preCheckCol + ' columns — approaching Google Sheets limit');
   }
 
-  // Analytics columns
-  if (colMap['submissionId']    !== undefined) { row[colMap['submissionId']]    = d.submissionId   || ''; }
-  if (colMap['clientName']      !== undefined) { row[colMap["clientName"]]      = resolveClientName(d); }
-  if (colMap['clientId']        !== undefined) { row[colMap['clientId']]        = d.clientId       || ''; }
-  if (colMap['therapistEmail']  !== undefined) { row[colMap['therapistEmail']]  = d.therapistEmail || d.submittedBy || ''; }
-  if (colMap['sessionType']     !== undefined) { row[colMap['sessionType']]     = d.sessionType    || ''; }
-  if (colMap['billingCode']     !== undefined) { row[colMap['billingCode']]     = d.billingCode    || ''; }
-  if (colMap['isDraft']         !== undefined) { row[colMap['isDraft']]         = d.isDraft ? true : false; }
-  if (colMap['payloadHash']     !== undefined) { row[colMap['payloadHash']]     = d.payloadHash    || ''; }
-  if (colMap['submittedAt']     !== undefined) { row[colMap['submittedAt']]     = d.submittedAt    || new Date().toISOString(); }
-  if (colMap['dateISO']         !== undefined) { row[colMap['dateISO']]         = d.dateISO        || ''; }
-  if (colMap['Percent Correct'] !== undefined) { row[colMap['Percent Correct']] = percentCorrectJSON; }
+  // Lock prevents two simultaneous submits from inserting duplicate goal columns
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(30000);
+  } catch (e) {
+    throw new Error('Trial Data lock timeout — concurrent session write in progress, please retry');
+  }
 
-  validateRowAlignment('Trial Data', actualHeaders, row);
-  sheet.appendRow(row);
+  var actualHeaders, colMap, lastCol;
+  try {
+    // Step 1: Ensure analytics columns exist at the far right (no-op when already present)
+    ensureSheetColumns(sheet, analyticsHeaders);
+
+    // Step 2: Insert any missing goal columns BEFORE the analytics block
+    var ensureResult = _ensureTrialGoalColumns(sheet, goalCodesList, trialCountMap);
+    colMap       = ensureResult.colMap;
+    actualHeaders = ensureResult.headers;
+    lastCol      = actualHeaders.length;
+
+    // Step 3: Build and write the data row
+    var row = [];
+    for (var ri2 = 0; ri2 < lastCol; ri2++) { row.push(''); }
+
+    if (colMap['Date']      !== undefined) { row[colMap['Date']]      = d.date; }
+    if (colMap['Setting']   !== undefined) { row[colMap['Setting']]   = d.location; }
+    if (colMap['Therapist'] !== undefined) { row[colMap['Therapist']] = d.therapist; }
+
+    for (var gi2 = 0; gi2 < d.trialData.length; gi2++) {
+      var g2       = d.trialData[gi2];
+      var gCode2   = String(g2.goalCode || '');
+      var goalColIdx = colMap[gCode2];
+      // Fall back to case-insensitive lookup if exact case not found
+      if (goalColIdx === undefined) { goalColIdx = colMap[gCode2.toUpperCase()]; }
+      if (goalColIdx === undefined) {
+        var warnMsg = '[writeTrialData] goalCode "' + gCode2 +
+                      '" missing from colMap after column management — skipping';
+        Logger.log('ERROR: ' + warnMsg);
+        writeAuditLog(new Date().toISOString(), 'system', 'alignment_error',
+                      d.clientName || '', warnMsg);
+        continue;
+      }
+
+      row[goalColIdx] = gCode2;
+      var trials2 = g2.trials || [];
+      for (var ti2 = 0; ti2 < trials2.length; ti2++) {
+        if (goalColIdx + 1 + ti2 < lastCol) { row[goalColIdx + 1 + ti2] = trials2[ti2]; }
+      }
+      var pctStr  = (g2.percentage !== null && g2.percentage !== undefined) ? g2.percentage + '%' : '';
+      var pctPos2 = goalColIdx + 1 + trials2.length;
+      if (pctPos2 < lastCol) { row[pctPos2] = pctStr; }
+    }
+
+    if (colMap['submissionId']    !== undefined) { row[colMap['submissionId']]    = d.submissionId   || ''; }
+    if (colMap['clientName']      !== undefined) { row[colMap['clientName']]      = resolveClientName(d); }
+    if (colMap['clientId']        !== undefined) { row[colMap['clientId']]        = d.clientId       || ''; }
+    if (colMap['therapistEmail']  !== undefined) { row[colMap['therapistEmail']]  = d.therapistEmail || d.submittedBy || ''; }
+    if (colMap['sessionType']     !== undefined) { row[colMap['sessionType']]     = d.sessionType    || ''; }
+    if (colMap['billingCode']     !== undefined) { row[colMap['billingCode']]     = d.billingCode    || ''; }
+    if (colMap['isDraft']         !== undefined) { row[colMap['isDraft']]         = d.isDraft ? true : false; }
+    if (colMap['payloadHash']     !== undefined) { row[colMap['payloadHash']]     = d.payloadHash    || ''; }
+    if (colMap['submittedAt']     !== undefined) { row[colMap['submittedAt']]     = d.submittedAt    || new Date().toISOString(); }
+    if (colMap['dateISO']         !== undefined) { row[colMap['dateISO']]         = d.dateISO        || ''; }
+    if (colMap['Percent Correct'] !== undefined) { row[colMap['Percent Correct']] = percentCorrectJSON; }
+
+    validateRowAlignment('Trial Data', actualHeaders, row);
+    sheet.appendRow(row);
+
+  } finally {
+    lock.releaseLock();
+  }
+
+  // Part 2: Append to Trial Summary (outside lock — read/append only, no structural changes)
+  _appendTrialSummaryRows(ss, d, goalDescMap, tz);
 }
 
 /**
@@ -1176,6 +1220,210 @@ function _ensureColumnsBefore(sheet, newCols, stopColsMap, preferredStops) {
   r.setFontWeight('bold');
   r.setBackground('#00A7C7');
   r.setFontColor('#FFFFFF');
+}
+
+/**
+ * Ensure all goal code columns exist in the Trial Data sheet and that they
+ * sit BEFORE the analytics block (submissionId … Percent Correct).
+ *
+ * For each goalCode in goalCodes:
+ *   - If already present (case-insensitive match): skip.
+ *   - If missing: insert (groupSize = numTrials + 2) columns immediately
+ *     before the analytics block, write Goal Code / Trial 1..N / % headers.
+ *
+ * After all insertions, flushes and re-reads the full header row so the
+ * returned colMap is guaranteed to reflect actual sheet state.
+ *
+ * @param {Sheet}    sheet         - the Trial Data sheet
+ * @param {string[]} goalCodes     - goal code strings to ensure exist
+ * @param {Object}   trialCountMap - plain object { GOALCODE_UPPER: numTrials }
+ * @return {{ colMap: Object, headers: Array }} colMap keyed by exact-case header
+ */
+function _ensureTrialGoalColumns(sheet, goalCodes, trialCountMap) {
+  var lastCol = sheet.getLastColumn();
+  var headers = (lastCol > 0)
+    ? sheet.getRange(1, 1, 1, lastCol).getValues()[0]
+    : [];
+
+  // Find 1-based analyticsStart = position of first 'submissionId' column
+  var analyticsStart = -1;
+  for (var i = 0; i < headers.length; i++) {
+    if (String(headers[i]).trim().toLowerCase() === 'submissionid') {
+      analyticsStart = i + 1; // 1-based
+      break;
+    }
+  }
+  var analyticsFound = (analyticsStart >= 1 && analyticsStart <= headers.length);
+  if (!analyticsFound) {
+    analyticsStart = headers.length + 1; // append position (1-based)
+  }
+
+  // Build case-insensitive existence map of current headers
+  var existingUpper = {};
+  for (var hi = 0; hi < headers.length; hi++) {
+    var hv = String(headers[hi] || '').trim();
+    if (hv) { existingUpper[hv.toUpperCase()] = true; }
+  }
+
+  // Track expected last column ourselves to avoid re-querying inside the loop
+  var trackedLastCol = headers.length;
+  var anyInserted = false;
+
+  for (var gi = 0; gi < goalCodes.length; gi++) {
+    var gc     = String(goalCodes[gi] || '').trim();
+    if (!gc) continue;
+    var gcUpper = gc.toUpperCase();
+    if (existingUpper[gcUpper]) { continue; } // already present
+
+    var numTrials = (trialCountMap && typeof trialCountMap === 'object')
+      ? (trialCountMap[gcUpper] || 5)
+      : (typeof trialCountMap === 'number' ? trialCountMap : 5);
+    var groupSize = numTrials + 2; // goalCode col + Trial 1..N + %
+
+    // Build header values for this group
+    var groupHeaders = [gc];
+    for (var ti = 0; ti < numTrials; ti++) { groupHeaders.push('Trial ' + (ti + 1)); }
+    groupHeaders.push('%');
+
+    if (analyticsFound) {
+      // Insert groupSize blank columns immediately before the analytics block
+      sheet.insertColumnsBefore(analyticsStart, groupSize);
+      var insRange = sheet.getRange(1, analyticsStart, 1, groupSize);
+      insRange.setValues([groupHeaders]);
+      insRange.setFontWeight('bold');
+      insRange.setBackground('#00A7C7');
+      insRange.setFontColor('#FFFFFF');
+    } else {
+      // No analytics block yet — append after current last column
+      var appendAt = trackedLastCol + 1;
+      var appRange = sheet.getRange(1, appendAt, 1, groupSize);
+      appRange.setValues([groupHeaders]);
+      appRange.setFontWeight('bold');
+      appRange.setBackground('#00A7C7');
+      appRange.setFontColor('#FFFFFF');
+      trackedLastCol += groupSize;
+    }
+
+    existingUpper[gcUpper] = true; // mark as inserted so subsequent goals don't re-insert
+    analyticsStart += groupSize;   // analytics shifted right by groupSize
+    anyInserted = true;
+  }
+
+  if (anyInserted) { SpreadsheetApp.flush(); }
+
+  // Re-read fresh headers after all insertions — this is authoritative
+  var freshLastCol = sheet.getLastColumn();
+  var freshHeaders = (freshLastCol > 0)
+    ? sheet.getRange(1, 1, 1, freshLastCol).getValues()[0]
+    : [];
+
+  // Build colMap keyed by exact-case header (first occurrence wins)
+  var freshColMap = {};
+  for (var fhi = 0; fhi < freshHeaders.length; fhi++) {
+    var fhv = String(freshHeaders[fhi] || '').trim();
+    if (fhv && freshColMap[fhv] === undefined) { freshColMap[fhv] = fhi; }
+  }
+
+  return { colMap: freshColMap, headers: freshHeaders };
+}
+
+/**
+ * Append one normalized row per goal to the client's Trial Summary tab.
+ * Creates the tab with the 13-column header if it doesn't exist.
+ * Always APPENDS — never clears or sorts (data is chronological by append order).
+ * Source is set to "Live" so recoverTrialData can distinguish these rows.
+ * Failures are caught and logged to Audit Log — never block session submission.
+ */
+function _appendTrialSummaryRows(ss, d, goalDescMap, tz) {
+  try {
+    var TS_HEADERS = [
+      'Date', 'Therapist', 'Setting', 'Goal Code', 'Goal Description',
+      'Trial 1', 'Trial 2', 'Trial 3', 'Trial 4', 'Trial 5',
+      'Percentage', 'Source', 'Session ID'
+    ];
+    var TS_COLS = TS_HEADERS.length; // 13
+
+    var sumSheet;
+    var existing = ss.getSheetByName('Trial Summary');
+    if (!existing) {
+      sumSheet = ss.insertSheet('Trial Summary');
+      var hdr0 = sumSheet.getRange(1, 1, 1, TS_COLS);
+      hdr0.setValues([TS_HEADERS]);
+      hdr0.setFontWeight('bold');
+      hdr0.setBackground('#00A7C7');
+      hdr0.setFontColor('#FFFFFF');
+      sumSheet.setFrozenRows(1);
+    } else {
+      sumSheet = existing;
+      // Extend header row if it's shorter than expected (e.g. pre-Source schema)
+      var excLastCol = sumSheet.getLastColumn();
+      if (excLastCol === 0) {
+        var hdr1 = sumSheet.getRange(1, 1, 1, TS_COLS);
+        hdr1.setValues([TS_HEADERS]);
+        hdr1.setFontWeight('bold');
+        hdr1.setBackground('#00A7C7');
+        hdr1.setFontColor('#FFFFFF');
+        sumSheet.setFrozenRows(1);
+      } else if (excLastCol < TS_COLS) {
+        ensureSheetColumns(sumSheet, TS_HEADERS);
+      }
+    }
+
+    // Format date as MM/DD/YYYY
+    var displayDate = '';
+    if (d.date) {
+      if (Object.prototype.toString.call(d.date) === '[object Date]') {
+        displayDate = Utilities.formatDate(d.date, tz, 'MM/dd/yyyy');
+      } else {
+        var ds = String(d.date).trim();
+        var dm = ds.match(/^(\d{4})-(\d{2})-(\d{2})/);
+        displayDate = dm ? (dm[2] + '/' + dm[3] + '/' + dm[1]) : ds;
+      }
+    }
+
+    var newRows = [];
+    for (var gi = 0; gi < d.trialData.length; gi++) {
+      var g     = d.trialData[gi];
+      var gCode = String(g.goalCode || '');
+      var desc  = (goalDescMap && goalDescMap[gCode.toUpperCase()]) || gCode;
+      var tr    = g.trials || [];
+
+      var pctVal = '';
+      if (g.percentage !== null && g.percentage !== undefined) {
+        var pn = Number(g.percentage);
+        if (!isNaN(pn)) {
+          pctVal = (pn >= 0 && pn <= 1) ? Math.round(pn * 100) : Math.round(pn);
+        }
+      }
+
+      newRows.push([
+        displayDate,
+        d.therapist   || '',
+        d.location    || '',
+        gCode,
+        desc,
+        tr.length > 0 ? tr[0] : '',
+        tr.length > 1 ? tr[1] : '',
+        tr.length > 2 ? tr[2] : '',
+        tr.length > 3 ? tr[3] : '',
+        tr.length > 4 ? tr[4] : '',
+        pctVal,
+        'Live',
+        d.submissionId || ''
+      ]);
+    }
+
+    if (newRows.length > 0) {
+      var lastRow = sumSheet.getLastRow();
+      sumSheet.getRange(lastRow + 1, 1, newRows.length, TS_COLS).setValues(newRows);
+    }
+  } catch (e) {
+    Logger.log('[_appendTrialSummaryRows] ERROR: ' + e.message);
+    try {
+      writeAuditLog(new Date().toISOString(), 'system', 'trial_summary_error',
+        d.clientName || '', 'Failed to append Trial Summary: ' + e.message);
+    } catch (ae) { /* audit failure must not propagate */ }
+  }
 }
 
 /** Read a sheet tab into an array of plain objects (row 1 = keys). */
@@ -2875,7 +3123,27 @@ function recoverTrialData(dryRun) {
       if (!dryRun) {
         var existingSum = cSS.getSheetByName(TRIAL_SUMMARY_TAB);
         var sumSheet;
+        var liveRows = []; // rows from live session submissions — preserved across recovery
+
         if (existingSum) {
+          // Harvest "Live" rows before clearing — these came from real session submits
+          var exLastRow = existingSum.getLastRow();
+          var exLastCol = existingSum.getLastColumn();
+          if (exLastRow >= 2 && exLastCol >= 1) {
+            var exData = existingSum.getRange(1, 1, exLastRow, exLastCol).getValues();
+            var exHdrs = exData[0];
+            var srcColIdx = -1;
+            for (var eci = 0; eci < exHdrs.length; eci++) {
+              if (String(exHdrs[eci]).trim() === 'Source') { srcColIdx = eci; break; }
+            }
+            if (srcColIdx >= 0) {
+              for (var eri = 1; eri < exData.length; eri++) {
+                if (String(exData[eri][srcColIdx] || '').trim() === 'Live') {
+                  liveRows.push(exData[eri]);
+                }
+              }
+            }
+          }
           existingSum.clear();
           sumSheet = existingSum;
         } else {
@@ -2889,6 +3157,7 @@ function recoverTrialData(dryRun) {
         hdrRange.setFontColor('#FFFFFF');
         sumSheet.setFrozenRows(1);
 
+        var writeRow = 2;
         if (records.length > 0) {
           var outputRows = [];
           for (var oi = 0; oi < records.length; oi++) {
@@ -2911,18 +3180,37 @@ function recoverTrialData(dryRun) {
           }
 
           var CHUNK = 5000;
-          var writeRow = 2;
           for (var cs = 0; cs < outputRows.length; cs += CHUNK) {
             var ce    = Math.min(cs + CHUNK, outputRows.length);
             var chunk = outputRows.slice(cs, ce);
-            sumSheet.getRange(writeRow, 1, chunk.length, NUM_SUMMARY_COLS)
-                    .setValues(chunk);
+            sumSheet.getRange(writeRow, 1, chunk.length, NUM_SUMMARY_COLS).setValues(chunk);
             writeRow += chunk.length;
           }
         }
 
-        Logger.log('[' + cName + '] Wrote ' + records.length +
-                   ' rows to "' + TRIAL_SUMMARY_TAB + '"');
+        // Append preserved Live rows at the end (pad/trim each to NUM_SUMMARY_COLS)
+        if (liveRows.length > 0) {
+          var paddedLive = [];
+          for (var lri = 0; lri < liveRows.length; lri++) {
+            var lr = liveRows[lri];
+            var paddedRow = [];
+            for (var lci = 0; lci < NUM_SUMMARY_COLS; lci++) {
+              paddedRow.push(lci < lr.length ? lr[lci] : '');
+            }
+            paddedLive.push(paddedRow);
+          }
+          var LIVE_CHUNK = 5000;
+          for (var lcs = 0; lcs < paddedLive.length; lcs += LIVE_CHUNK) {
+            var lce   = Math.min(lcs + LIVE_CHUNK, paddedLive.length);
+            var lchunk = paddedLive.slice(lcs, lce);
+            sumSheet.getRange(writeRow, 1, lchunk.length, NUM_SUMMARY_COLS).setValues(lchunk);
+            writeRow += lchunk.length;
+          }
+          Logger.log('[' + cName + '] Preserved ' + liveRows.length + ' Live rows');
+        }
+
+        Logger.log('[' + cName + '] Wrote ' + records.length + ' recovered + ' +
+                   liveRows.length + ' Live rows to "' + TRIAL_SUMMARY_TAB + '"');
       } else {
         Logger.log('[' + cName + '] DRY RUN — would write ' +
                    records.length + ' rows to "' + TRIAL_SUMMARY_TAB + '"');
