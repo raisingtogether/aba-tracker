@@ -1,0 +1,23 @@
+{
+  "name": "Raising Together Feature Tracker",
+  "short_name": "RT Tracker",
+  "description": "Product roadmap and feature tracker for Raising Together ABA Tracker",
+  "start_url": "/tracker/",
+  "scope": "/tracker/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#00A7C7",
+  "background_color": "#ffffff",
+  "icons": [
+    {
+      "src": "/Favicon@4x.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/Favicon@4x.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

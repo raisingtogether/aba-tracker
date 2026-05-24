@@ -1,0 +1,14 @@
+{
+  "hosting": {
+    "site": "rt-aba-tracker",
+    "public": ".",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      { "source": "/tracker", "destination": "/tracker/index.html" }
+    ]
+  }
+}
