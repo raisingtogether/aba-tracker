@@ -2685,12 +2685,13 @@ function saveEntity() {
     const description = document.getElementById('ef-description').value.trim();
     const numTrials   = document.getElementById('ef-numTrials').value || '5';
     if (!clientIds || !code || !description) { toast('At least one client, code, and description required', 'err'); return; }
-    // Duplicate code check — globally unique, case-insensitive
+    // Duplicate check — unique per client+code (not code alone): the same code
+    // can be assigned to different clients as separate goal entries.
     const codeUpper = code.toUpperCase();
     const isDup = (raw.goals || []).some(function(g) {
       // Skip the goal currently being edited (identified by clientId + code)
       if (editModalItem && g.clientId === editModalItem.clientId && String(g.code || '') === String(editModalItem.code || '')) return false;
-      return String(g.code || '').toUpperCase() === codeUpper;
+      return String(g.clientId || '') === String(clientId) && String(g.code || '').toUpperCase() === codeUpper;
     });
     if (isDup) {
       const codeInput = document.getElementById('ef-code');

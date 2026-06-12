@@ -511,13 +511,17 @@ function saveConfig(cfg) {
         cfg.behaviors);
 
     if (cfg.goals !== undefined) {
-      // Server-side duplicate goal code check
+      // Server-side duplicate goal code check — unique per client+code, NOT
+      // code alone. The same code (e.g. F15) can legitimately be assigned to
+      // different clients as separate goal entries, so we key on clientId|code.
       var seenCodes = {};
       for (var gi = 0; gi < cfg.goals.length; gi++) {
         var gc = String(cfg.goals[gi].code || '').toUpperCase().trim();
         if (!gc) continue;
-        if (seenCodes[gc]) throw new Error('Duplicate goal code: ' + cfg.goals[gi].code);
-        seenCodes[gc] = true;
+        var cid = String(cfg.goals[gi].clientId || '');
+        var dupKey = cid + '|' + gc;
+        if (seenCodes[dupKey]) throw new Error('Duplicate goal code: ' + cfg.goals[gi].code + ' for client ' + cid);
+        seenCodes[dupKey] = true;
       }
       objectsToSheet(ss, 'Goals',
         ['clientId', 'clientIds', 'code', 'description', 'numTrials', 'status'],
