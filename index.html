@@ -1308,6 +1308,7 @@ let S = {
   adjustedEndTime: null,          // display string e.g. "3:45 PM" or null
   adjustedEndTimeDate: null,      // Date object for duration calc
   endTimeAdjustmentReason: '',
+  submitted: false,               // true once this session was submitted (success screen shown)
 };
 
 let abcIdSeq = 0;
@@ -2225,6 +2226,9 @@ function buildPayload() {
 
 function showSuccess() {
   window.onbeforeunload = null;
+  // Mark the in-memory session as completed so a return-from-background re-auth
+  // does not "restore" this already-submitted session (tab stays open \u2192 S persists).
+  S.submitted = true;
   document.getElementById('success-sub').textContent = S.client.name + ' \u2014 ' + S.dateStr;
   document.getElementById('success-screen').classList.add('active');
 }
@@ -2255,6 +2259,7 @@ function resetState() {
   S.trials = {}; S.abc = []; abcIdSeq = 0;
   S.appStartTime = null; S.actualStartTime = null; S.lateStartReason = '';
   S.adjustedEndTime = null; S.adjustedEndTimeDate = null; S.endTimeAdjustmentReason = '';
+  S.submitted = false;
   if (S.clockInterval) { clearInterval(S.clockInterval); S.clockInterval = null; }
   if (S.sessInterval)  { clearInterval(S.sessInterval);  S.sessInterval  = null; }
   document.querySelectorAll('.opt-pill').forEach(p => p.classList.remove('sel'));
@@ -2533,10 +2538,21 @@ function buildEditForm(type, item) {
       '<input type="hidden" id="ef-totpSecret" value="' + escAttr(item.totpSecret||'') + '"></div>';
 
   } else if (type === 'clients') {
+    // Provisioning tools only apply to an already-saved client (editModalItem is
+    // null for a brand-new one, whose id is a throwaway template replaced on save).
+    const savedClient = editModalItem;
+    const sheetTools = !savedClient
+      ? '<div class="form-group" style="color:var(--muted);font-size:12px">Save this client first, then reopen to auto-create its Google Sheet.</div>'
+      : (savedClient.sheetId
+          ? '<div class="form-group"><button type="button" class="admin-act-btn" id="ef-verify-btn" onclick="verifyClientSheetFor(\'' + esc(savedClient.id) + '\')">✓ Verify Sheet</button>'
+            + '<div id="ef-sheet-status" style="margin-top:8px;font-size:12px;color:var(--muted)"></div></div>'
+          : '<div class="form-group"><button type="button" class="admin-act-btn" id="ef-provision-btn" onclick="provisionClientSheetFor(\'' + esc(savedClient.id) + '\')">➕ Auto-create Google Sheet</button>'
+            + '<div style="margin-top:6px;font-size:12px;color:var(--muted)">Creates a new spreadsheet owned by the app and links it automatically. Data tabs are generated on the first submitted session.</div></div>');
     form.innerHTML =
       fld('Name', 'name', item.name) +
       fld('Initials (2-3 letters)', 'initials', item.initials, 'text', 'maxlength="3"') +
-      fld('Google Sheet ID', 'sheetId', item.sheetId, 'text', 'placeholder="1BxiM..."');
+      fld('Google Sheet ID', 'sheetId', item.sheetId, 'text', 'placeholder="1BxiM..."') +
+      sheetTools;
 
   } else if (type === 'behaviors') {
     // Build client checkboxes
@@ -2805,6 +2821,71 @@ async function persistConfig(raw) {
   }
 }
 
+// ─── CLIENT SHEET PROVISIONING ────────────────────────────────────────
+// Auto-create a client's backing Google Sheet from the admin console so no one
+// has to create/share it by hand. The backend owns the new sheet, so it is
+// readable by both processSession and the BigQuery sync with no sharing step.
+async function provisionClientSheetFor(clientId) {
+  if (GAS_URL === 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') { toast('Backend not configured', 'err'); return; }
+  var btn    = document.getElementById('ef-provision-btn');
+  var raw    = RAW_CONFIG || DEFAULT_CONFIG;
+  var client = (raw.clients || []).find(function(c){ return String(c.id) === String(clientId); });
+  var clientName = client ? client.name : '';
+  try {
+    if (btn) { btn.disabled = true; btn.textContent = 'Creating sheet…'; }
+    document.getElementById('loading-lbl').textContent = 'Creating client sheet…';
+    document.getElementById('loading').classList.add('active');
+    var resp = await fetch(GAS_URL, { method:'POST', headers:{'Content-Type':'text/plain'}, redirect:'follow',
+      body: JSON.stringify({ action:'provisionClient', clientId: clientId, clientName: clientName }) });
+    var data = await resp.json();
+    document.getElementById('loading').classList.remove('active');
+    document.getElementById('loading-lbl').textContent = 'Submitting session…';
+    if (!data.success || !data.sheetId) {
+      toast('Sheet creation failed: ' + (data.error || 'error'), 'err');
+      if (btn) { btn.disabled = false; btn.textContent = '➕ Auto-create Google Sheet'; }
+      return;
+    }
+    // Backend already wrote sheetId to the Clients tab; reflect it in the open
+    // form and in-memory config so a subsequent Save doesn't blank it out.
+    var input = document.getElementById('ef-sheetId');
+    if (input) input.value = data.sheetId;
+    if (client)        client.sheetId        = data.sheetId;
+    if (editModalItem) editModalItem.sheetId = data.sheetId;
+    toast(data.created ? 'Google Sheet created ✓' : 'Sheet already linked ✓', 'ok');
+    if (btn) btn.style.display = 'none';
+  } catch(e) {
+    document.getElementById('loading').classList.remove('active');
+    document.getElementById('loading-lbl').textContent = 'Submitting session…';
+    toast('Sheet creation failed — check connection', 'err');
+    if (btn) { btn.disabled = false; btn.textContent = '➕ Auto-create Google Sheet'; }
+  }
+}
+
+// Confirm the backend can actually open a client's linked sheet, and report
+// which data tabs exist yet (none is normal until the first session).
+async function verifyClientSheetFor(clientId) {
+  if (GAS_URL === 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') { toast('Backend not configured', 'err'); return; }
+  var btn = document.getElementById('ef-verify-btn');
+  var out = document.getElementById('ef-sheet-status');
+  try {
+    if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
+    var resp = await fetch(GAS_URL, { method:'POST', headers:{'Content-Type':'text/plain'}, redirect:'follow',
+      body: JSON.stringify({ action:'verifyClientSheet', clientId: clientId }) });
+    var data = await resp.json();
+    if (btn) { btn.disabled = false; btn.textContent = '✓ Verify Sheet'; }
+    var v = data && data.verify;
+    if (!data.success || !v) { if (out) out.innerHTML = '<span style="color:var(--danger)">Verify failed: ' + escHtml((data && data.error) || 'error') + '</span>'; return; }
+    if (!v.reachable) { if (out) out.innerHTML = '<span style="color:var(--danger)">✗ ' + escHtml(v.error || 'Not reachable') + '</span>'; return; }
+    var tabMsg = v.existingTabs.length
+      ? 'Tabs present: ' + escHtml(v.existingTabs.join(', '))
+      : 'No data tabs yet (created on first session) — this is normal.';
+    if (out) out.innerHTML = '<span style="color:#16a34a">✓ Reachable: ' + escHtml(v.name || '') + '</span><br>' + tabMsg;
+  } catch(e) {
+    if (btn) { btn.disabled = false; btn.textContent = '✓ Verify Sheet'; }
+    if (out) out.innerHTML = '<span style="color:var(--danger)">Verify failed — check connection</span>';
+  }
+}
+
 
 // ─── PIN MANAGEMENT ───────────────────────────────────────────────────
 function openChangePinModal() {
@@ -2870,6 +2951,7 @@ const GOOGLE_CLIENT_ID     = '145308926221-3kvhum1t0goo9s97kbtrqo98nq4vn09s.apps
 const INACTIVITY_MS        = 60 * 60 * 1000;  // 60 min
 const INACTIVITY_WARN_MS   = 57 * 60 * 1000;  // 57 min warn
 const BACKGROUND_REAUTH_MS =  5 * 60 * 1000;  //  5 min background
+const SESSION_MAX_AGE_MS   = 12 * 60 * 60 * 1000;  // 12 h — older in-memory sessions are abandoned
 const MAX_LOGIN_ATTEMPTS   = 5;
 const LOCKOUT_MS           = 30 * 60 * 1000;
 const DEFAULT_WEEKLY_LIMIT = 30;
@@ -2936,11 +3018,33 @@ function stopInactivityTimer() {
 // ── BACKGROUND DETECTION ─────────────────────────────────────────────
 let _bgStart = null;
 let _reauthFailCount = 0;
+// A return-from-background re-auth should only preserve a genuine in-progress
+// session. A session that was already submitted, or one that started so long ago
+// that it has clearly been abandoned, must NOT be restored — otherwise (because
+// the tab never closes and init() never re-runs) the stale session lingers in
+// memory indefinitely and reappears on every re-login. See showSuccess()/resetState().
+function isSessionResumable() {
+  if (!S.client) return false;          // no active session
+  if (S.submitted) return false;        // already submitted — nothing to resume
+  if (!S.sessStartTs) return true;      // no timestamp — treat as in-progress
+  return (Date.now() - S.sessStartTs) <= SESSION_MAX_AGE_MS;
+}
+
+function discardStaleSession() {
+  resetState();
+  var sc = document.getElementById('success-screen');
+  if (sc) sc.classList.remove('active');
+  buildTherapistScreen();
+  goTo('therapist');
+}
+
 document.addEventListener('visibilitychange', function() {
   if (document.hidden) {
     _bgStart = Date.now();
   } else {
     if (_bgStart && (Date.now() - _bgStart) > BACKGROUND_REAUTH_MS && AUTH.user) {
+      // Drop a completed/abandoned session before re-auth so it isn't "restored".
+      if (!isSessionResumable()) discardStaleSession();
       showReauthOverlay();
     }
     _bgStart = null;
@@ -2957,14 +3061,17 @@ function showReauthOverlay() {
   const pSection = document.getElementById('reauth-pin-section');
   const subEl    = document.getElementById('reauth-sub');
 
+  // Only promise to preserve data when there's a genuine in-progress session.
+  const lead = isSessionResumable() ? 'Your session data is preserved. ' : '';
+
   if (isGoogleUser) {
     if (gSection) gSection.style.display = '';
     if (pSection) pSection.style.display = 'none';
-    if (subEl)    subEl.textContent = 'Your session data is preserved. Sign in with Google to continue.';
+    if (subEl)    subEl.textContent = lead + 'Sign in with Google to continue.';
   } else {
     if (gSection) gSection.style.display = 'none';
     if (pSection) pSection.style.display = '';
-    if (subEl)    subEl.textContent = 'Your session data is preserved. Enter your PIN to continue.';
+    if (subEl)    subEl.textContent = lead + 'Enter your PIN to continue.';
     document.getElementById('reauth-pin').value = '';
     document.getElementById('reauth-error').textContent = '';
   }

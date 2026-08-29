@@ -81,6 +81,14 @@ function doPost(e) {
       var rdResult = recoverTrialData(rdDryRun);
       result = { success: true, dryRun: rdDryRun, stats: rdResult };
 
+    } else if (data.action === 'provisionClient') {
+      var provResult = provisionClientSheet(data.clientId, data.clientName);
+      result = { success: true, created: provResult.created, sheetId: provResult.sheetId };
+
+    } else if (data.action === 'verifyClientSheet') {
+      var verResult = verifyClientSheet(data.clientId);
+      result = { success: true, verify: verResult };
+
     } else {
       processSession(data);
       result = { success: true };
@@ -547,6 +555,144 @@ function saveConfig(cfg) {
   } finally {
     lock.releaseLock();
   }
+}
+
+
+// ── CLIENT PROVISIONING ───────────────────────────────────────────────
+
+/**
+ * Create a new Google Spreadsheet to hold one client's data and link it to the
+ * client row in the RT Admin › Clients tab. Returns { created, sheetId }.
+ *
+ * Why the backend can access the sheet with no manual sharing step: the sheet is
+ * created by SpreadsheetApp.create(), so it is OWNED by the script's executing
+ * account ("Execute as Me"). That is the same identity processSession and the
+ * BigQuery sync run under, so openById() works immediately.
+ *
+ * The per-client data tabs (Time In Time Out, Behavior Data, Trial Data, ABC
+ * Data, Mastery Log) are intentionally NOT pre-created here. They are generated
+ * with the correct — and partly dynamic (behavior/goal) — headers by the write
+ * functions on the first submitted session, which is the single source of truth
+ * for column layout. Duplicating those headers here would risk the column-drift
+ * bugs this project has already fought.
+ *
+ * Best-effort: shares the sheet as editor with every active admin so BCBAs can
+ * open it directly. Sharing failures are logged, never fatal.
+ */
+function provisionClientSheet(clientId, clientName) {
+  if (!clientId) throw new Error('provisionClientSheet: clientId required');
+
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(15000); } catch (e) {
+    throw new Error('Config busy, please retry.');
+  }
+  try {
+    var adminSS = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+    var clients = sheetToObjects(adminSS, 'Clients');
+
+    var client = null;
+    for (var i = 0; i < clients.length; i++) {
+      if (String(clients[i].id || '') === String(clientId)) { client = clients[i]; break; }
+    }
+    if (!client) throw new Error('Client not found: ' + clientId);
+
+    // Idempotent: if a sheet is already linked, return it instead of creating a
+    // duplicate orphan spreadsheet.
+    if (String(client.sheetId || '').trim()) {
+      return { created: false, sheetId: String(client.sheetId).trim() };
+    }
+
+    var name = clientName || client.name || clientId;
+    var ss = SpreadsheetApp.create('RT Data — ' + name);
+    var newId = ss.getId();
+
+    // Share with active admins (best-effort).
+    try {
+      var admins = sheetToObjects(adminSS, 'Admins');
+      for (var a = 0; a < admins.length; a++) {
+        var em = String(admins[a].email || '').trim();
+        if (em && (admins[a].status || 'active') !== 'inactive') {
+          try { ss.addEditor(em); } catch (shareErr) {
+            Logger.log('provision share ' + em + ': ' + shareErr.message);
+          }
+        }
+      }
+    } catch (adminErr) { Logger.log('provision admins read: ' + adminErr.message); }
+
+    // Persist the new sheetId onto the client row (colMap-based, never hardcoded).
+    _setClientSheetId(adminSS, clientId, newId);
+
+    writeAuditLog(new Date().toISOString(), 'system', 'client_provisioned', name,
+      'Created data sheet ' + newId + ' for client ' + clientId);
+
+    return { created: true, sheetId: newId };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** Write sheetId into the Clients tab for one client, by colMap (never hardcoded). */
+function _setClientSheetId(adminSS, clientId, sheetId) {
+  var sheet = adminSS.getSheetByName('Clients');
+  if (!sheet) throw new Error('Clients tab missing');
+  var values = sheet.getDataRange().getValues();
+  if (values.length < 2) throw new Error('Clients tab empty');
+  var header = values[0];
+  var colMap = {};
+  for (var c = 0; c < header.length; c++) colMap[String(header[c]).trim()] = c;
+  if (colMap.id === undefined || colMap.sheetId === undefined) {
+    throw new Error('Clients tab missing id/sheetId columns');
+  }
+  for (var r = 1; r < values.length; r++) {
+    if (String(values[r][colMap.id] || '') === String(clientId)) {
+      sheet.getRange(r + 1, colMap.sheetId + 1).setValue(sheetId);
+      return;
+    }
+  }
+  throw new Error('Client row not found for id ' + clientId);
+}
+
+/**
+ * Verify a client's linked data sheet is reachable by the backend and report
+ * which of the 5 expected data tabs already exist. A brand-new provisioned
+ * sheet legitimately has none until the first session is submitted — an empty
+ * existingTabs list with reachable:true is NOT an error.
+ */
+function verifyClientSheet(clientId) {
+  var adminSS = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var clients = sheetToObjects(adminSS, 'Clients');
+  var client = null;
+  for (var i = 0; i < clients.length; i++) {
+    if (String(clients[i].id || '') === String(clientId)) { client = clients[i]; break; }
+  }
+  if (!client) return { reachable: false, error: 'Client not found' };
+
+  var sheetId = String(client.sheetId || '').trim();
+  if (!sheetId) return { reachable: false, error: 'No Sheet ID configured' };
+
+  var ss;
+  try {
+    ss = SpreadsheetApp.openById(sheetId);
+  } catch (e) {
+    return { reachable: false, sheetId: sheetId,
+      error: 'Cannot open sheet (check it is shared with the app account): ' + e.message };
+  }
+
+  var expected = ['Time In Time Out', 'Behavior Data', 'Trial Data', 'ABC Data', 'Mastery Log'];
+  var existing = [];
+  var missing  = [];
+  for (var t = 0; t < expected.length; t++) {
+    if (ss.getSheetByName(expected[t])) existing.push(expected[t]);
+    else missing.push(expected[t]);
+  }
+  return {
+    reachable: true,
+    sheetId: sheetId,
+    name: ss.getName(),
+    url: ss.getUrl(),
+    existingTabs: existing,
+    missingTabs: missing
+  };
 }
 
 
@@ -2295,6 +2441,56 @@ function checkGoalUsage(goalCode, clients) {
 // ── TRIAL DATA RECOVERY ───────────────────────────────────────────────
 
 /**
+ * Editor-runnable, SAFE backfill: create + populate the "Trial Summary" tab for
+ * ONLY the client sheets that don't have one yet. Client sheets that already
+ * have a Trial Summary tab are never opened for writing, so no working sheet can
+ * be disturbed. Each target sheet's own "Trial Data" tab is the source of truth
+ * (same engine as recoverTrialData). Run previewMissingTrialSummaries() first.
+ * Returns { processed:[clientIds], stats }.
+ */
+function backfillMissingTrialSummaries() {
+  var ids = _clientsMissingTrialSummary();
+  if (!ids.length) {
+    Logger.log('backfillMissingTrialSummaries: every client sheet already has a Trial Summary tab — nothing to do.');
+    return { processed: [], message: 'All sheets already have Trial Summary.' };
+  }
+  Logger.log('backfillMissingTrialSummaries: building Trial Summary for client ids: ' + ids.join(', '));
+  var stats = recoverTrialData(false, ids); // live, but scoped to only the missing-tab clients
+  return { processed: ids, stats: stats };
+}
+
+/**
+ * Dry-run preview for backfillMissingTrialSummaries — writes NOTHING. Logs which
+ * client sheets are missing a Trial Summary tab and how many rows would be built.
+ */
+function previewMissingTrialSummaries() {
+  var ids = _clientsMissingTrialSummary();
+  Logger.log('Clients missing Trial Summary tab: ' + (ids.length ? ids.join(', ') : '(none)'));
+  if (ids.length) recoverTrialData(true, ids); // dry run, scoped
+  return { missing: ids };
+}
+
+/** Return the ids of active clients whose sheet has no "Trial Summary" tab. */
+function _clientsMissingTrialSummary() {
+  var adminSS    = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var allClients = sheetToObjects(adminSS, 'Clients');
+  var missing    = [];
+  for (var i = 0; i < allClients.length; i++) {
+    var c = allClients[i];
+    if ((c.status || 'active') === 'inactive') continue;
+    var sid = String(c.sheetId || '').trim();
+    if (!sid) continue;
+    try {
+      var ss = SpreadsheetApp.openById(sid);
+      if (!ss.getSheetByName('Trial Summary')) { missing.push(String(c.id || '')); }
+    } catch (e) {
+      Logger.log('_clientsMissingTrialSummary: cannot open ' + c.name + ': ' + e.message);
+    }
+  }
+  return missing;
+}
+
+/**
  * recoverTrialData — READ-ONLY on all existing tabs.
  *
  * Reads the "Trial Data" tab for each active client and recovers trial
@@ -2320,7 +2516,7 @@ function checkGoalUsage(goalCode, clients) {
  * @param {boolean} dryRun  true = log only, no sheet writes (default true).
  * @return {Object}         { grandStats, clients[] } with recovery counts.
  */
-function recoverTrialData(dryRun) {
+function recoverTrialData(dryRun, onlyClientIds) {
   var TRIAL_SUMMARY_TAB = 'Trial Summary';
   var SUMMARY_HEADERS = [
     'Date', 'Therapist', 'Setting', 'Goal Code', 'Goal Description',
@@ -2459,10 +2655,22 @@ function recoverTrialData(dryRun) {
     }
   }
 
+  // Optional scope filter: when onlyClientIds is a non-empty array of client ids,
+  // process ONLY those clients. Omitted/empty → all active clients (unchanged
+  // behavior for the existing router caller — fully backward compatible).
+  var scopeFilter = null;
+  if (onlyClientIds && onlyClientIds.length) {
+    scopeFilter = {};
+    for (var sfi = 0; sfi < onlyClientIds.length; sfi++) {
+      scopeFilter[String(onlyClientIds[sfi])] = true;
+    }
+  }
+
   var activeClients = [];
   for (var aci = 0; aci < allClients.length; aci++) {
     var ac = allClients[aci];
     if ((ac.status || 'active') !== 'inactive' && String(ac.sheetId || '').trim()) {
+      if (scopeFilter && !scopeFilter[String(ac.id || '')]) continue;
       activeClients.push(ac);
     }
   }
