@@ -2491,6 +2491,51 @@ function _clientsMissingTrialSummary() {
 }
 
 /**
+ * Read-only health check for the "Trial Summary" tab across all active clients.
+ * Logs per client: whether the tab exists, whether its header row matches the
+ * canonical 13-column schema, and how many data rows it holds. Writes NOTHING.
+ * Run from the Apps Script editor and read the Execution log.
+ */
+function checkTrialSummaryHealth() {
+  var EXPECTED = [
+    'Date', 'Therapist', 'Setting', 'Goal Code', 'Goal Description',
+    'Trial 1', 'Trial 2', 'Trial 3', 'Trial 4', 'Trial 5',
+    'Percentage', 'Source', 'Session ID'
+  ];
+  var adminSS    = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var allClients = sheetToObjects(adminSS, 'Clients');
+  Logger.log('=== Trial Summary health check ' + new Date().toISOString() + ' ===');
+  for (var i = 0; i < allClients.length; i++) {
+    var c = allClients[i];
+    if ((c.status || 'active') === 'inactive') continue;
+    var name = String(c.name || c.id || '');
+    var sid  = String(c.sheetId || '').trim();
+    if (!sid) { Logger.log('[' + name + '] no Sheet ID'); continue; }
+    try {
+      var ss = SpreadsheetApp.openById(sid);
+      var sh = ss.getSheetByName('Trial Summary');
+      if (!sh) { Logger.log('[' + name + '] Trial Summary: MISSING'); continue; }
+      var lastRow  = sh.getLastRow();
+      var lastCol  = sh.getLastColumn();
+      var dataRows = lastRow > 1 ? (lastRow - 1) : 0;
+      var headerState = 'EMPTY';
+      if (lastCol >= 1) {
+        var hdr = sh.getRange(1, 1, 1, Math.max(lastCol, EXPECTED.length)).getValues()[0];
+        var ok = true;
+        for (var h = 0; h < EXPECTED.length; h++) {
+          if (String(hdr[h] || '').trim() !== EXPECTED[h]) { ok = false; break; }
+        }
+        headerState = ok ? 'OK' : 'MISMATCH';
+      }
+      Logger.log('[' + name + '] Trial Summary: present | header=' + headerState + ' | dataRows=' + dataRows);
+    } catch (e) {
+      Logger.log('[' + name + '] ERROR: ' + e.message);
+    }
+  }
+  Logger.log('=== end health check ===');
+}
+
+/**
  * recoverTrialData — READ-ONLY on all existing tabs.
  *
  * Reads the "Trial Data" tab for each active client and recovers trial
