@@ -9,6 +9,11 @@ Mobile-first PWA for ABA therapy data collection with HIPAA compliance layer.
 | `manifest.json` | PWA manifest for Add to Home Screen |
 | `sw.js` | Service worker (offline support) |
 | `Code.gs` | Google Apps Script backend |
+| `BigQuerySync.gs` | BigQuery analytics sync (same Apps Script project, hourly trigger) |
+| `firebase.json` | Firebase Hosting config (site `rt-aba-tracker`) |
+| `rt_feature_tracker.jsx` | Roadmap / feature tracker component (served at `/tracker`) |
+
+Deployed on **Firebase Hosting** (`https://rt-aba-tracker.web.app`). Deploy the frontend with `firebase deploy --only hosting`.
 
 ---
 
@@ -26,6 +31,10 @@ Mobile-first PWA for ABA therapy data collection with HIPAA compliance layer.
 2. Leave it blank — the app creates the "Audit Log" tab automatically
 3. Copy the Sheet ID
 
+**Per-client sheets** (one spreadsheet per client) are **not created by hand** — see
+[Adding a New Client](#adding-a-new-client) below. The admin console can auto-create
+and link them, and the data tabs populate on the first submitted session.
+
 ### 2. Deploy Google Apps Script
 1. Go to [script.google.com](https://script.google.com) → **New Project**
 2. Paste contents of `Code.gs`
@@ -38,6 +47,11 @@ Mobile-first PWA for ABA therapy data collection with HIPAA compliance layer.
    - Execute as: **Me**
    - Who has access: **Anyone**
 5. Copy the Web App URL
+
+> **Updating `Code.gs` later:** paste the new code and Save (Cmd+S), then
+> **Deploy → Manage deployments → edit → Version: New version → Deploy**. Without the
+> new version, the web app keeps running the old code. (Editor-run functions like
+> `backfillMissingTrialSummaries` use the saved code and don't need a redeploy.)
 
 ### 3. Configure `index.html`
 Find these constants near the top of the `<script>` tag:
@@ -62,7 +76,7 @@ const ADMIN_PIN_DEFAULT = '1234';  // legacy fallback
 2. Create or select a project
 3. APIs & Services → Credentials → Create Credentials → **OAuth 2.0 Client ID**
 4. Application type: **Web application**
-5. Authorized JavaScript origins: add your hosted URL (e.g. `https://yourusername.github.io`)
+5. Authorized JavaScript origins: add your hosted URL (e.g. `https://rt-aba-tracker.web.app`)
 6. Copy the **Client ID** → paste into `GOOGLE_CLIENT_ID` in `index.html`
 7. Add authorized Tier 1 emails in Admin panel → **Admins** tab
 
@@ -171,17 +185,43 @@ Goals can now be assigned to multiple clients simultaneously (same as behaviors)
 
 ---
 
+## Adding a New Client
+
+Admin panel → **Clients** → **Add** (or **Edit** an existing client). Each client's
+therapy data lives in its own Google Spreadsheet, linked by **Sheet ID**.
+
+**Auto-create (recommended):** Save the client, reopen it, then click
+**➕ Auto-create Google Sheet**. The backend creates a new spreadsheet, links its ID
+to the client, and shares it with active admins. Because the sheet is owned by the
+Apps Script account, `processSession` and the BigQuery sync can read it with **no
+manual sharing step**.
+
+**Verify:** For a client that already has a Sheet ID, click **✓ Verify Sheet** to
+confirm the backend can open it and see which data tabs exist yet (none until the
+first session — that's normal).
+
+**Manual:** You can still paste an existing Sheet ID into the **Google Sheet ID**
+field. If you do, share that spreadsheet (Editor) with the Apps Script account.
+
+The per-client data tabs (Time In Time Out, Behavior Data, Trial Data, Trial Summary,
+ABC Data, Mastery Log) are generated automatically with correct headers on the first
+submitted session. For historical trial data added before the Trial Summary feature,
+run `backfillMissingTrialSummaries()` from the Apps Script editor — it builds the
+Trial Summary tab only for sheets that lack one, so working sheets are never touched.
+
+---
+
 ## Google Sheets Architecture
 
 ### RT Admin Sheet (shared config)
 | Tab | Columns |
 |-----|---------|
-| Therapists | id, name, initials, color, profile, email, pin, totpSecret, clientIds, weeklyHourLimit, payRate, status |
+| Therapists | id, name, initials, color, profile, email, pin, totpSecret, clientIds, weeklyHourLimit, payRate, status, role |
 | Clients | id, name, initials, sheetId, status |
 | Behaviors | key, label, icon, color, clientIds, status |
 | Goals | clientId, clientIds, code, description, numTrials, status |
 | Billing | profile, sessionType, code |
-| Authorizations | clientId, payerType, insuranceCompany, authorizationNumber, billingCode, authorizedHours, startDate, endDate, coInsurance, stepUpProgram, status |
+| Authorizations | clientId, payerType, insuranceCompany, authorizationNumber, billingCode, authorizedHours, startDate, endDate, coInsurance, stepUpProgram, status, unitRate, hourlyRate |
 | Admins | email, name, status |
 
 ### RT Audit Log Sheet (separate — HIPAA audit trail)
@@ -190,12 +230,25 @@ Goals can now be assigned to multiple clients simultaneously (same as behaviors)
 | Audit Log | Timestamp, User, Action, Client, Details |
 
 ### Per-Client Sheets (one per client)
+Created automatically — see [Adding a New Client](#adding-a-new-client). Tabs are
+generated with correct headers on the first submitted session.
+
 | Tab | Purpose |
 |-----|---------|
 | Time In Time Out | Date, Billing Code, Session Type, Times, Duration, Therapist, Submission ID, Notes |
 | Behavior Data | Dynamic columns per behavior |
 | Trial Data | Dynamic columns per goal |
+| Trial Summary | Normalized one-row-per-goal analytics view (used by reports/BigQuery) |
 | ABC Data | Incident records |
+| Mastery Log | Goal/behavior mastery entries + BCBA approval status |
+
+Analytics columns (`submissionId`, `clientId`, `dateISO`, etc.) are appended after the
+core columns on every tab. Column writes are colMap-based — positions are never hardcoded.
+
+### BigQuery Analytics (optional)
+`BigQuerySync.gs` (same Apps Script project) syncs all client sheets into BigQuery
+hourly for Looker Studio reporting. New clients are picked up automatically once they
+are active and have a Sheet ID.
 
 ---
 
