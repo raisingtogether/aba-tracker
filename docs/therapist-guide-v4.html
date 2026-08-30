@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  @page { size: Letter; margin: 0.5in; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    color: #1f2d3d; font-size: 12px; line-height: 1.45;
+  }
+  .head {
+    background: linear-gradient(100deg, #00A7C7, #0787a0);
+    color: #fff; border-radius: 14px; padding: 16px 20px; margin-bottom: 14px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .head h1 { font-size: 21px; font-weight: 800; letter-spacing: .2px; }
+  .head p { font-size: 12px; opacity: .95; margin-top: 3px; }
+  .badge {
+    background: rgba(255,255,255,.18); border: 1px solid rgba(255,255,255,.5);
+    border-radius: 999px; padding: 5px 12px; font-weight: 700; font-size: 11px; white-space: nowrap;
+  }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .card {
+    border: 1px solid #e3e8ee; border-radius: 12px; padding: 13px 15px; background: #fff;
+  }
+  .card.full { grid-column: 1 / -1; }
+  .card h2 { font-size: 14px; color: #067a92; margin-bottom: 7px; display: flex; align-items: center; gap: 8px; }
+  .ic { font-size: 17px; }
+  .card p { margin-bottom: 6px; }
+  .steps { list-style: none; margin: 6px 0 0; }
+  .steps li { position: relative; padding-left: 24px; margin-bottom: 5px; }
+  .steps li .n {
+    position: absolute; left: 0; top: 0; width: 17px; height: 17px; border-radius: 50%;
+    background: #00A7C7; color: #fff; font-size: 10px; font-weight: 800;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .pill { display: inline-block; background: #e8f7fb; color: #0787a0; border-radius: 6px;
+    padding: 1px 7px; font-weight: 700; font-size: 11px; }
+  .tips { background: #fff8e6; border: 1px solid #f2e0ac; border-radius: 12px; padding: 12px 15px; }
+  .tips h2 { color: #9a6a00; }
+  .tips ul { margin: 4px 0 0 18px; }
+  .tips li { margin-bottom: 4px; }
+  .foot { margin-top: 12px; text-align: center; color: #7a8794; font-size: 10.5px; }
+  strong { color: #0d3b45; }
+</style>
+</head>
+<body>
+  <div class="head">
+    <div>
+      <h1>What&rsquo;s New in the ABA Tracker</h1>
+      <p>A quick guide for therapists &mdash; how to pause, resume, and never lose your data.</p>
+    </div>
+    <div class="badge">Version 4</div>
+  </div>
+
+  <div class="grid">
+
+    <div class="card">
+      <h2><span class="ic">&#9208;&#65039;</span> Pause a session anytime</h2>
+      <p>Need to stop in the middle &mdash; traveling to another location, a patient break, the bathroom, or you lost internet? Just pause. <strong>Your data and your time are saved.</strong></p>
+      <ul class="steps">
+        <li><span class="n">1</span> Tap <span class="pill">&#9208; Pause</span> at the top of the session.</li>
+        <li><span class="n">2</span> Pick a reason if you want (optional).</li>
+        <li><span class="n">3</span> Tap <strong>Pause &amp; Save</strong>. You&rsquo;re done for now.</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2><span class="ic">&#9654;&#65039;</span> Resume where you left off</h2>
+      <p>Your paused session waits for you &mdash; on <strong>any device</strong>. Start on your phone, finish on your tablet.</p>
+      <ul class="steps">
+        <li><span class="n">1</span> Go to the <strong>client screen</strong> after logging in.</li>
+        <li><span class="n">2</span> Tap your <span class="pill">Paused session</span> card at the top.</li>
+        <li><span class="n">3</span> Everything is exactly as you left it. Keep going!</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2><span class="ic">&#128246;</span> Works without internet</h2>
+      <p>No signal? Keep collecting data normally &mdash; the app saves everything on your device.</p>
+      <p>When you tap <strong>Submit</strong> with no connection, the session is safely stored and <strong>sends itself automatically</strong> the moment you&rsquo;re back online.</p>
+    </div>
+
+    <div class="card">
+      <h2><span class="ic">&#128190;</span> Your data is protected</h2>
+      <p>The app <strong>auto-saves every few seconds</strong> while you work.</p>
+      <p>If your phone closes, dies, or refreshes, you&rsquo;ll see a <strong>&ldquo;Recovered&rdquo;</strong> card next time you log in so you can finish the session &mdash; nothing is lost.</p>
+    </div>
+
+    <div class="card full">
+      <h2><span class="ic">&#9201;&#65039;</span> Your session time stays accurate</h2>
+      <p>Time spent paused (travel, breaks) is <strong>not counted</strong> in the session length. The recorded therapy time reflects the <strong>actual time you spent with the client</strong> &mdash; so your hours are always correct.</p>
+    </div>
+
+    <div class="tips card full">
+      <h2><span class="ic">&#128161;</span> Good to know</h2>
+      <ul>
+        <li>You can pause and resume <strong>as many times as you need</strong> in one session.</li>
+        <li>If you&rsquo;re offline with a paused or not-yet-sent session, <strong>don&rsquo;t log out</strong> &mdash; the app will warn you, because logging out could lose it. Wait until you&rsquo;re back online.</li>
+        <li>A green &ldquo;synced&rdquo; message means your paused session is safely on the server and available on other devices.</li>
+      </ul>
+    </div>
+
+  </div>
+
+  <div class="foot">
+    Raising Together &bull; ABA Tracker v4 &nbsp;|&nbsp; Questions? Contact your BCBA.
+  </div>
+</body>
+</html>
