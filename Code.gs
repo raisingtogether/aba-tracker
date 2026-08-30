@@ -780,6 +780,11 @@ function saveSuspendedSession(d) {
       }
     }
 
+    // 'paused' = explicitly parked by the therapist (always resumable).
+    // 'live'   = continuous backup of an in-progress session (Feature B),
+    //            surfaced for recovery on another device only if it goes stale.
+    var statusVal = (d.status === 'live') ? 'live' : 'paused';
+
     var row = [];
     for (var ci = 0; ci < lastCol; ci++) row.push('');
     if (colMap['suspendId']      !== undefined) row[colMap['suspendId']]      = d.suspendId;
@@ -789,7 +794,7 @@ function saveSuspendedSession(d) {
     if (colMap['sheetId']        !== undefined) row[colMap['sheetId']]        = d.sheetId        || '';
     if (colMap['dateISO']        !== undefined) row[colMap['dateISO']]        = d.dateISO        || '';
     if (colMap['updatedAt']      !== undefined) row[colMap['updatedAt']]      = updatedAt;
-    if (colMap['status']         !== undefined) row[colMap['status']]         = 'active';
+    if (colMap['status']         !== undefined) row[colMap['status']]         = statusVal;
     if (colMap['stateJson']      !== undefined) row[colMap['stateJson']]      = stateJson;
 
     if (targetRow > 0) {
@@ -798,18 +803,23 @@ function saveSuspendedSession(d) {
       sheet.appendRow(row);
     }
 
-    writeAuditLog(updatedAt, d.therapistEmail || 'system', 'session_paused',
-      d.clientName || '', 'Suspended session ' + d.suspendId + ' saved');
+    // Audit only explicit pauses (live backups fire every ~60s — too noisy).
+    if (statusVal === 'paused') {
+      writeAuditLog(updatedAt, d.therapistEmail || 'system', 'session_paused',
+        d.clientName || '', 'Suspended session ' + d.suspendId + ' saved');
+    }
 
-    return { suspendId: d.suspendId, updatedAt: updatedAt };
+    return { suspendId: d.suspendId, updatedAt: updatedAt, status: statusVal };
   } finally {
     lock.releaseLock();
   }
 }
 
 /**
- * Return this therapist's ACTIVE paused sessions (most-recent first), each with
- * its full state parsed from stateJson. Optionally filter by clientId.
+ * Return this therapist's resumable sessions (most-recent first), each with its
+ * full state parsed from stateJson and its status ('paused' or 'live'). The
+ * frontend shows 'paused' always and 'live' only when stale (device-loss
+ * recovery). Optionally filter by clientId.
  */
 function listSuspendedSessions(therapistEmail, clientId) {
   var ss   = SpreadsheetApp.openById(ADMIN_SHEET_ID);
@@ -820,7 +830,9 @@ function listSuspendedSessions(therapistEmail, clientId) {
 
   for (var i = 0; i < rows.length; i++) {
     var rec = rows[i];
-    if (String(rec.status || 'active') !== 'active') continue;
+    var st  = String(rec.status || 'paused');
+    // 'active' kept for backward-compat with any pre-existing rows.
+    if (st !== 'paused' && st !== 'live' && st !== 'active') continue;
     if (wantEmail && String(rec.therapistEmail || '').toLowerCase().trim() !== wantEmail) continue;
     if (wantClient && String(rec.clientId || '') !== wantClient) continue;
 
@@ -836,6 +848,7 @@ function listSuspendedSessions(therapistEmail, clientId) {
       sheetId:        rec.sheetId,
       dateISO:        rec.dateISO,
       updatedAt:      rec.updatedAt,
+      status:         st,
       state:          state
     });
   }
@@ -942,19 +955,22 @@ function cleanupStaleSuspendedSessions(maxAgeDays) {
 // ── SESSION: PROCESS ──────────────────────────────────────────────────
 
 function processSession(d) {
-  // Cross-device dedup for resumed (previously-paused) sessions: if this paused
-  // session was already completed on another device (its suspended record is
-  // gone), skip writing to avoid duplicate rows. Never-paused sessions have no
-  // suspendId and are unaffected.
-  if (d.suspendId) {
-    if (!_suspendedSessionExists(d.suspendId)) {
-      writeAuditLog(new Date().toISOString(), d.therapist || '', 'session_submit_skipped',
-        d.clientName || '', 'Resumed session ' + d.suspendId + ' already completed elsewhere — skipped');
-      return;
+  var ss = SpreadsheetApp.openById(d.sheetId);
+
+  // Idempotency guard: never write the same session twice. submissionId is
+  // stable per session (generated once at session start, preserved across
+  // pause/resume/re-auth and across devices), so this safely dedups offline
+  // retries (Feature A queue) AND cross-device resume/completion. Normal
+  // sessions are unaffected (each has a unique submissionId).
+  if (d.submissionId && _sessionAlreadyRecorded(ss, d.submissionId)) {
+    writeAuditLog(new Date().toISOString(), d.therapist || '', 'session_submit_duplicate',
+      d.clientName || '', 'submissionId ' + d.submissionId + ' already recorded — skipped');
+    if (d.suspendId) {
+      try { deleteSuspendedSession(d.suspendId); } catch (e) {}
     }
+    return;
   }
 
-  var ss = SpreadsheetApp.openById(d.sheetId);
   writeBehaviorData(ss, d);
   writeSessionLog(ss, d);
   writeTrialData(ss, d);
@@ -968,27 +984,37 @@ function processSession(d) {
     'Session ' + (d.submissionId || '') + ' duration=' + (d.durationMin || 0) + 'min'
   );
 
-  // Resumed session completed — remove its suspended record (delete happens
-  // AFTER a successful write so a write failure never orphans the paused data).
+  // Remove the suspended/live backup record for this session, if any (delete
+  // happens AFTER a successful write so a failure never orphans the data).
   if (d.suspendId) {
     try { deleteSuspendedSession(d.suspendId); }
     catch (e) { Logger.log('processSession: deleteSuspendedSession failed: ' + e.message); }
   }
 }
 
-/** True if an ACTIVE suspended-session row with this id still exists. */
-function _suspendedSessionExists(suspendId) {
+/** True if a session with this submissionId is already recorded (Time In Time Out tab). */
+function _sessionAlreadyRecorded(ss, submissionId) {
   try {
-    var ss   = SpreadsheetApp.openById(ADMIN_SHEET_ID);
-    var rows = sheetToObjects(ss, SUSPENDED_TAB);
-    for (var i = 0; i < rows.length; i++) {
-      if (String(rows[i].suspendId || '') === String(suspendId) &&
-          String(rows[i].status || 'active') === 'active') {
-        return true;
-      }
+    var sheet = ss.getSheetByName('Time In Time Out');
+    if (!sheet) return false;
+    var lastRow = sheet.getLastRow();
+    var lastCol = sheet.getLastColumn();
+    if (lastRow < 2 || lastCol < 1) return false;
+    var header = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+    var idx = -1;
+    for (var c = 0; c < header.length; c++) {
+      if (String(header[c]).trim() === 'submissionId') { idx = c; break; }
     }
-  } catch (e) { Logger.log('_suspendedSessionExists error: ' + e.message); }
-  return false;
+    if (idx < 0) return false;
+    var col = sheet.getRange(2, idx + 1, lastRow - 1, 1).getValues();
+    for (var r = 0; r < col.length; r++) {
+      if (String(col[r][0] || '') === String(submissionId)) return true;
+    }
+    return false;
+  } catch (e) {
+    Logger.log('_sessionAlreadyRecorded error: ' + e.message);
+    return false; // fail open — never block a legitimate submit
+  }
 }
 
 /**

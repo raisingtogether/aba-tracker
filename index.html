@@ -1315,7 +1315,8 @@ let S = {
   endTimeAdjustmentReason: '',
   submitted: false,               // true once this session was submitted (success screen shown)
   // ── Pause / resume (see PAUSE & RESUME section) ──
-  suspendId:     null,   // UUID once this session has been paused at least once
+  submissionId:  null,   // STABLE id per session (idempotency key for submit dedup)
+  suspendId:     null,   // UUID once this session has a server backup (pause or live)
   everPaused:    false,  // true if the session was paused any time (switches duration to active-time accounting)
   paused:        false,  // true while currently paused (not on the session screen)
   pauseStartTs:  null,    // Date.now() when the current pause began
@@ -1645,6 +1646,7 @@ function beginSession() {
   S.pauseLog      = [];
   S.suspendId     = null;   // brand-new session — not a resume
   S.isResumed     = false;
+  S.submissionId  = generateUUID();  // stable idempotency key for this session
   if (S.sessInterval) clearInterval(S.sessInterval);
   S.sessInterval = setInterval(updateElapsed, 1000);
   startAutoSave();
@@ -1715,6 +1717,7 @@ function buildSessionSnapshot(status) {
   return {
     v: 2,
     status: status || 'active',
+    submissionId:   S.submissionId || null,
     suspendId:      S.suspendId || null,
     clientId:       S.client ? (S.client.id || '') : '',
     clientName:     S.client ? S.client.name : '',
@@ -1758,17 +1761,41 @@ function clearLocalAutoSave() {
   try { localStorage.removeItem(LOCAL_BACKUP_KEY); } catch (e) {}
 }
 
+var _autoSaveTick = 0;
 function startAutoSave() {
   stopAutoSave();
+  _autoSaveTick = 0;
   S.autoSaveInterval = setInterval(function() {
     if (S.submitted || S.paused || !S.client) return;
-    // 'active' backups are crash-recovery only — marked synced so the online
-    // handler never tries to push them to the server (only explicit pauses sync).
+    // Local crash-recovery backup every tick (offline-safe, same-device).
     saveLocalBackup(buildSessionSnapshot('active'), true);
+    _autoSaveTick++;
+    // Feature B: mirror the in-progress session to the server as a 'live' backup
+    // (~every 60s, only when online) so a lost/dead device is cross-device
+    // recoverable. Best-effort and non-blocking.
+    if (_autoSaveTick % 4 === 0 && navigator.onLine && GAS_URL !== 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') {
+      pushLiveBackup();
+    }
   }, AUTOSAVE_MS);
 }
 function stopAutoSave() {
   if (S.autoSaveInterval) { clearInterval(S.autoSaveInterval); S.autoSaveInterval = null; }
+}
+
+// Feature B: push the current in-progress session to the server as a 'live'
+// backup. Assigns a suspendId lazily (only once a server record exists), so a
+// never-synced session leaves no server row and normal completion is unaffected.
+function pushLiveBackup() {
+  try {
+    if (!S.client || S.paused || S.submitted) return;
+    if (!S.suspendId) S.suspendId = generateUUID();
+    var snap = buildSessionSnapshot('active');
+    snap.suspendId = S.suspendId;
+    var payload = suspendPayloadFromSnapshot(snap);
+    payload.status = 'live';
+    fetch(GAS_URL, { method:'POST', headers:{'Content-Type':'text/plain'}, redirect:'follow',
+      body: JSON.stringify(payload) }).catch(function(){});
+  } catch (e) { /* best-effort */ }
 }
 
 // Map a snapshot to the server upsert payload.
@@ -1875,6 +1902,7 @@ function applySessionSnapshot(snap) {
     S.client    = client;
     S.therapist = therapist || S.therapist;
     S.suspendId = snap.suspendId || null;
+    S.submissionId = snap.submissionId || generateUUID();  // preserve stable id across resume
     S.sessType  = snap.sessType || null;
     S.location  = snap.location || null;
     S.dateStr   = snap.dateStr || null;
@@ -1967,12 +1995,27 @@ async function renderResumeCards() {
   const email = AUTH.user ? AUTH.user.email : '';
   let sessions = [];
 
+  const LIVE_STALE_MS = 3 * 60 * 1000;  // a 'live' record fresher than this is on an active device — hide it
+  const nowMs = Date.now();
+
   if (GAS_URL !== 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE' && email) {
     try {
       const resp = await fetch(GAS_URL, { method:'POST', headers:{'Content-Type':'text/plain'}, redirect:'follow',
         body: JSON.stringify({ action:'listSuspendedSessions', therapistEmail: email }) });
       const data = await resp.json();
-      if (data && data.success && Array.isArray(data.sessions)) sessions = data.sessions.filter(function(s){ return s.state; });
+      if (data && data.success && Array.isArray(data.sessions)) {
+        sessions = data.sessions.filter(function(s){
+          if (!s.state) return false;
+          // 'paused' → always show. 'live' → only if stale (device likely died);
+          // a fresh 'live' record means another device is actively working on it.
+          if (s.status === 'live') {
+            var upd = s.updatedAt ? new Date(s.updatedAt).getTime() : 0;
+            if (nowMs - upd < LIVE_STALE_MS) return false;
+            s._recovered = true;  // stale live → offer as recovery
+          }
+          return true;
+        });
+      }
     } catch (e) { /* offline — local fallback below */ }
   }
 
@@ -2022,7 +2065,52 @@ async function syncPendingPause() {
     if (data && data.success) { saveLocalBackup(local.snapshot, true); toast('Paused session synced to server', 'ok'); }
   } catch (e) { /* still offline */ }
 }
-window.addEventListener('online', syncPendingPause);
+
+// ── Feature A: offline submit queue ──
+const PENDING_SUBMITS_KEY = 'rtPendingSubmits';
+function readPendingSubmits() {
+  try { return JSON.parse(localStorage.getItem(PENDING_SUBMITS_KEY) || '[]'); }
+  catch (e) { return []; }
+}
+function writePendingSubmits(q) {
+  try { localStorage.setItem(PENDING_SUBMITS_KEY, JSON.stringify(q)); } catch (e) {}
+}
+function enqueuePendingSubmit(payload) {
+  var q = readPendingSubmits();
+  // De-dupe by submissionId so a re-attempt doesn't queue twice.
+  q = q.filter(function(p){ return p.submissionId !== payload.submissionId; });
+  q.push(payload);
+  writePendingSubmits(q);
+}
+function hasPendingSubmits() { return readPendingSubmits().length > 0; }
+
+// Flush queued offline submissions; safe to call repeatedly (server dedups by
+// submissionId). Items are kept if still offline or on a server error.
+async function flushSubmitQueue() {
+  if (GAS_URL === 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') return;
+  var q = readPendingSubmits();
+  if (!q.length) return;
+  var remaining = [];
+  var sent = 0;
+  for (var i = 0; i < q.length; i++) {
+    try {
+      var resp = await fetch(GAS_URL, { method:'POST', headers:{'Content-Type':'text/plain'}, redirect:'follow',
+        body: JSON.stringify(q[i]) });
+      var data = await resp.json();
+      if (data && data.success) { sent++; }
+      else { remaining.push(q[i]); }   // server error — keep for retry
+    } catch (e) { remaining.push(q[i]); } // still offline — keep
+  }
+  writePendingSubmits(remaining);
+  if (sent > 0) toast(sent + ' offline session' + (sent === 1 ? '' : 's') + ' submitted', 'ok');
+}
+
+// On reconnect: sync any pending paused session, then flush queued submits.
+async function onReconnect() {
+  await syncPendingPause();
+  await flushSubmitQueue();
+}
+window.addEventListener('online', onReconnect);
 
 
 // ─── TAB SWITCHING ────────────────────────────────────────────────────
@@ -2414,6 +2502,10 @@ function confirmLogout() {
   if (lb && lb.snapshot && lb.snapshot.status === 'paused' && !lb.synced) {
     if (!window.confirm('A paused session on this device has NOT synced to the server yet (you may be offline). Logging out will lose it. Log out anyway?')) return;
   }
+  // Warn if there are offline-queued submissions not yet sent to the server.
+  if (hasPendingSubmits()) {
+    if (!window.confirm('A completed session is queued to submit when you are back online. Logging out will lose it. Log out anyway?')) return;
+  }
   // Simple confirm dialog since we can't use custom modals during session without extra HTML
   if (window.confirm('Are you sure you want to logout? Any unsaved session data will be lost.')) {
     EventBus.emit('session:logout', {
@@ -2533,10 +2625,14 @@ async function doSubmitSession() {
       toast('Submit failed: ' + (data.error || 'Unknown error'), 'err');
     }
   } catch(e) {
+    // Feature A: offline at submit \u2192 queue the completed session and auto-send
+    // when connectivity returns. submissionId makes the retry idempotent, so no
+    // duplicate row. The therapist can safely move on.
     _submitting = false;
     document.getElementById('loading').classList.remove('active');
-    if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Submit Session \u2713'; }
-    toast('Network error \u2014 check connection', 'err');
+    enqueuePendingSubmit(payload);
+    logAuditEvent('session_submit_queued', AUTH.user ? AUTH.user.email : S.therapist ? S.therapist.name : '', S.client ? S.client.name : '', 'Queued offline; submissionId=' + payload.submissionId);
+    showSuccess(true);
   }
 }
 
@@ -2564,7 +2660,9 @@ function buildPayload() {
     return { goalCode:g.code, goalName:g.description, trials:t.map(v=>v===true?'\u2713':v===false?'\u2717':''), percentage:pct };
   });
 
-  const _subId = generateUUID();
+  // Stable per-session id (set at beginSession / restored on resume) so retries
+  // and cross-device completion are idempotent; fall back for manual entries.
+  const _subId = S.submissionId || generateUUID();
   const _core  = JSON.stringify({ therapist: S.therapist.name, client: S.client.name,
     date: S.dateStr, timeIn: S.actualStartTime || S.timeIn, timeOut: S.timeOut });
   const _submittedAt = new Date().toISOString();
@@ -2623,16 +2721,21 @@ function buildPayload() {
   };
 }
 
-function showSuccess() {
+function showSuccess(offlineQueued) {
   window.onbeforeunload = null;
   // Mark the in-memory session as completed so a return-from-background re-auth
   // does not "restore" this already-submitted session (tab stays open \u2192 S persists).
   S.submitted = true;
   // Session is complete \u2014 stop crash-safe auto-save and clear the local copy.
-  // The server-side suspended record (if any) was removed by processSession.
+  // The server-side suspended record (if any) was removed by processSession
+  // (or will be when the queued submit flushes).
   stopAutoSave();
   clearLocalAutoSave();
-  document.getElementById('success-sub').textContent = S.client.name + ' \u2014 ' + S.dateStr;
+  var sub = document.getElementById('success-sub');
+  if (sub) {
+    sub.textContent = S.client.name + ' \u2014 ' + S.dateStr +
+      (offlineQueued ? '  \u26a0 Offline \u2014 will submit automatically when connection returns' : '');
+  }
   document.getElementById('success-screen').classList.add('active');
 }
 
@@ -2664,7 +2767,7 @@ function resetState() {
   S.adjustedEndTime = null; S.adjustedEndTimeDate = null; S.endTimeAdjustmentReason = '';
   S.submitted = false;
   // Pause/resume fields
-  S.suspendId = null; S.everPaused = false; S.paused = false;
+  S.suspendId = null; S.submissionId = null; S.everPaused = false; S.paused = false;
   S.pauseStartTs = null; S.segStartTs = null;
   S.activeMsAccum = 0; S.pausedMsTotal = 0; S.pauseLog = []; S.isResumed = false;
   stopAutoSave();
@@ -3717,6 +3820,7 @@ function saveSessionForReauth() {
       therapistId:          S.therapist ? (S.therapist.id || '') : '',
       abcIdSeq:             abcIdSeq,
       // Pause/resume accounting — preserved across re-auth
+      submissionId:         S.submissionId || null,
       suspendId:            S.suspendId || null,
       everPaused:           !!S.everPaused,
       isResumed:            !!S.isResumed,
@@ -4037,6 +4141,7 @@ function restoreSessionAfterReauth() {
     S.pausedMsTotal = snap.pausedMsTotal || 0;
     S.pauseLog      = snap.pauseLog || [];
     S.suspendId     = snap.suspendId || null;
+    S.submissionId  = snap.submissionId || S.submissionId || generateUUID();
     S.everPaused    = !!snap.everPaused;
     S.isResumed     = !!snap.isResumed;
     S.paused        = false;
@@ -4122,6 +4227,11 @@ function afterAuth() {
   }
 
   startInactivityTimer();
+
+  // If online, flush any offline-queued submissions and sync a pending pause
+  // left over from a prior session on this device (Features A & B).
+  if (navigator.onLine) { onReconnect(); }
+
   const role = AUTH.role || 'collector';
 
   // Pre-select self as therapist for non-admin roles
