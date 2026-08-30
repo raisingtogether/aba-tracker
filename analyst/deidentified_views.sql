@@ -106,8 +106,19 @@ FROM `rt-aba-tracker.aba_tracker.authorizations` a
 LEFT JOIN used u
   ON u.client_id = a.client_id AND u.billing_code = a.billing_code;
 
--- NOTE: mastery_log columns were not verified here — before adding a mastery
--- view, run:
---   SELECT column_name FROM `rt-aba-tracker.aba_tracker`.INFORMATION_SCHEMA.COLUMNS
---   WHERE table_name = 'mastery_log' ORDER BY ordinal_position;
--- then add a v_mastery view selecting client_id, type, code, status, mastery_date.
+-- ── Mastery / RBT review: goal & behavior mastery entries + BCBA workflow ───
+-- Columns from BigQuerySync.gs bqReadMasteryRows. Excludes client_name (PHI).
+-- status: '' | recommended | pendingGeneralization | confirmed | dismissed
+CREATE OR REPLACE VIEW `rt-aba-tracker.aba_tracker.v_mastery` AS
+SELECT
+  client_id,
+  type,                       -- 'goal' | 'behavior'
+  code,
+  description,
+  SAFE.PARSE_DATE('%Y-%m-%d', date_iso) AS mastery_date,
+  status,
+  approved_by,
+  approval_date,
+  settings_observed,
+  therapist_name
+FROM `rt-aba-tracker.aba_tracker.mastery_log`;

@@ -13,6 +13,17 @@ source. (Using the de-identified views keeps PHI out of the reports.)
 - **Drop-down control** → `client_id` (or a client-initials view if you prefer)
 - **Drop-down control** → `therapist_name`
 
+### Quick start — pre-connect the data sources (Linking API)
+
+Create the views first, then open this URL while signed into a Google account
+with access. It spins up a new **"RT ABA Analytics"** report with all 7 views
+already connected as BigQuery data sources — you just add charts per the pages
+below (the Linking API can't create the charts themselves).
+
+```
+https://lookerstudio.google.com/reporting/create?c.mode=edit&r.reportName=RT+ABA+Analytics&ds.sessions.connector=bigQuery&ds.sessions.type=TABLE&ds.sessions.projectId=rt-aba-tracker&ds.sessions.billingProjectId=rt-aba-tracker&ds.sessions.datasetId=aba_tracker&ds.sessions.tableId=v_sessions_deid&ds.sessions.refreshFields=true&ds.billing.connector=bigQuery&ds.billing.type=TABLE&ds.billing.projectId=rt-aba-tracker&ds.billing.billingProjectId=rt-aba-tracker&ds.billing.datasetId=aba_tracker&ds.billing.tableId=v_billing_by_week&ds.billing.refreshFields=true&ds.therapisthours.connector=bigQuery&ds.therapisthours.type=TABLE&ds.therapisthours.projectId=rt-aba-tracker&ds.therapisthours.billingProjectId=rt-aba-tracker&ds.therapisthours.datasetId=aba_tracker&ds.therapisthours.tableId=v_therapist_hours_by_week&ds.therapisthours.refreshFields=true&ds.goalprogress.connector=bigQuery&ds.goalprogress.type=TABLE&ds.goalprogress.projectId=rt-aba-tracker&ds.goalprogress.billingProjectId=rt-aba-tracker&ds.goalprogress.datasetId=aba_tracker&ds.goalprogress.tableId=v_goal_progress&ds.goalprogress.refreshFields=true&ds.behaviortrend.connector=bigQuery&ds.behaviortrend.type=TABLE&ds.behaviortrend.projectId=rt-aba-tracker&ds.behaviortrend.billingProjectId=rt-aba-tracker&ds.behaviortrend.datasetId=aba_tracker&ds.behaviortrend.tableId=v_behavior_trend&ds.behaviortrend.refreshFields=true&ds.authutil.connector=bigQuery&ds.authutil.type=TABLE&ds.authutil.projectId=rt-aba-tracker&ds.authutil.billingProjectId=rt-aba-tracker&ds.authutil.datasetId=aba_tracker&ds.authutil.tableId=v_authorization_utilization&ds.authutil.refreshFields=true&ds.mastery.connector=bigQuery&ds.mastery.type=TABLE&ds.mastery.projectId=rt-aba-tracker&ds.mastery.billingProjectId=rt-aba-tracker&ds.mastery.datasetId=aba_tracker&ds.mastery.tableId=v_mastery&ds.mastery.refreshFields=true
+```
+
 ---
 
 ## Page 1 — Billing & Hours   (source: `v_billing_by_week`, `v_sessions_deid`)
@@ -52,6 +63,16 @@ source. (Using the de-identified views keeps PHI out of the reports.)
 |-------|------|-----------|--------|
 | Hours by therapist by week | Time series | `week_start` (breakdown `therapist_name`) | SUM `hours` |
 | Sessions by therapist | Bar | `therapist_name` | SUM `sessions` |
+
+## Page 6 — Mastery / RBT review   (source: `v_mastery`)
+| Chart | Type | Dimension | Metric / note |
+|-------|------|-----------|---------------|
+| Pending BCBA review | Table | `client_id`, `type`, `code`, `description`, `status` | filter `status` = recommended / pendingGeneralization |
+| Confirmed mastery | Scorecard | — | COUNT where `status` = confirmed |
+| Mastery over time | Time series | `mastery_date` (breakdown `type`) | COUNT records |
+| Review detail | Table | `code`, `status`, `approved_by`, `approval_date`, `settings_observed` | — |
+> `type` = goal or behavior. Use the `status` filter to drive the BCBA
+> Approve/Dismiss workflow queue.
 
 ---
 
