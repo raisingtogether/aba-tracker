@@ -14,3 +14,10 @@
 
 # Node (if ever added)
 node_modules/
+
+# Analyst / BigQuery MCP — NEVER commit service-account keys or local creds
+*.sa.json
+bq-readonly-sa.json
+analyst/*.json
+.mcp.local.json
+.rt-aba/

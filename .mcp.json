@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "bigquery-analyst": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@ergut/mcp-bigquery-server",
+        "--project-id",
+        "rt-aba-tracker"
+      ]
+    }
+  }
+}
