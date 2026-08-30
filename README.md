@@ -1,6 +1,29 @@
-# Raising Together ABA Tracker v3
+# Raising Together ABA Tracker v4
 
 Mobile-first PWA for ABA therapy data collection with HIPAA compliance layer.
+
+## What's new in v4
+
+- **Pause & resume sessions** — a therapist can pause an in-progress session for
+  any interruption (travel, patient break, bathroom, connectivity loss) and
+  resume later on **any device**. Paused time is **excluded from billable
+  duration** (active-time accounting); never-paused sessions are unchanged.
+- **Offline-safe capture** — continuous device auto-save (crash recovery), an
+  **offline submit queue** that auto-sends on reconnect, and a **live
+  cross-device backup** so a lost/dead device is recoverable. All submissions are
+  **idempotent** via a stable per-session `submissionId` (no duplicate rows).
+- **Client sheet auto-provisioning** — create + link a client's Google Sheet
+  from the admin console (owned by the app account; no manual sharing), plus a
+  **Verify Sheet** check.
+- **Live Trial Summary writes** — the normalized Trial Summary tab is now written
+  on every session (previously batch-only), with a scoped backfill helper for
+  sheets that predate it.
+- **Read-only BigQuery analyst scaffold** — optional MCP + skills for
+  conversational analytics (see `analyst/README.md`). Analyst/admin tool only —
+  not part of the end-user app.
+
+See [CHANGELOG / feature detail](#v4-feature-detail) below and `CLAUDE.md` for
+the full data-model notes.
 
 ## Files
 | File | Purpose |
@@ -223,6 +246,7 @@ Trial Summary tab only for sheets that lack one, so working sheets are never tou
 | Billing | profile, sessionType, code |
 | Authorizations | clientId, payerType, insuranceCompany, authorizationNumber, billingCode, authorizedHours, startDate, endDate, coInsurance, stepUpProgram, status, unitRate, hourlyRate |
 | Admins | email, name, status |
+| Suspended Sessions | suspendId, therapistEmail, clientId, clientName, sheetId, dateISO, updatedAt, status, stateJson *(v4 — pause/resume; transient, not synced to BigQuery)* |
 
 ### RT Audit Log Sheet (separate — HIPAA audit trail)
 | Tab | Columns |
@@ -268,3 +292,57 @@ If `GAS_URL` is left as `YOUR_GOOGLE_APPS_SCRIPT_URL_HERE`:
 - Login accepts any credentials matching local config (no server verification)
 - Session data logged to console instead of Google Sheets
 - Audit log stored in localStorage only
+
+---
+
+## v4 feature detail
+
+### Pause & resume (cross-device, offline-safe)
+- **Pause** button on the session screen (with optional reason: Travel / Patient
+  break / Bathroom / Connectivity / Other). Saves a lossless JSON snapshot to the
+  server (`Suspended Sessions` tab) **and** to `localStorage`.
+- **Resume** cards appear on the client screen (from server + local); tapping one
+  fully rehydrates the session and continues the clock.
+- **Billing:** duration = active therapy time only. `Time Out − Time In` will be
+  larger than the billed `Duration` by the total paused time — expected.
+- **Partial data is never written to the real data tabs** — only the completed
+  session is, on final submit. No orphan/half rows.
+
+### Offline resilience
+- **Crash-safe auto-save** to `localStorage` every 15s during an active session.
+- **Offline submit queue (A):** if Submit fails on network, the completed session
+  is queued and auto-sent on the browser `online` event and on next login.
+- **Live cross-device backup (B):** while online, the in-progress session mirrors
+  to the server (`status='live'`, ~every 60s). Resume cards surface a `live`
+  record only when **stale (>3 min)** — i.e. the working device likely died — so
+  an actively-used device is never duplicated elsewhere.
+- **Idempotency:** a stable per-session `submissionId` (generated at session
+  start; preserved across pause/resume/re-auth and across devices) lets the
+  backend dedup retries and cross-device completion — **no duplicate rows**.
+- Logout warns if an unsynced pause or a queued submit would be lost.
+
+### Backend actions (Code.gs, ES5)
+| Action | Purpose |
+|--------|---------|
+| `provisionClient` | Create + link a client's data spreadsheet (app-owned) |
+| `verifyClientSheet` | Confirm the backend can open a client's sheet + list tabs |
+| `saveSuspendedSession` | Upsert a paused/live session (LockService, colMap) |
+| `listSuspendedSessions` | This therapist's resumable sessions (paused always; live if stale) |
+| `deleteSuspendedSession` | Remove a backup record |
+| `cleanupSuspendedSessions` | TTL sweep of abandoned records (>14 days) |
+
+- `processSession` dedups by `submissionId` (`_sessionAlreadyRecorded` on the
+  Time In Time Out tab) and deletes the backup record after a successful write.
+- `cleanupStaleSuspendedSessions` should run on a **daily time-based trigger**
+  (Apps Script → Triggers) to sweep abandoned pauses/live records.
+
+### Editor-run maintenance helpers
+- `backfillMissingTrialSummaries()` / `previewMissingTrialSummaries()` — build the
+  Trial Summary tab only for sheets missing it (working sheets untouched).
+- `checkTrialSummaryHealth()` — read-only report of Trial Summary tab health.
+
+### Analyst side (optional)
+See `analyst/README.md` — a read-only BigQuery MCP + `bq-analyst` skill for
+conversational analytics. Not part of the end-user app; requires a read-only
+service account (developer machine) or Google's OAuth-based BigQuery MCP
+(recommended for non-technical BCBA use).

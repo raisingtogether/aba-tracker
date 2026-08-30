@@ -44,6 +44,7 @@ ES5 for consistency and safety.
 | Billing | profile, sessionType, code |
 | Authorizations | clientId, payerType, insuranceCompany, authorizationNumber, billingCode, authorizedHours, startDate, endDate, coInsurance, stepUpProgram, status, unitRate, hourlyRate |
 | Admins | email, name, status |
+| Suspended Sessions | suspendId, therapistEmail, clientId, clientName, sheetId, dateISO, updatedAt, status, stateJson **(v4 pause/resume; transient — NOT synced to BigQuery)** |
 
 ### Per-client sheet tabs — analytics columns appended after core columns
 `Time In Time Out`: Date, Billing Code, Session Type, Time In, Time Out, Duration (min), Therapist, Submission ID, Notes, submissionId, clientName, clientId, therapistEmail, sessionType, billingCode, isDraft, payloadHash, submittedAt, dateISO
@@ -227,7 +228,61 @@ Code.gs changes require TWO steps to take effect:
 2. Deploy → Manage deployments → edit (pencil icon) → Version: New version → Deploy
 
 Without step 2, the web app continues running the old version.
-**Current deployment**: Version 9, URL: `https://script.google.com/macros/s/AKfycbz8AJ-6WIoNdBNh-z3iuT9BXNnw3r95gTqONo78wpTJDXQ9QPGaIp_fmR6gjZlB2yQf/exec`
+**App version**: v4 (status string `RT ABA Tracker v4 - online`). URL (unchanged across redeploys): `https://script.google.com/macros/s/AKfycbz8AJ-6WIoNdBNh-z3iuT9BXNnw3r95gTqONo78wpTJDXQ9QPGaIp_fmR6gjZlB2yQf/exec`
+
+---
+
+## Version 4 (current)
+
+### Client sheet auto-provisioning
+- Admin console → Clients → **Auto-create Google Sheet** creates an app-owned
+  spreadsheet, links its id into the Clients tab (colMap), shares with admins.
+  Backend can `openById` it with no manual sharing (script account owns it).
+- **Verify Sheet** button → `verifyClientSheet` reports reachability + tabs.
+- Data tabs auto-generate on first session (no manual tab setup).
+
+### Trial Summary — live writes + backfill
+- `_appendTrialSummaryRows` (called from `writeTrialData`) writes the normalized
+  Trial Summary tab on **every** session (previously batch-only via `recoverTrialData`).
+- Editor helpers: `backfillMissingTrialSummaries()` / `previewMissingTrialSummaries()`
+  build the tab only for sheets missing it (working sheets untouched);
+  `checkTrialSummaryHealth()` is a read-only health report.
+- `recoverTrialData(dryRun, onlyClientIds)` gained an optional client-scope filter.
+
+### Pause / resume + offline resilience (session data model)
+- **`Suspended Sessions` tab** (RT Admin) stores a paused/live session as one row
+  with the full state in `stateJson` (lossless JSON). Keyed by `suspendId`.
+  Transient — NOT synced to BigQuery.
+- **Status values:** `paused` (explicitly parked; always resumable) vs `live`
+  (continuous in-progress backup ~every 60s; surfaced for recovery on another
+  device only when **stale >3 min**). `active` accepted for back-compat.
+- **Billing:** active-time accounting (`activeElapsedMs`, `S.activeMsAccum`,
+  `S.pausedMsTotal`). Duration excludes paused time when `S.everPaused`; a
+  never-paused session is byte-identical to v3. `Time Out − Time In` > billed
+  `Duration` by the paused time.
+- **Idempotency:** stable per-session `S.submissionId` (set at `beginSession`,
+  preserved through snapshot / re-auth / cross-device). `processSession` dedups
+  via `_sessionAlreadyRecorded` (scans Time In Time Out `submissionId` column) →
+  no duplicate rows on offline retry or cross-device completion. Backup record
+  deleted **after** a successful write.
+- **Offline (frontend, index.html):** `startAutoSave` (15s local crash backup +
+  throttled `pushLiveBackup`), `enqueuePendingSubmit`/`flushSubmitQueue` (offline
+  submit queue in `localStorage` key `rtPendingSubmits`), `onReconnect` on the
+  `online` event and on login. Logout warns on unsynced pause or queued submit.
+- **Snapshot:** `buildSessionSnapshot` / `applySessionSnapshot` (mirror the
+  re-auth restore path). Local backup key `rtSessionBackup` (cleared on
+  logout/complete — PHI hygiene; server is the durable cross-device store).
+- **Router actions:** `saveSuspendedSession`, `listSuspendedSessions`,
+  `deleteSuspendedSession`, `cleanupSuspendedSessions`.
+- **TTL:** `cleanupStaleSuspendedSessions(maxAgeDays=14)` — run on a daily
+  time-based trigger to sweep abandoned pauses/live records.
+
+### Analyst side (read-only BigQuery)
+- `analyst/` + `.mcp.json` + `.claude/skills/bq-analyst` — read-only BigQuery MCP
+  for conversational analytics. Analyst/admin tool ONLY, not the end-user app.
+- Requires a read-only service account (dev machine) OR Google's OAuth BigQuery
+  MCP (recommended for non-technical BCBA use). BQ project `rt-aba-tracker`,
+  dataset `aba_tracker`. Prefer de-identified views; needs a BAA for real PHI.
 
 ---
 

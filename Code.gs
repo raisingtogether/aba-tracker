@@ -1,5 +1,5 @@
 /**
- * Raising Together ABA Tracker — Google Apps Script Backend v3
+ * Raising Together ABA Tracker — Google Apps Script Backend v4
  * HIPAA-compliance layer: audit log, TOTP verification, weekly hours,
  * consumed hours, biweekly payroll, authorizations, admin tier mgmt.
  *
@@ -123,7 +123,7 @@ function doPost(e) {
 
 function doGet() {
   return ContentService
-    .createTextOutput(JSON.stringify({ status: 'RT ABA Tracker v3 - online' }))
+    .createTextOutput(JSON.stringify({ status: 'RT ABA Tracker v4 - online' }))
     .setMimeType(ContentService.MimeType.JSON);
 }
 
