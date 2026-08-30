@@ -845,6 +845,10 @@
     </div>
     <button class="logout-btn" onclick="confirmLogout()">Logout</button>
   </div>
+  <div id="resume-section" style="display:none">
+    <div class="section-lbl">Paused sessions — tap to resume</div>
+    <div class="client-list" id="resume-list"></div>
+  </div>
   <div class="section-lbl">Active Clients</div>
   <div class="client-list" id="client-list"></div>
 </div>
@@ -898,6 +902,7 @@
       <div id="sess-elapsed" style="font-size:15px;font-weight:900;color:#00A7C7;background:rgba(255,255,255,0.92);border-radius:8px;padding:3px 8px;font-variant-numeric:tabular-nums">0h 0m 0s</div>
       <div class="sess-timer-label">elapsed</div>
     </div>
+    <button class="logout-btn" onclick="showPauseModal()" style="margin-left:8px;background:#f59e0b">&#10073;&#10073; Pause</button>
     <button class="logout-btn" onclick="confirmLogout()" style="margin-left:8px">Logout</button>
   </div>
   <div class="session-bar">
@@ -1309,6 +1314,17 @@ let S = {
   adjustedEndTimeDate: null,      // Date object for duration calc
   endTimeAdjustmentReason: '',
   submitted: false,               // true once this session was submitted (success screen shown)
+  // ── Pause / resume (see PAUSE & RESUME section) ──
+  suspendId:     null,   // UUID once this session has been paused at least once
+  everPaused:    false,  // true if the session was paused any time (switches duration to active-time accounting)
+  paused:        false,  // true while currently paused (not on the session screen)
+  pauseStartTs:  null,    // Date.now() when the current pause began
+  segStartTs:    null,    // Date.now() when the current ACTIVE segment began
+  activeMsAccum: 0,       // accumulated active (billable) ms from completed segments
+  pausedMsTotal: 0,       // accumulated paused (non-billable) ms
+  pauseLog:      [],      // [{ startISO, endISO, reason }]
+  isResumed:     false,  // true if this run was restored from a suspended record
+  autoSaveInterval: null, // interval id for local crash-safe auto-save
 };
 
 let abcIdSeq = 0;
@@ -1500,6 +1516,8 @@ function buildClientScreen() {
     btn.onclick = () => selectClient(c);
     list.appendChild(btn);
   });
+  // Show any paused sessions this therapist can resume (server + local).
+  renderResumeCards();
 }
 
 async function selectClient(c) {
@@ -1615,8 +1633,21 @@ function beginSession() {
   switchTab('behaviors');
 
   S.sessStartTs = Date.now();
+  // Active-time accounting (see PAUSE & RESUME). For a never-paused session
+  // segStartTs === sessStartTs and activeMsAccum stays 0, so elapsed/duration
+  // are identical to the legacy behavior.
+  S.segStartTs    = S.sessStartTs;
+  S.activeMsAccum = 0;
+  S.pausedMsTotal = 0;
+  S.everPaused    = false;
+  S.paused        = false;
+  S.pauseStartTs  = null;
+  S.pauseLog      = [];
+  S.suspendId     = null;   // brand-new session — not a resume
+  S.isResumed     = false;
   if (S.sessInterval) clearInterval(S.sessInterval);
   S.sessInterval = setInterval(updateElapsed, 1000);
+  startAutoSave();
 
   goTo('session');
 
@@ -1640,13 +1671,358 @@ function beginSession() {
   };
 }
 
+// Active (billable) elapsed ms = time accumulated in completed segments plus
+// the current running segment. Excludes paused time. For a never-paused session
+// this equals (Date.now() - sessStartTs), identical to the legacy calculation.
+function activeElapsedMs() {
+  var accum = S.activeMsAccum || 0;
+  if (S.segStartTs && !S.paused) accum += (Date.now() - S.segStartTs);
+  return Math.max(0, accum);
+}
+
 function updateElapsed() {
-  const sec = Math.floor((Date.now() - S.sessStartTs) / 1000);
+  const sec = Math.floor(activeElapsedMs() / 1000);
   const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60), s = sec%60;
   const str = h > 0 ? (h + 'h ' + m + 'm ' + s + 's') : (m + 'm ' + s + 's');
   const el = document.getElementById('sess-elapsed');
   if (el) el.textContent = str;
 }
+
+
+// ═══ PAUSE & RESUME ═══════════════════════════════════════════════════
+// Lets a therapist pause an in-progress session (travel, breaks, bathroom,
+// connectivity loss — any interruption) and resume later on ANY device.
+// Paused time is excluded from the billable duration (active-time accounting).
+// The full session state is saved to the server (cross-device) and mirrored to
+// localStorage (offline-safe + crash recovery). Partial data is NEVER written
+// to the client's real data tabs — only the completed session is, on submit.
+
+const LOCAL_BACKUP_KEY = 'rtSessionBackup';  // transient; cleared on logout/complete
+const AUTOSAVE_MS      = 15000;              // crash-safe local auto-save cadence
+let _pauseReason = '';
+
+function _isoDate(d) {
+  const x = d || new Date();
+  const m = String(x.getMonth() + 1).padStart(2, '0');
+  const dd = String(x.getDate()).padStart(2, '0');
+  return x.getFullYear() + '-' + m + '-' + dd;
+}
+
+// Build a lossless, device-independent snapshot of the current session.
+function buildSessionSnapshot(status) {
+  const notesEl = document.getElementById('session-notes');
+  const notes = notesEl ? notesEl.value : (S.notes || '');
+  return {
+    v: 2,
+    status: status || 'active',
+    suspendId:      S.suspendId || null,
+    clientId:       S.client ? (S.client.id || '') : '',
+    clientName:     S.client ? S.client.name : '',
+    sheetId:        S.client ? (S.client.sheetId || '') : '',
+    therapistId:    S.therapist ? (S.therapist.id || '') : '',
+    therapistEmail: AUTH.user ? (AUTH.user.email || '') : '',
+    sessType:       S.sessType || null,
+    location:       S.location || null,
+    dateStr:        S.dateStr || null,
+    dateISO:        _isoDate(S.timeInDate),
+    timeIn:         S.timeIn || null,
+    timeInDateISO:  S.timeInDate ? S.timeInDate.toISOString() : null,
+    appStartTime:    S.appStartTime || null,
+    actualStartTime: S.actualStartTime || null,
+    lateStartReason: S.lateStartReason || '',
+    supervisionOccurred: !!S.supervisionOccurred,
+    notes:    notes,
+    behaviors: JSON.parse(JSON.stringify(S.behaviors || {})),
+    trials:    JSON.parse(JSON.stringify(S.trials || {})),
+    abc:       JSON.parse(JSON.stringify(S.abc || [])),
+    tantrum:   { count: S.tantrum.count || 0, totalSec: S.tantrum.totalSec || 0, curSec: 0 },
+    abcIdSeq:  abcIdSeq,
+    // Active-time accounting — device-independent (ms, not wall-clock timestamps)
+    activeMsAccum: activeElapsedMs(),
+    pausedMsTotal: S.pausedMsTotal || 0,
+    pauseLog:      JSON.parse(JSON.stringify(S.pauseLog || [])),
+    everPaused:    true,   // any restored session bills measured active time, never wall-clock
+    savedAtISO:    new Date().toISOString()
+  };
+}
+
+function saveLocalBackup(snapshot, synced) {
+  try { localStorage.setItem(LOCAL_BACKUP_KEY, JSON.stringify({ snapshot: snapshot, synced: !!synced })); }
+  catch (e) { /* storage full / disabled — non-fatal */ }
+}
+function readLocalBackup() {
+  try { return JSON.parse(localStorage.getItem(LOCAL_BACKUP_KEY) || 'null'); }
+  catch (e) { return null; }
+}
+function clearLocalAutoSave() {
+  try { localStorage.removeItem(LOCAL_BACKUP_KEY); } catch (e) {}
+}
+
+function startAutoSave() {
+  stopAutoSave();
+  S.autoSaveInterval = setInterval(function() {
+    if (S.submitted || S.paused || !S.client) return;
+    // 'active' backups are crash-recovery only — marked synced so the online
+    // handler never tries to push them to the server (only explicit pauses sync).
+    saveLocalBackup(buildSessionSnapshot('active'), true);
+  }, AUTOSAVE_MS);
+}
+function stopAutoSave() {
+  if (S.autoSaveInterval) { clearInterval(S.autoSaveInterval); S.autoSaveInterval = null; }
+}
+
+// Map a snapshot to the server upsert payload.
+function suspendPayloadFromSnapshot(s) {
+  return {
+    action:         'saveSuspendedSession',
+    suspendId:      s.suspendId,
+    therapistEmail: s.therapistEmail || (AUTH.user ? AUTH.user.email : ''),
+    clientId:       s.clientId,
+    clientName:     s.clientName,
+    sheetId:        s.sheetId,
+    dateISO:        s.dateISO,
+    state:          s
+  };
+}
+
+// ── Pause modal ──
+function selectPauseReason(btn) {
+  document.querySelectorAll('#pause-reason-chips .pause-reason').forEach(function(b){ b.classList.remove('sel'); });
+  btn.classList.add('sel');
+  _pauseReason = btn.dataset.reason || '';
+}
+function showPauseModal() {
+  if (!S.client) return;
+  _pauseReason = '';
+  document.querySelectorAll('#pause-reason-chips .pause-reason').forEach(function(b){ b.classList.remove('sel'); });
+  var err = document.getElementById('pause-error'); if (err) err.textContent = '';
+  var btn = document.getElementById('pause-confirm-btn'); if (btn) { btn.disabled = false; btn.innerHTML = '&#10073;&#10073; Pause &amp; Save'; }
+  document.getElementById('modal-pause').classList.add('active');
+}
+function closePauseModal() {
+  document.getElementById('modal-pause').classList.remove('active');
+}
+
+async function doPauseSession() {
+  if (!S.client) { closePauseModal(); return; }
+  var btn = document.getElementById('pause-confirm-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+
+  // Capture notes and finalize the current active segment.
+  var notesEl = document.getElementById('session-notes');
+  if (notesEl) S.notes = notesEl.value;
+  if (S.segStartTs && !S.paused) S.activeMsAccum = (S.activeMsAccum || 0) + (Date.now() - S.segStartTs);
+  S.segStartTs   = null;
+  S.paused       = true;
+  S.everPaused   = true;
+  S.pauseStartTs = Date.now();
+  if (!S.suspendId) S.suspendId = generateUUID();
+  S.pauseLog = S.pauseLog || [];
+  S.pauseLog.push({ startISO: new Date().toISOString(), endISO: null, reason: _pauseReason || '' });
+
+  // Stop timers; data is being persisted so drop the unload warning.
+  if (S.tantrum && S.tantrum.running) timerStop();
+  if (S.sessInterval) { clearInterval(S.sessInterval); S.sessInterval = null; }
+  stopAutoSave();
+  window.onbeforeunload = null;
+
+  var snapshot = buildSessionSnapshot('paused');
+  saveLocalBackup(snapshot, false);   // offline-safe: local first
+
+  var syncedOk = false;
+  if (GAS_URL === 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') {
+    syncedOk = true; // demo mode
+  } else {
+    try {
+      var resp = await fetch(GAS_URL, { method:'POST', headers:{'Content-Type':'text/plain'}, redirect:'follow',
+        body: JSON.stringify(suspendPayloadFromSnapshot(snapshot)) });
+      var data = await resp.json();
+      syncedOk = !!(data && data.success);
+    } catch (e) { syncedOk = false; }
+  }
+  if (syncedOk) saveLocalBackup(snapshot, true);
+
+  logAuditEvent('session_paused', AUTH.user ? AUTH.user.email : '', S.client ? S.client.name : '',
+    'reason=' + (_pauseReason || 'none') + (syncedOk ? ' (synced)' : ' (local-only)'));
+  toast(syncedOk
+    ? 'Session paused & saved — resume on any device'
+    : 'Session paused & saved on this device. Reconnect to sync to other devices.', 'ok');
+
+  closePauseModal();
+
+  // Park: clear the in-memory active session (the paused copy is safe on the
+  // server/device) and return to the client list, re-selecting the therapist
+  // for collectors so a new or resumed session has their identity.
+  resetState();
+  if (AUTH.user && AUTH.user.therapistId) {
+    var selfT = CFG.THERAPISTS.find(function(th){ return th.id === AUTH.user.therapistId; });
+    if (selfT) S.therapist = selfT;
+  }
+  buildClientScreen();
+  goTo('client');
+}
+
+// Restore a snapshot into S, rebuild the session UI, and resume the clock.
+// Mirrors restoreSessionAfterReauth's proven UI-rebuild sequence.
+function applySessionSnapshot(snap) {
+  try {
+    if (!snap || !snap.clientId) return false;
+    var client = null, therapist = null;
+    for (var ci = 0; ci < CFG.CLIENTS.length; ci++) { if (CFG.CLIENTS[ci].id === snap.clientId) { client = CFG.CLIENTS[ci]; break; } }
+    for (var ti = 0; ti < CFG.THERAPISTS.length; ti++) { if (CFG.THERAPISTS[ti].id === snap.therapistId) { therapist = CFG.THERAPISTS[ti]; break; } }
+    if (!client) { toast('Cannot resume: client not found in current config', 'err'); return false; }
+
+    S.client    = client;
+    S.therapist = therapist || S.therapist;
+    S.suspendId = snap.suspendId || null;
+    S.sessType  = snap.sessType || null;
+    S.location  = snap.location || null;
+    S.dateStr   = snap.dateStr || null;
+    S.timeIn    = snap.timeIn || null;
+    S.timeInDate = snap.timeInDateISO ? new Date(snap.timeInDateISO) : new Date();
+    S.appStartTime    = snap.appStartTime || null;
+    S.actualStartTime = snap.actualStartTime || null;
+    S.lateStartReason = snap.lateStartReason || '';
+    S.supervisionOccurred = !!snap.supervisionOccurred;
+    S.notes     = snap.notes || '';
+    S.behaviors = snap.behaviors || {};
+    var restoredTrials = snap.trials || {};
+    S.abc       = snap.abc || [];
+    abcIdSeq    = snap.abcIdSeq || 0;
+    S.tantrum   = { count: snap.tantrum ? (snap.tantrum.count||0) : 0,
+                    totalSec: snap.tantrum ? (snap.tantrum.totalSec||0) : 0,
+                    curSec: 0, running: false, interval: null, startTs: null };
+
+    // Timer accounting: resume accumulated active time, begin a fresh segment.
+    S.activeMsAccum = snap.activeMsAccum || 0;
+    S.pausedMsTotal = snap.pausedMsTotal || 0;
+    S.pauseLog      = snap.pauseLog || [];
+    if (S.pauseLog.length && !S.pauseLog[S.pauseLog.length-1].endISO) {
+      S.pauseLog[S.pauseLog.length-1].endISO = new Date().toISOString();
+      if (snap.savedAtISO) {
+        var gap = Date.now() - new Date(snap.savedAtISO).getTime();
+        if (gap > 0) S.pausedMsTotal += gap;
+      }
+    }
+    S.everPaused  = true;
+    S.isResumed   = true;
+    S.paused      = false;
+    S.sessStartTs = Date.now();
+    S.segStartTs  = Date.now();
+
+    // Rebuild UI
+    document.getElementById('sess-client-name').textContent = client.name;
+    document.getElementById('sess-subtitle').textContent    = (S.therapist ? S.therapist.name : '') + ' • ' + (S.sessType || '');
+    document.getElementById('bar-type').textContent      = S.sessType || '';
+    document.getElementById('bar-loc').textContent       = S.location || '';
+    document.getElementById('bar-therapist').textContent = S.therapist ? S.therapist.name : '';
+
+    buildBehaviorGrid();
+    Object.keys(S.behaviors).forEach(function(k){ var el = document.getElementById('cnt-' + k); if (el) el.textContent = S.behaviors[k] || 0; });
+
+    buildTrials();
+    S.trials = restoredTrials;
+    Object.keys(restoredTrials).forEach(function(gcode){
+      var arr = restoredTrials[gcode]; if (!arr) return;
+      for (var i = 0; i < arr.length; i++) {
+        var c = document.getElementById('tr-' + gcode + '-' + i + '-c');
+        var x = document.getElementById('tr-' + gcode + '-' + i + '-x');
+        if (c) c.classList.toggle('correct',   arr[i] === true);
+        if (x) x.classList.toggle('incorrect', arr[i] === false);
+      }
+      calcPct(gcode);
+    });
+
+    var notesEl = document.getElementById('session-notes');
+    if (notesEl) { notesEl.value = S.notes; updateWordCount(); }
+
+    renderABCList();
+    switchTab('behaviors');
+
+    if (S.sessInterval) clearInterval(S.sessInterval);
+    S.sessInterval = setInterval(updateElapsed, 1000);
+    document.getElementById('tantrum-count').textContent = S.tantrum.count;
+    document.getElementById('tantrum-total').textContent = +(S.tantrum.totalSec/60).toFixed(1);
+
+    startAutoSave();
+    window.onbeforeunload = function() { return 'You have an active session. If you leave, all unsaved data will be lost.'; };
+
+    goTo('session');
+    updateElapsed();
+    loadMasteryStatus();
+    return true;
+  } catch (e) {
+    console.error('applySessionSnapshot error', e);
+    toast('Could not resume session', 'err');
+    return false;
+  }
+}
+
+// Populate the "Paused sessions" cards on the client screen (server + local).
+async function renderResumeCards() {
+  const section = document.getElementById('resume-section');
+  const listEl  = document.getElementById('resume-list');
+  if (!section || !listEl) return;
+  listEl.innerHTML = '';
+  const email = AUTH.user ? AUTH.user.email : '';
+  let sessions = [];
+
+  if (GAS_URL !== 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE' && email) {
+    try {
+      const resp = await fetch(GAS_URL, { method:'POST', headers:{'Content-Type':'text/plain'}, redirect:'follow',
+        body: JSON.stringify({ action:'listSuspendedSessions', therapistEmail: email }) });
+      const data = await resp.json();
+      if (data && data.success && Array.isArray(data.sessions)) sessions = data.sessions.filter(function(s){ return s.state; });
+    } catch (e) { /* offline — local fallback below */ }
+  }
+
+  // Local fallback: a paused (offline/unsynced) or crash-recovered snapshot.
+  const local = readLocalBackup();
+  if (local && local.snapshot && local.snapshot.clientId) {
+    const snap = local.snapshot;
+    const dup  = snap.suspendId && sessions.some(function(s){ return s.suspendId === snap.suspendId; });
+    if (!dup) {
+      sessions.unshift({ suspendId: snap.suspendId || null, clientName: snap.clientName,
+        updatedAt: snap.savedAtISO, state: snap, _local: true, _synced: local.synced,
+        _recovered: snap.status === 'active' });
+    }
+  }
+
+  if (!sessions.length) { section.style.display = 'none'; return; }
+  section.style.display = '';
+  sessions.forEach(function(s){
+    const when = s.updatedAt ? new Date(s.updatedAt) : null;
+    const whenStr = when ? (when.toLocaleDateString() + ' ' + when.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})) : '';
+    const tag = s._recovered ? ' • recovered (unsaved)' : (s._local && !s._synced ? ' • on this device' : '');
+    const btn = document.createElement('button');
+    btn.className = 'client-btn';
+    btn.innerHTML = '<div class="av" style="background:#f59e0b">&#10073;&#10073;</div>' +
+      '<div class="info"><div class="c-name">' + escHtml(s.clientName || 'Session') + '</div>' +
+      '<div class="c-goals">' + (s._recovered ? 'Recovered' : 'Paused') + ' ' + escHtml(whenStr) + escHtml(tag) + '</div></div>' +
+      '<div class="c-arr">›</div>';
+    btn.onclick = function(){
+      if (applySessionSnapshot(s.state)) {
+        logAuditEvent(s._recovered ? 'session_recovered' : 'session_resumed', email, '', s.clientName || '');
+        toast('Session resumed', 'ok');
+      }
+    };
+    listEl.appendChild(btn);
+  });
+}
+
+// When connectivity returns, push any locally-saved (unsynced) paused session.
+async function syncPendingPause() {
+  const local = readLocalBackup();
+  if (!local || local.synced || !local.snapshot || local.snapshot.status !== 'paused') return;
+  if (GAS_URL === 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') return;
+  try {
+    const resp = await fetch(GAS_URL, { method:'POST', headers:{'Content-Type':'text/plain'}, redirect:'follow',
+      body: JSON.stringify(suspendPayloadFromSnapshot(local.snapshot)) });
+    const data = await resp.json();
+    if (data && data.success) { saveLocalBackup(local.snapshot, true); toast('Paused session synced to server', 'ok'); }
+  } catch (e) { /* still offline */ }
+}
+window.addEventListener('online', syncPendingPause);
 
 
 // ─── TAB SWITCHING ────────────────────────────────────────────────────
@@ -1873,7 +2249,16 @@ function buildEndScreen() {
   // Use adjusted end time if set, otherwise use current time
   const endDate = S.adjustedEndTimeDate || now;
   S.timeOut     = S.adjustedEndTime || fmtTime(now);
-  S.durationMin = Math.round((endDate - S.timeInDate) / 60000);
+  if (S.everPaused) {
+    // Session was paused at least once: bill only ACTIVE therapy time (sum of
+    // segments), excluding travel/breaks. Time In/Out remain the wall-clock
+    // bookends, so Time Out - Time In will exceed the billed duration by the
+    // total paused time — expected and correct.
+    S.durationMin = Math.max(0, Math.round(activeElapsedMs() / 60000));
+  } else {
+    // Never paused → unchanged legacy calculation.
+    S.durationMin = Math.round((endDate - S.timeInDate) / 60000);
+  }
   const dh = Math.floor(S.durationMin / 60), dm = S.durationMin % 60;
   const durStr  = dh > 0 ? `${dh}h ${dm}m` : `${dm}m`;
   const units   = Math.floor(S.durationMin / 15);
@@ -2023,6 +2408,12 @@ function confirmAdjustedEnd() {
 
 // ─── LOGOUT CONFIRMATION ──────────────────────────────────────────────
 function confirmLogout() {
+  // Warn if a paused session hasn't synced to the server yet — logging out
+  // clears device-local storage, so an unsynced offline pause would be lost.
+  var lb = readLocalBackup();
+  if (lb && lb.snapshot && lb.snapshot.status === 'paused' && !lb.synced) {
+    if (!window.confirm('A paused session on this device has NOT synced to the server yet (you may be offline). Logging out will lose it. Log out anyway?')) return;
+  }
   // Simple confirm dialog since we can't use custom modals during session without extra HTML
   if (window.confirm('Are you sure you want to logout? Any unsaved session data will be lost.')) {
     EventBus.emit('session:logout', {
@@ -2221,6 +2612,14 @@ function buildPayload() {
     submittedBy:  AUTH.user ? AUTH.user.email : '',
     isDraft:      false,
     submittedAt:  _submittedAt,
+    // Pause/resume metadata (audit + server dedup/cleanup). Absent/zero for
+    // normal never-paused sessions.
+    suspendId:      S.suspendId || '',
+    everPaused:     !!S.everPaused,
+    isResumed:      !!S.isResumed,
+    pauseCount:     (S.pauseLog || []).length,
+    pausedMsTotal:  S.pausedMsTotal || 0,
+    pauseLog:       S.pauseLog || [],
   };
 }
 
@@ -2229,6 +2628,10 @@ function showSuccess() {
   // Mark the in-memory session as completed so a return-from-background re-auth
   // does not "restore" this already-submitted session (tab stays open \u2192 S persists).
   S.submitted = true;
+  // Session is complete \u2014 stop crash-safe auto-save and clear the local copy.
+  // The server-side suspended record (if any) was removed by processSession.
+  stopAutoSave();
+  clearLocalAutoSave();
   document.getElementById('success-sub').textContent = S.client.name + ' \u2014 ' + S.dateStr;
   document.getElementById('success-screen').classList.add('active');
 }
@@ -2260,6 +2663,11 @@ function resetState() {
   S.appStartTime = null; S.actualStartTime = null; S.lateStartReason = '';
   S.adjustedEndTime = null; S.adjustedEndTimeDate = null; S.endTimeAdjustmentReason = '';
   S.submitted = false;
+  // Pause/resume fields
+  S.suspendId = null; S.everPaused = false; S.paused = false;
+  S.pauseStartTs = null; S.segStartTs = null;
+  S.activeMsAccum = 0; S.pausedMsTotal = 0; S.pauseLog = []; S.isResumed = false;
+  stopAutoSave();
   if (S.clockInterval) { clearInterval(S.clockInterval); S.clockInterval = null; }
   if (S.sessInterval)  { clearInterval(S.sessInterval);  S.sessInterval  = null; }
   document.querySelectorAll('.opt-pill').forEach(p => p.classList.remove('sel'));
@@ -3308,6 +3716,13 @@ function saveSessionForReauth() {
       clientId:             S.client.id || '',
       therapistId:          S.therapist ? (S.therapist.id || '') : '',
       abcIdSeq:             abcIdSeq,
+      // Pause/resume accounting — preserved across re-auth
+      suspendId:            S.suspendId || null,
+      everPaused:           !!S.everPaused,
+      isResumed:            !!S.isResumed,
+      activeMsAccum:        activeElapsedMs(),
+      pausedMsTotal:        S.pausedMsTotal || 0,
+      pauseLog:             JSON.parse(JSON.stringify(S.pauseLog || [])),
       isReauth:             true
     };
     sessionStorage.setItem('pendingReauth', JSON.stringify(snap));
@@ -3615,6 +4030,17 @@ function restoreSessionAfterReauth() {
     S.sessStartTs = snap.sessStartTs || Date.now();
     abcIdSeq = snap.abcIdSeq || 0;
 
+    // Pause/resume accounting — resume accumulated active time, start a fresh
+    // segment (the OAuth redirect gap is correctly excluded from billable time).
+    S.activeMsAccum = snap.activeMsAccum || 0;
+    S.segStartTs    = Date.now();
+    S.pausedMsTotal = snap.pausedMsTotal || 0;
+    S.pauseLog      = snap.pauseLog || [];
+    S.suspendId     = snap.suspendId || null;
+    S.everPaused    = !!snap.everPaused;
+    S.isResumed     = !!snap.isResumed;
+    S.paused        = false;
+
     // Restore tantrum counts (no running timer after redirect)
     S.tantrum = {
       count:    snap.tantrum ? (snap.tantrum.count    || 0) : 0,
@@ -3665,9 +4091,10 @@ function restoreSessionAfterReauth() {
     renderABCList();
     switchTab('behaviors');
 
-    // Restart elapsed timer
+    // Restart elapsed timer + crash-safe auto-save
     if (S.sessInterval) clearInterval(S.sessInterval);
     S.sessInterval = setInterval(updateElapsed, 1000);
+    startAutoSave();
 
     // Restore tantrum display
     document.getElementById('tantrum-count').textContent = S.tantrum.count;
@@ -5704,6 +6131,31 @@ init();
       </div>
       <div style="margin-top:14px;text-align:center">
         <button class="btn btn-ghost" onclick="cancelEndTimeModal()" style="font-size:13px">&#8592; Back to notes</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── PAUSE SESSION MODAL ── -->
+<div class="modal-overlay" id="modal-pause">
+  <div class="modal-sheet">
+    <div class="late-modal-body">
+      <div class="modal-title" style="margin-bottom:8px">&#10073;&#10073; Pause Session</div>
+      <div class="late-modal-q" style="margin-bottom:12px">The session clock stops while paused — paused time is <strong>not billed</strong>. Your data is saved and you can resume on any device.</div>
+      <div class="form-group">
+        <label class="form-lbl">Reason (optional)</label>
+        <div id="pause-reason-chips" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px">
+          <button type="button" class="opt-pill pause-reason" data-reason="Travel" onclick="selectPauseReason(this)">Travel</button>
+          <button type="button" class="opt-pill pause-reason" data-reason="Patient break" onclick="selectPauseReason(this)">Patient break</button>
+          <button type="button" class="opt-pill pause-reason" data-reason="Bathroom" onclick="selectPauseReason(this)">Bathroom</button>
+          <button type="button" class="opt-pill pause-reason" data-reason="Connectivity" onclick="selectPauseReason(this)">Connectivity</button>
+          <button type="button" class="opt-pill pause-reason" data-reason="Other" onclick="selectPauseReason(this)">Other</button>
+        </div>
+      </div>
+      <div class="pin-error" id="pause-error"></div>
+      <div class="late-modal-btns" style="margin-top:12px">
+        <button class="btn btn-primary" id="pause-confirm-btn" onclick="doPauseSession()">&#10073;&#10073; Pause &amp; Save</button>
+        <button class="btn btn-ghost" onclick="closePauseModal()">Cancel</button>
       </div>
     </div>
   </div>

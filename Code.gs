@@ -89,6 +89,22 @@ function doPost(e) {
       var verResult = verifyClientSheet(data.clientId);
       result = { success: true, verify: verResult };
 
+    } else if (data.action === 'saveSuspendedSession') {
+      var ssResult = saveSuspendedSession(data);
+      result = { success: true, suspendId: ssResult.suspendId, updatedAt: ssResult.updatedAt };
+
+    } else if (data.action === 'listSuspendedSessions') {
+      var ssList = listSuspendedSessions(data.therapistEmail, data.clientId);
+      result = { success: true, sessions: ssList };
+
+    } else if (data.action === 'deleteSuspendedSession') {
+      var delResult = deleteSuspendedSession(data.suspendId);
+      result = { success: true, deleted: delResult.deleted };
+
+    } else if (data.action === 'cleanupSuspendedSessions') {
+      var cleanupResult = cleanupStaleSuspendedSessions(data.maxAgeDays);
+      result = { success: true, removed: cleanupResult.removed };
+
     } else {
       processSession(data);
       result = { success: true };
@@ -696,9 +712,248 @@ function verifyClientSheet(clientId) {
 }
 
 
+// ── SUSPENDED (PAUSED) SESSIONS ───────────────────────────────────────
+//
+// Cross-device pause/resume. A paused session is stored as one row in the
+// "Suspended Sessions" tab of RT Admin, keyed by suspendId. The full session
+// snapshot travels in the stateJson cell (lossless JSON) so any device the
+// therapist logs into can resume it. Partial data is NEVER written to the
+// client's real data tabs — only the completed session is, on final submit.
+//
+// Tab columns: suspendId, therapistEmail, clientId, clientName, sheetId,
+//              dateISO, updatedAt, status, stateJson
+
+var SUSPENDED_TAB     = 'Suspended Sessions';
+var SUSPENDED_HEADERS = ['suspendId', 'therapistEmail', 'clientId', 'clientName',
+                         'sheetId', 'dateISO', 'updatedAt', 'status', 'stateJson'];
+
+/** Build a header-name -> column-index map from a sheet's actual header row. */
+function _colMapOf(sheet) {
+  var lastCol = sheet.getLastColumn();
+  var hdr = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  var map = {};
+  for (var i = 0; i < hdr.length; i++) {
+    var h = String(hdr[i]).trim();
+    if (h && map[h] === undefined) map[h] = i;
+  }
+  return { map: map, lastCol: lastCol };
+}
+
+/**
+ * Upsert a paused session by suspendId. Expects on `d`:
+ *   suspendId, therapistEmail, clientId, clientName, sheetId, dateISO, state
+ * `state` is an arbitrary JS object (the frontend session snapshot); it is
+ * JSON-stringified into one cell. Returns { suspendId, updatedAt }.
+ */
+function saveSuspendedSession(d) {
+  if (!d || !d.suspendId) throw new Error('saveSuspendedSession: suspendId required');
+
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(15000); } catch (e) {
+    throw new Error('Suspended session busy, please retry.');
+  }
+  try {
+    var ss    = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+    var sheet = getOrCreateSheet(ss, SUSPENDED_TAB, SUSPENDED_HEADERS);
+    ensureSheetColumns(sheet, SUSPENDED_HEADERS);
+
+    var cm      = _colMapOf(sheet);
+    var colMap  = cm.map;
+    var lastCol = cm.lastCol;
+    var updatedAt = new Date().toISOString();
+
+    // stateJson may be passed as an object (d.state) or pre-stringified (d.stateJson)
+    var stateJson = '';
+    if (d.stateJson !== undefined && d.stateJson !== null) {
+      stateJson = String(d.stateJson);
+    } else if (d.state !== undefined && d.state !== null) {
+      stateJson = JSON.stringify(d.state);
+    }
+
+    // Find an existing row with the same suspendId (upsert).
+    var targetRow = -1;
+    if (lastCol > 0) {
+      var values = sheet.getDataRange().getValues();
+      var idIdx  = colMap['suspendId'];
+      for (var r = 1; r < values.length; r++) {
+        if (String(values[r][idIdx] || '') === String(d.suspendId)) { targetRow = r + 1; break; }
+      }
+    }
+
+    var row = [];
+    for (var ci = 0; ci < lastCol; ci++) row.push('');
+    if (colMap['suspendId']      !== undefined) row[colMap['suspendId']]      = d.suspendId;
+    if (colMap['therapistEmail'] !== undefined) row[colMap['therapistEmail']] = d.therapistEmail || '';
+    if (colMap['clientId']       !== undefined) row[colMap['clientId']]       = d.clientId       || '';
+    if (colMap['clientName']     !== undefined) row[colMap['clientName']]     = d.clientName     || '';
+    if (colMap['sheetId']        !== undefined) row[colMap['sheetId']]        = d.sheetId        || '';
+    if (colMap['dateISO']        !== undefined) row[colMap['dateISO']]        = d.dateISO        || '';
+    if (colMap['updatedAt']      !== undefined) row[colMap['updatedAt']]      = updatedAt;
+    if (colMap['status']         !== undefined) row[colMap['status']]         = 'active';
+    if (colMap['stateJson']      !== undefined) row[colMap['stateJson']]      = stateJson;
+
+    if (targetRow > 0) {
+      sheet.getRange(targetRow, 1, 1, lastCol).setValues([row]);
+    } else {
+      sheet.appendRow(row);
+    }
+
+    writeAuditLog(updatedAt, d.therapistEmail || 'system', 'session_paused',
+      d.clientName || '', 'Suspended session ' + d.suspendId + ' saved');
+
+    return { suspendId: d.suspendId, updatedAt: updatedAt };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * Return this therapist's ACTIVE paused sessions (most-recent first), each with
+ * its full state parsed from stateJson. Optionally filter by clientId.
+ */
+function listSuspendedSessions(therapistEmail, clientId) {
+  var ss   = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var rows = sheetToObjects(ss, SUSPENDED_TAB);
+  var out  = [];
+  var wantEmail  = String(therapistEmail || '').toLowerCase().trim();
+  var wantClient = clientId ? String(clientId) : '';
+
+  for (var i = 0; i < rows.length; i++) {
+    var rec = rows[i];
+    if (String(rec.status || 'active') !== 'active') continue;
+    if (wantEmail && String(rec.therapistEmail || '').toLowerCase().trim() !== wantEmail) continue;
+    if (wantClient && String(rec.clientId || '') !== wantClient) continue;
+
+    var state = null;
+    try { state = rec.stateJson ? JSON.parse(rec.stateJson) : null; }
+    catch (e) { state = null; }
+
+    out.push({
+      suspendId:      rec.suspendId,
+      therapistEmail: rec.therapistEmail,
+      clientId:       rec.clientId,
+      clientName:     rec.clientName,
+      sheetId:        rec.sheetId,
+      dateISO:        rec.dateISO,
+      updatedAt:      rec.updatedAt,
+      state:          state
+    });
+  }
+
+  // Most-recent first (string ISO timestamps sort correctly).
+  out.sort(function(a, b) {
+    return String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''));
+  });
+  return out;
+}
+
+/**
+ * Remove a paused session by suspendId (called after the session is finally
+ * submitted, or when abandoned). Returns { deleted: true|false }.
+ */
+function deleteSuspendedSession(suspendId) {
+  if (!suspendId) return { deleted: false };
+
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(15000); } catch (e) {
+    throw new Error('Suspended session busy, please retry.');
+  }
+  try {
+    var ss    = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+    var sheet = ss.getSheetByName(SUSPENDED_TAB);
+    if (!sheet) return { deleted: false };
+
+    var cm     = _colMapOf(sheet);
+    var idIdx  = cm.map['suspendId'];
+    if (idIdx === undefined) return { deleted: false };
+
+    var values  = sheet.getDataRange().getValues();
+    for (var r = values.length - 1; r >= 1; r--) {
+      if (String(values[r][idIdx] || '') === String(suspendId)) {
+        sheet.deleteRow(r + 1);
+        writeAuditLog(new Date().toISOString(), 'system', 'session_resumed_completed',
+          '', 'Suspended session ' + suspendId + ' removed');
+        return { deleted: true };
+      }
+    }
+    return { deleted: false };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+var SUSPENDED_MAX_AGE_DAYS = 14;  // abandoned paused sessions older than this are swept
+
+/**
+ * TTL sweep: delete ABANDONED paused sessions (never resumed/completed) whose
+ * last update is older than maxAgeDays. Prevents the Suspended Sessions tab from
+ * accumulating stale PHI. Safe to run on a daily time-based trigger, or manually.
+ * Returns { removed: n }.
+ *
+ * Set up the trigger once (Apps Script editor → Triggers → Add trigger →
+ * cleanupStaleSuspendedSessions → Time-driven → Day timer), or fold the call
+ * into an existing daily job.
+ */
+function cleanupStaleSuspendedSessions(maxAgeDays) {
+  var ageDays = (typeof maxAgeDays === 'number' && maxAgeDays > 0) ? maxAgeDays : SUSPENDED_MAX_AGE_DAYS;
+  var cutoffMs = new Date().getTime() - (ageDays * 24 * 60 * 60 * 1000);
+
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(15000); } catch (e) {
+    throw new Error('Suspended session busy, please retry.');
+  }
+  try {
+    var ss    = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+    var sheet = ss.getSheetByName(SUSPENDED_TAB);
+    if (!sheet) return { removed: 0 };
+
+    var cm      = _colMapOf(sheet);
+    var updIdx  = cm.map['updatedAt'];
+    var idIdx   = cm.map['suspendId'];
+    if (updIdx === undefined) return { removed: 0 };
+
+    var values  = sheet.getDataRange().getValues();
+    var removed = 0;
+    // Iterate bottom-up so row deletions don't shift indices we still need.
+    for (var r = values.length - 1; r >= 1; r--) {
+      var updRaw = values[r][updIdx];
+      var updMs;
+      if (updRaw instanceof Date) {
+        updMs = updRaw.getTime();
+      } else {
+        var parsed = Date.parse(String(updRaw || ''));
+        updMs = isNaN(parsed) ? 0 : parsed;  // unparseable/empty → treat as very old
+      }
+      if (updMs < cutoffMs) {
+        var sid = (idIdx !== undefined) ? String(values[r][idIdx] || '') : '';
+        sheet.deleteRow(r + 1);
+        removed++;
+        writeAuditLog(new Date().toISOString(), 'system', 'suspended_session_expired',
+          '', 'Abandoned suspended session ' + sid + ' swept (older than ' + ageDays + 'd)');
+      }
+    }
+    return { removed: removed };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+
 // ── SESSION: PROCESS ──────────────────────────────────────────────────
 
 function processSession(d) {
+  // Cross-device dedup for resumed (previously-paused) sessions: if this paused
+  // session was already completed on another device (its suspended record is
+  // gone), skip writing to avoid duplicate rows. Never-paused sessions have no
+  // suspendId and are unaffected.
+  if (d.suspendId) {
+    if (!_suspendedSessionExists(d.suspendId)) {
+      writeAuditLog(new Date().toISOString(), d.therapist || '', 'session_submit_skipped',
+        d.clientName || '', 'Resumed session ' + d.suspendId + ' already completed elsewhere — skipped');
+      return;
+    }
+  }
+
   var ss = SpreadsheetApp.openById(d.sheetId);
   writeBehaviorData(ss, d);
   writeSessionLog(ss, d);
@@ -712,6 +967,28 @@ function processSession(d) {
     d.clientName || '',
     'Session ' + (d.submissionId || '') + ' duration=' + (d.durationMin || 0) + 'min'
   );
+
+  // Resumed session completed — remove its suspended record (delete happens
+  // AFTER a successful write so a write failure never orphans the paused data).
+  if (d.suspendId) {
+    try { deleteSuspendedSession(d.suspendId); }
+    catch (e) { Logger.log('processSession: deleteSuspendedSession failed: ' + e.message); }
+  }
+}
+
+/** True if an ACTIVE suspended-session row with this id still exists. */
+function _suspendedSessionExists(suspendId) {
+  try {
+    var ss   = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+    var rows = sheetToObjects(ss, SUSPENDED_TAB);
+    for (var i = 0; i < rows.length; i++) {
+      if (String(rows[i].suspendId || '') === String(suspendId) &&
+          String(rows[i].status || 'active') === 'active') {
+        return true;
+      }
+    }
+  } catch (e) { Logger.log('_suspendedSessionExists error: ' + e.message); }
+  return false;
 }
 
 /**
