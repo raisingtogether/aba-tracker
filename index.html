@@ -1014,6 +1014,30 @@ FOCUS FOR NEXT SESSION: Outline priorities and goals for the next session"
         oninput="updateWordCount()"></textarea>
       <div class="word-count" id="notes-word-count">0 / 150 words</div>
     </div>
+    <div class="card" id="parent-sig-card">
+      <div class="card-ttl">&#9997;&#65039; Parent / Guardian Signature</div>
+      <div class="notes-hint">The parent or guardian signs to confirm this session took place. Required by some insurers.</div>
+      <div class="form-group" style="margin-bottom:10px">
+        <label class="form-lbl" for="parent-sig-name">Signer name</label>
+        <input class="form-ctrl" id="parent-sig-name" type="text" placeholder="Parent / guardian full name" autocomplete="off">
+      </div>
+      <div id="parent-sig-wrap">
+        <canvas id="parent-sig-canvas" width="600" height="180"
+          style="width:100%;height:180px;border:2px dashed #cfd8e0;border-radius:10px;background:#fff;touch-action:none;cursor:crosshair"></canvas>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
+          <span style="font-size:12px;color:var(--muted)">Sign above with a finger or mouse</span>
+          <button type="button" class="admin-act-btn" onclick="clearSignature()">Clear</button>
+        </div>
+      </div>
+      <label class="client-cb-row" style="margin-top:10px">
+        <input type="checkbox" id="sig-unavailable" onchange="toggleSigUnavailable()">
+        Parent / guardian not available to sign
+      </label>
+      <div class="form-group" id="sig-unavailable-reason-wrap" style="display:none;margin-top:8px">
+        <label class="form-lbl" for="sig-unavailable-reason">Reason (required)</label>
+        <textarea class="form-ctrl" id="sig-unavailable-reason" rows="2" placeholder="Why a signature could not be obtained&#8230;"></textarea>
+      </div>
+    </div>
     <button class="btn btn-primary" id="submit-btn" onclick="submitSession()" style="margin-bottom:11px" disabled>Submit Session &#10003;</button>
     <button class="btn btn-ghost" onclick="goTo('session')">&#8592; Back to Session</button>
   </div>
@@ -1313,6 +1337,11 @@ let S = {
   adjustedEndTime: null,          // display string e.g. "3:45 PM" or null
   adjustedEndTimeDate: null,      // Date object for duration calc
   endTimeAdjustmentReason: '',
+  // Parent/guardian signature (captured on the End screen before submit)
+  parentSignerName: '',
+  parentSignedAt: '',
+  parentSignature: '',            // base64 PNG data URL, or '' if unavailable
+  signatureSkipReason: '',        // reason when parent not available to sign
   submitted: false,               // true once this session was submitted (success screen shown)
   // ── Pause / resume (see PAUSE & RESUME section) ──
   submissionId:  null,   // STABLE id per session (idempotency key for submit dedup)
@@ -2402,8 +2431,96 @@ function buildEndScreen() {
   // DO NOT clear notes here — if the RBT navigates Back→End again their notes must survive.
   // Notes are only cleared in newSession() after a successful submit.
   updateWordCount();
+  initSignaturePad();
 
   EventBus.emit('session:end', { durationMin: S.durationMin, timeOut: S.timeOut });
+}
+
+// ─── PARENT / GUARDIAN SIGNATURE ──────────────────────────────────────
+// Signature pad on the End screen. Captured into S at submit time. Drawing is
+// preserved across Back→End (init runs once). Required to submit unless the
+// signer is marked unavailable with a reason.
+var _sigCtx = null, _sigHasInk = false, _sigDrawing = false, _sigInit = false;
+
+function initSignaturePad() {
+  var canvas = document.getElementById('parent-sig-canvas');
+  if (!canvas) return;
+  if (_sigInit) return;           // set up listeners once; keep any drawn ink
+  _sigInit = true;
+  _sigCtx = canvas.getContext('2d');
+  _sigCtx.lineWidth = 2.5;
+  _sigCtx.lineCap = 'round';
+  _sigCtx.lineJoin = 'round';
+  _sigCtx.strokeStyle = '#0d3b45';
+
+  function pos(e) {
+    var rect = canvas.getBoundingClientRect();
+    var sx = canvas.width / rect.width, sy = canvas.height / rect.height;
+    var cx = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+    var cy = (e.touches ? e.touches[0].clientY : e.clientY) - rect.top;
+    return { x: cx * sx, y: cy * sy };
+  }
+  function start(e) { e.preventDefault(); _sigDrawing = true; var p = pos(e); _sigCtx.beginPath(); _sigCtx.moveTo(p.x, p.y); }
+  function move(e)  { if (!_sigDrawing) return; e.preventDefault(); var p = pos(e); _sigCtx.lineTo(p.x, p.y); _sigCtx.stroke(); _sigHasInk = true; }
+  function end()    { _sigDrawing = false; }
+
+  canvas.addEventListener('mousedown', start);
+  canvas.addEventListener('mousemove', move);
+  window.addEventListener('mouseup', end);
+  canvas.addEventListener('touchstart', start, { passive: false });
+  canvas.addEventListener('touchmove', move, { passive: false });
+  canvas.addEventListener('touchend', end);
+}
+
+function clearSignature() {
+  var canvas = document.getElementById('parent-sig-canvas');
+  if (canvas && _sigCtx) _sigCtx.clearRect(0, 0, canvas.width, canvas.height);
+  _sigHasInk = false;
+}
+
+function toggleSigUnavailable() {
+  var off = document.getElementById('sig-unavailable').checked;
+  var wrap = document.getElementById('parent-sig-wrap');
+  var nameEl = document.getElementById('parent-sig-name');
+  var reasonWrap = document.getElementById('sig-unavailable-reason-wrap');
+  if (wrap) wrap.style.opacity = off ? '0.4' : '1';
+  if (wrap) wrap.style.pointerEvents = off ? 'none' : 'auto';
+  if (nameEl) nameEl.disabled = off;
+  if (reasonWrap) reasonWrap.style.display = off ? 'block' : 'none';
+}
+
+// Validate + capture signature into S. Returns true if OK to proceed.
+function captureSignatureOrBlock() {
+  var unavailable = document.getElementById('sig-unavailable');
+  if (unavailable && unavailable.checked) {
+    var reason = (document.getElementById('sig-unavailable-reason').value || '').trim();
+    if (!reason) { toast('Please add a reason the signature is unavailable', 'err'); return false; }
+    S.parentSignature   = '';
+    S.parentSignerName   = '';
+    S.parentSignedAt     = '';
+    S.signatureSkipReason = reason;
+    return true;
+  }
+  var name = (document.getElementById('parent-sig-name').value || '').trim();
+  if (!_sigHasInk) { toast('Parent/guardian signature required (or mark unavailable)', 'err'); return false; }
+  if (!name)       { toast('Please enter the signer’s name', 'err'); return false; }
+  var canvas = document.getElementById('parent-sig-canvas');
+  S.parentSignature    = canvas ? canvas.toDataURL('image/png') : '';
+  S.parentSignerName    = name;
+  S.parentSignedAt      = new Date().toISOString();
+  S.signatureSkipReason = '';
+  return true;
+}
+
+function resetSignaturePad() {
+  clearSignature();
+  var name = document.getElementById('parent-sig-name');
+  var unavailable = document.getElementById('sig-unavailable');
+  var reason = document.getElementById('sig-unavailable-reason');
+  if (name) { name.value = ''; name.disabled = false; }
+  if (unavailable) unavailable.checked = false;
+  if (reason) reason.value = '';
+  toggleSigUnavailable();
 }
 
 function sumRow(lbl, val, isZero) {
@@ -2583,6 +2700,8 @@ function submitSession() {
     console.log('[Submit] BLOCKED — word count below minimum');
     toast('Please write at least ' + NOTES_MIN_WORDS + ' content words in your notes', 'err'); return;
   }
+  // Parent/guardian signature — capture into S or block (validates + toasts).
+  if (!captureSignatureOrBlock()) return;
   // Stop timers before showing modal
   if (S.tantrum.running) timerStop();
   if (S.sessInterval) { clearInterval(S.sessInterval); S.sessInterval = null; }
@@ -2698,6 +2817,10 @@ function buildPayload() {
     lateStartReason: S.lateStartReason,
     adjustedEndTime: S.adjustedEndTime || '',
     endTimeAdjustmentReason: S.endTimeAdjustmentReason || '',
+    parentSignerName: S.parentSignerName || '',
+    parentSignedAt: S.parentSignedAt || '',
+    parentSignature: S.parentSignature || '',
+    signatureSkipReason: S.signatureSkipReason || '',
     behaviorKeys, behaviorLabels, behaviorData, trialData,
     abcData: S.abc.map(inc => ({
       behavior:inc.behavior, setting:inc.setting, antecedent:inc.antecedent,
@@ -2765,6 +2888,8 @@ function resetState() {
   S.trials = {}; S.abc = []; abcIdSeq = 0;
   S.appStartTime = null; S.actualStartTime = null; S.lateStartReason = '';
   S.adjustedEndTime = null; S.adjustedEndTimeDate = null; S.endTimeAdjustmentReason = '';
+  S.parentSignerName = ''; S.parentSignedAt = ''; S.parentSignature = ''; S.signatureSkipReason = '';
+  resetSignaturePad();
   S.submitted = false;
   // Pause/resume fields
   S.suspendId = null; S.submissionId = null; S.everPaused = false; S.paused = false;

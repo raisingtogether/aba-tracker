@@ -1180,7 +1180,8 @@ function writeSessionLog(ss, d) {
   ];
   var adjustHeaders = ['Adjusted End Time', 'End Time Adjustment Reason'];
   var manualHeaders = ['manualEntry', 'enteredBy'];
-  var allHeaders = baseHeaders.concat(analyticsHeaders, adjustHeaders, manualHeaders);
+  var signatureHeaders = ['Parent Signer Name', 'Parent Signed At', 'Parent Signature', 'Signature Skip Reason'];
+  var allHeaders = baseHeaders.concat(analyticsHeaders, adjustHeaders, manualHeaders, signatureHeaders);
 
   var sheet = getOrCreateSheet(ss, 'Time In Time Out', allHeaders);
   ensureSheetColumns(sheet, allHeaders);
@@ -1221,6 +1222,10 @@ function writeSessionLog(ss, d) {
   if (colMap['End Time Adjustment Reason'] !== undefined) row[colMap['End Time Adjustment Reason']] = d.endTimeAdjustmentReason || '';
   if (colMap['manualEntry']        !== undefined) row[colMap['manualEntry']]        = d.manualEntry ? true : false;
   if (colMap['enteredBy']          !== undefined) row[colMap['enteredBy']]          = d.enteredBy      || '';
+  if (colMap['Parent Signer Name']    !== undefined) row[colMap['Parent Signer Name']]    = d.parentSignerName    || '';
+  if (colMap['Parent Signed At']      !== undefined) row[colMap['Parent Signed At']]      = d.parentSignedAt      || '';
+  if (colMap['Parent Signature']      !== undefined) row[colMap['Parent Signature']]      = d.parentSignature     || '';
+  if (colMap['Signature Skip Reason'] !== undefined) row[colMap['Signature Skip Reason']] = d.signatureSkipReason || '';
 
   validateRowAlignment('Time In Time Out', actualHeaders, row);
   sheet.appendRow(row);
