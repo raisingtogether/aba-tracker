@@ -209,14 +209,14 @@ const PHASES = [
 ];
 
 const HIPAA = [
-  { id: "h1", name: "Tatiana signs 8 HIPAA documents", status: "pending", category: "Admin" },
-  { id: "h2", name: "Upload documents to Google Drive", status: "pending", category: "Admin" },
-  { id: "h3", name: "HIPAA training (30 min) with RBTs", status: "pending", category: "Training" },
-  { id: "h4", name: "Training acknowledgment signatures", status: "pending", category: "Training" },
-  { id: "h5", name: "NPP distributed to 5 families", status: "pending", category: "Parents" },
-  { id: "h6", name: "Parent acknowledgment signatures", status: "pending", category: "Parents" },
-  { id: "h7", name: "Device security check (3 iPhones)", status: "pending", category: "Devices" },
-  { id: "h8", name: "WhatsApp HIPAA notices in groups", status: "pending", category: "Comms" },
+  { id: "h1", name: "Tatiana signs 8 HIPAA documents", status: "done", category: "Admin" },
+  { id: "h2", name: "Upload documents to Google Drive", status: "done", category: "Admin" },
+  { id: "h3", name: "HIPAA training (30 min) with RBTs", status: "done", category: "Training" },
+  { id: "h4", name: "Training acknowledgment signatures", status: "done", category: "Training" },
+  { id: "h5", name: "NPP distributed to 5 families", status: "done", category: "Parents" },
+  { id: "h6", name: "Parent acknowledgment signatures", status: "done", category: "Parents" },
+  { id: "h7", name: "Device security check (3 iPhones)", status: "done", category: "Devices" },
+  { id: "h8", name: "WhatsApp HIPAA notices in groups", status: "done", category: "Comms" },
 ];
 
 const GROWTH = [
