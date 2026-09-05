@@ -5,7 +5,7 @@ const PHASES = [
     id: "phase1",
     name: "Phase 1 — ABA Tracker Hardening",
     subtitle: "Reliability, APIs, and operational readiness",
-    timeline: "Now → June 2026",
+    timeline: "Now → Q4 2026",
     color: "#00A7C7",
     features: [
       // Completed
@@ -119,7 +119,7 @@ const PHASES = [
     id: "phase1b",
     name: "Phase 1.5 — LHBM First Signal (Structured Data)",
     subtitle: "Fine-tune Personal + Master LLMs from ABA Tracker data — HIPAA compliant, fully local",
-    timeline: "June → September 2026",
+    timeline: "Sept 2026 → Feb 2027",
     color: "#7B1FA2",
     features: [
       // Step 1: Environment setup
@@ -155,7 +155,7 @@ const PHASES = [
     id: "phase2",
     name: "Phase 2 — Video Annotation & Recording",
     subtitle: "Session recording, annotation, and VANT training data",
-    timeline: "July → December 2026",
+    timeline: "Q1 → Q3 2027",
     color: "#FF9701",
     features: [
       { id: "v1", name: "RT Recording Device app (dedicated iPhone SE)", status: "planned", priority: "P0", category: "Video", description: "Custom iOS app on RT-owned devices. QR code pairs to active Tracker session. Records encrypted with session key. MDM locked — no other functionality." },
@@ -171,7 +171,7 @@ const PHASES = [
     id: "phase3",
     name: "Phase 3 — Skeleton Extraction & VANT Foundation",
     subtitle: "Privacy-preserving video processing and behavior detection",
-    timeline: "January → June 2027",
+    timeline: "Q3 2027 → Q1 2028",
     color: "#F1196E",
     features: [
       { id: "s1", name: "YOLO11 Pose skeleton extraction pipeline", status: "planned", priority: "P0", category: "ML", description: "Process annotated videos: extract skeleton keypoints frame-by-frame. Run on Mac Mini M4 or cloud GPU. Output: skeleton sequences + behavioral labels from annotations." },
@@ -186,7 +186,7 @@ const PHASES = [
     id: "phase4",
     name: "Phase 4 — Multimodal LHBM & Products",
     subtitle: "Add video + audio signals to Personal/Master models. JUAN, VANT v2, federated learning.",
-    timeline: "July 2027 → 2028",
+    timeline: "2028",
     color: "#5D4337",
     features: [
       { id: "l1",  name: "Add second signal: video annotations to training data", status: "planned", priority: "P0", category: "ML", description: "Enrich training pairs with timestamped behavioral annotations from Phase 2. Same session now has structured ABA data + human video review. Model learns temporal correlations: what sequence of skeleton poses precedes aggression, how engagement looks before mastery trials." },
@@ -221,7 +221,7 @@ const HIPAA = [
 
 const GROWTH = [
   { id: "g1", name: "Publish 'The Supremacy of Behavior'", status: "ready", category: "Content", description: "Draft complete. Edit in Google Docs, publish on LinkedIn + blog." },
-  { id: "g2", name: "Autism Tech Accelerator 2026", status: "pending", category: "Funding", description: "10-week virtual, no equity. Closes May 22, 2026." },
+  { id: "g2", name: "Autism Tech Accelerator 2026", status: "pending", category: "Funding", description: "10-week virtual, no equity. 2026 cohort closed — target the next cohort." },
   { id: "g3", name: "NEXT for AUTISM grants", status: "pending", category: "Funding", description: "Up to $10K for first-time grantees." },
   { id: "g4", name: "Contact UM-NSU CARD (Michael Alessandri)", status: "pending", category: "Research", description: "Clinical validation partner. 18,000+ families served." },
   { id: "g5", name: "Gusto + QuickBooks setup", status: "pending", category: "Operations", description: "Payroll automation. $108/mo vs $602/mo with accountant." },
@@ -310,6 +310,7 @@ export default function Tracker() {
       <div style={{ textAlign: "center", marginBottom: "24px" }}>
         <h1 style={{ fontSize: "22px", fontWeight: 700, color: "#1a1a1a", margin: "0 0 4px" }}>Raising Together</h1>
         <p style={{ fontSize: "13px", color: "#00A7C7", fontWeight: 500, margin: 0 }}>Product & Feature Tracker</p>
+        <p style={{ fontSize: "11px", color: "#999", margin: "4px 0 0" }}>App v4 · Updated Sep 4, 2026</p>
       </div>
 
       <div style={{ display: "flex", gap: "6px", marginBottom: "16px", flexWrap: "wrap" }}>
