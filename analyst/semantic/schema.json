@@ -1,0 +1,166 @@
+{
+  "$comment": "Machine-readable semantic layer for the RT ABA Tracker BigQuery warehouse. Ingest this so a model understands entities, columns, meanings, allowed values, and how tables join — without guessing. Column names are authoritative (from BigQuerySync.gs). PHI fields are flagged; exclude them for de-identified use and model training.",
+  "project": "rt-aba-tracker",
+  "dataset": "aba_tracker",
+  "grain_note": "Fact tables share submission_id (one submitted session). behavior_records and trial_records are LONG format (one row per behavior / per goal per session).",
+  "join_keys": {
+    "submission_id": "links sessions ↔ behavior_records ↔ trial_records ↔ abc_incidents (one session)",
+    "client_id": "→ clients.id",
+    "therapist_email": "→ therapists.email",
+    "goal_code": "→ goals_reference.code",
+    "behavior_key": "→ behaviors_reference.key",
+    "billing_code": "→ billing_codes.code / authorizations.billing_code"
+  },
+  "entities": {
+    "sessions": {
+      "kind": "fact",
+      "description": "One row per submitted therapy session (Time In Time Out).",
+      "columns": {
+        "submission_id": {"type": "STRING", "desc": "Stable unique session id (idempotency key).", "pk": true},
+        "client_id": {"type": "STRING", "desc": "Client identifier.", "fk": "clients.id"},
+        "client_name": {"type": "STRING", "desc": "Client full name.", "phi": true},
+        "therapist_name": {"type": "STRING", "desc": "Therapist full name."},
+        "therapist_email": {"type": "STRING", "desc": "Therapist login email.", "fk": "therapists.email"},
+        "date_iso": {"type": "STRING", "desc": "Session date, 'YYYY-MM-DD'."},
+        "date_display": {"type": "STRING", "desc": "Session date as displayed (M/D/YYYY)."},
+        "session_type": {"type": "STRING", "desc": "e.g. '1:1 with client', 'Supervision', 'Parent Training'."},
+        "billing_code": {"type": "STRING", "desc": "CPT/billing code (e.g. 97153, 97155).", "fk": "billing_codes.code"},
+        "location": {"type": "STRING", "desc": "Setting: Home / School / Community."},
+        "time_in": {"type": "STRING", "desc": "Start time, 12h display."},
+        "time_out": {"type": "STRING", "desc": "End time, 12h display."},
+        "duration_min": {"type": "NUMBER", "desc": "BILLABLE minutes = active therapy time; excludes paused time (v4). May be less than (time_out - time_in)."},
+        "app_start_time": {"type": "STRING", "desc": "When 'Begin Session' was tapped."},
+        "actual_start_time": {"type": "STRING", "desc": "Corrected start if late-started."},
+        "late_start_reason": {"type": "STRING", "desc": "Reason for late start."},
+        "adjusted_end_time": {"type": "STRING", "desc": "Corrected end time if adjusted."},
+        "end_time_adjustment_reason": {"type": "STRING", "desc": "Reason for end-time adjustment."},
+        "notes": {"type": "STRING", "desc": "Free-text clinical session note.", "phi": true, "exclude_from_training": true},
+        "is_draft": {"type": "BOOL", "desc": "TRUE = incomplete/draft; exclude from analytics & training."},
+        "manual_entry": {"type": "BOOL", "desc": "TRUE = admin backdated manual entry."},
+        "entered_by": {"type": "STRING", "desc": "Email of admin for manual entries."},
+        "payload_hash": {"type": "STRING", "desc": "Integrity checksum of core fields."},
+        "submitted_at": {"type": "STRING", "desc": "ISO timestamp of submission."}
+      }
+    },
+    "behavior_records": {
+      "kind": "fact",
+      "grain": "one row per (session, behavior)",
+      "description": "Behavior frequency counts per session. Long format. Includes tantrum rows (behavior_key 'tantrumFrequency', 'tantrumTotalMin').",
+      "columns": {
+        "submission_id": {"type": "STRING", "desc": "Session id.", "fk": "sessions.submission_id"},
+        "client_id": {"type": "STRING", "fk": "clients.id"},
+        "client_name": {"type": "STRING", "phi": true},
+        "therapist_name": {"type": "STRING"},
+        "therapist_email": {"type": "STRING"},
+        "date_iso": {"type": "STRING", "desc": "'YYYY-MM-DD'."},
+        "date_display": {"type": "STRING"},
+        "location": {"type": "STRING", "desc": "Setting."},
+        "session_type": {"type": "STRING"},
+        "billing_code": {"type": "STRING"},
+        "behavior_key": {"type": "STRING", "desc": "Behavior code.", "fk": "behaviors_reference.key"},
+        "behavior_label": {"type": "STRING", "desc": "Human-readable behavior name."},
+        "count": {"type": "NUMBER", "desc": "Frequency count (or minutes for tantrumTotalMin)."},
+        "is_draft": {"type": "BOOL"},
+        "submitted_at": {"type": "STRING"}
+      }
+    },
+    "trial_records": {
+      "kind": "fact",
+      "grain": "one row per (session, goal)",
+      "description": "Discrete-trial goal performance per session. Long format.",
+      "columns": {
+        "submission_id": {"type": "STRING", "fk": "sessions.submission_id"},
+        "client_id": {"type": "STRING", "fk": "clients.id"},
+        "client_name": {"type": "STRING", "phi": true},
+        "therapist_name": {"type": "STRING"},
+        "therapist_email": {"type": "STRING"},
+        "date_iso": {"type": "STRING"},
+        "date_display": {"type": "STRING"},
+        "location": {"type": "STRING"},
+        "session_type": {"type": "STRING"},
+        "billing_code": {"type": "STRING"},
+        "goal_code": {"type": "STRING", "fk": "goals_reference.code"},
+        "goal_description": {"type": "STRING", "desc": "Goal objective text."},
+        "percentage_numeric": {"type": "NUMBER", "desc": "Percent correct 0-100."},
+        "percentage_display": {"type": "STRING"},
+        "total_trials": {"type": "NUMBER"},
+        "correct_trials": {"type": "NUMBER"},
+        "is_draft": {"type": "BOOL"},
+        "submitted_at": {"type": "STRING"}
+      }
+    },
+    "abc_incidents": {
+      "kind": "fact",
+      "grain": "one row per behavior incident",
+      "description": "Antecedent-Behavior-Consequence incident records with hypothesized function.",
+      "columns": {
+        "submission_id": {"type": "STRING", "fk": "sessions.submission_id"},
+        "client_id": {"type": "STRING", "fk": "clients.id"},
+        "behavior": {"type": "STRING", "desc": "Behavior observed."},
+        "setting": {"type": "STRING"},
+        "antecedent": {"type": "STRING", "desc": "What happened before.", "phi": true},
+        "consequence": {"type": "STRING", "desc": "What happened after.", "phi": true},
+        "hypothesized_function": {"type": "STRING", "desc": "Comma-separated functions (escape/attention/tangible/sensory)."},
+        "date_iso": {"type": "STRING"}
+      },
+      "note": "Verify exact abc column names with INFORMATION_SCHEMA before training; the reader maps several from the ABC Data tab."
+    },
+    "mastery_log": {
+      "kind": "fact",
+      "grain": "one row per mastery entry",
+      "description": "Goal & behavior mastery events + BCBA review workflow.",
+      "columns": {
+        "client_id": {"type": "STRING", "fk": "clients.id"},
+        "type": {"type": "STRING", "desc": "'goal' or 'behavior'."},
+        "code": {"type": "STRING", "desc": "goal_code or behavior_key."},
+        "description": {"type": "STRING"},
+        "mastery_date": {"type": "STRING", "desc": "'YYYY-MM-DD'."},
+        "date_iso": {"type": "STRING"},
+        "last_scores": {"type": "STRING", "desc": "Recent scores that triggered mastery."},
+        "status": {"type": "STRING", "desc": "'' | recommended | pendingGeneralization | confirmed | dismissed.", "allowed": ["", "recommended", "pendingGeneralization", "confirmed", "dismissed"]},
+        "approved_by": {"type": "STRING"},
+        "approval_date": {"type": "STRING"},
+        "settings_observed": {"type": "STRING", "desc": "Distinct settings for generalization."},
+        "therapist_name": {"type": "STRING"},
+        "client_name": {"type": "STRING", "phi": true}
+      }
+    },
+    "clients": {"kind": "dimension", "description": "Client roster.", "columns": {
+      "id": {"type": "STRING", "pk": true}, "name": {"type": "STRING", "phi": true},
+      "initials": {"type": "STRING"}, "sheet_id": {"type": "STRING"}, "status": {"type": "STRING"}}},
+    "therapists": {"kind": "dimension", "description": "Therapist/RBT roster.", "columns": {
+      "id": {"type": "STRING", "pk": true}, "name": {"type": "STRING", "phi": true},
+      "initials": {"type": "STRING"}, "profile": {"type": "STRING"}, "email": {"type": "STRING"},
+      "role": {"type": "STRING"}, "weekly_hour_limit": {"type": "NUMBER"}, "pay_rate": {"type": "NUMBER"},
+      "status": {"type": "STRING"}, "client_ids": {"type": "STRING", "desc": "Comma-separated assigned clients."}}},
+    "goals_reference": {"kind": "dimension", "description": "Goal definitions.", "columns": {
+      "code": {"type": "STRING", "pk": true}, "description": {"type": "STRING"},
+      "client_ids": {"type": "STRING"}, "num_trials": {"type": "NUMBER"}, "status": {"type": "STRING"}}},
+    "behaviors_reference": {"kind": "dimension", "description": "Behavior definitions.", "columns": {
+      "key": {"type": "STRING", "pk": true}, "label": {"type": "STRING"},
+      "client_ids": {"type": "STRING"}, "status": {"type": "STRING"}}},
+    "authorizations": {"kind": "dimension", "description": "Insurance authorizations per client+code.", "columns": {
+      "client_id": {"type": "STRING", "fk": "clients.id"}, "payer_type": {"type": "STRING"},
+      "insurance_company": {"type": "STRING"}, "authorization_number": {"type": "STRING", "phi": true},
+      "billing_code": {"type": "STRING"}, "authorized_hours": {"type": "NUMBER"},
+      "unit_rate": {"type": "NUMBER"}, "hourly_rate": {"type": "NUMBER"},
+      "start_date": {"type": "STRING"}, "end_date": {"type": "STRING"},
+      "co_insurance": {"type": "STRING"}, "step_up_program": {"type": "STRING"}, "status": {"type": "STRING"}}},
+    "billing_codes": {"kind": "dimension", "description": "Billing code matrix.", "columns": {
+      "profile": {"type": "STRING"}, "session_type": {"type": "STRING"}, "code": {"type": "STRING"}}}
+  },
+  "metrics": {
+    "billable_hours": "SUM(sessions.duration_min)/60 WHERE is_draft = FALSE",
+    "units_15min": "ROUND(sessions.duration_min/15) — one unit per 15 minutes",
+    "goal_percent_correct": "trial_records.percentage_numeric (0-100), or 100*SUM(correct_trials)/SUM(total_trials)",
+    "goal_mastery": "goal: 80%+ correct for 5 consecutive sessions (auto-confirmed)",
+    "behavior_mastery": "behavior: count <= 1 for 10 consecutive sessions + 2+ settings (BCBA-reviewed)",
+    "authorization_utilization": "used_hours / authorized_hours per client+billing_code"
+  },
+  "training_notes": {
+    "exclude_for_deid": ["notes", "client_name", "antecedent", "consequence", "authorization_number"],
+    "filter": "is_draft = FALSE",
+    "shape": "behavior_records & trial_records are already long/tidy; window per client over date_iso to build sequences.",
+    "volume_caveat": "Small dataset today — suited to fine-tuning / few-shot / evaluation, not training from scratch."
+  }
+}
