@@ -28,6 +28,9 @@ function doPost(e) {
       var loginResult = verifyLogin(data.email, data.pin, data.totp);
       result = { success: true, valid: loginResult.valid, therapist: loginResult.therapist, reason: loginResult.reason };
 
+    } else if (data.action === 'verifyTOTPTest') {
+      result = { success: true, valid: verifyTOTP(data.secret, String(data.totp || '')) };
+
     } else if (data.action === 'logAudit') {
       writeAuditLog(data.timestamp, data.userId, data.auditAction, data.clientName, data.details);
       result = { success: true };
@@ -971,8 +974,11 @@ function processSession(d) {
     return;
   }
 
-  writeBehaviorData(ss, d);
+  // Write the Time In Time Out row FIRST so the dedup marker (Submission ID)
+  // lands before the other tabs. If a later write throws mid-sequence, a retry
+  // is then correctly skipped by _sessionAlreadyRecorded instead of duplicating.
   writeSessionLog(ss, d);
+  writeBehaviorData(ss, d);
   writeTrialData(ss, d);
   writeABCData(ss, d);
   // Also write audit entry if audit sheet configured
@@ -1001,9 +1007,13 @@ function _sessionAlreadyRecorded(ss, submissionId) {
     var lastCol = sheet.getLastColumn();
     if (lastRow < 2 || lastCol < 1) return false;
     var header = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+    // The session id is written to the base "Submission ID" column by
+    // writeSessionLog; older sheets may also have a lowercase "submissionId"
+    // analytics column. Accept either so dedup actually works.
     var idx = -1;
     for (var c = 0; c < header.length; c++) {
-      if (String(header[c]).trim() === 'submissionId') { idx = c; break; }
+      var hn = String(header[c]).trim();
+      if (hn === 'Submission ID' || hn === 'submissionId') { idx = c; break; }
     }
     if (idx < 0) return false;
     var col = sheet.getRange(2, idx + 1, lastRow - 1, 1).getValues();
@@ -1224,7 +1234,15 @@ function writeSessionLog(ss, d) {
   if (colMap['enteredBy']          !== undefined) row[colMap['enteredBy']]          = d.enteredBy      || '';
   if (colMap['Parent Signer Name']    !== undefined) row[colMap['Parent Signer Name']]    = d.parentSignerName    || '';
   if (colMap['Parent Signed At']      !== undefined) row[colMap['Parent Signed At']]      = d.parentSignedAt      || '';
-  if (colMap['Parent Signature']      !== undefined) row[colMap['Parent Signature']]      = d.parentSignature     || '';
+  // Google Sheets caps a cell at 50,000 chars; a dense signature PNG can exceed
+  // it and would throw on appendRow, losing the whole session. Guard it.
+  var sigData = String(d.parentSignature || '');
+  if (sigData.length > 49000) {
+    writeAuditLog(new Date().toISOString(), 'system', 'signature_truncated', d.clientName || '',
+      'Parent Signature ' + sigData.length + ' chars exceeded cell limit for submission ' + (d.submissionId || ''));
+    sigData = '';
+  }
+  if (colMap['Parent Signature']      !== undefined) row[colMap['Parent Signature']]      = sigData;
   if (colMap['Signature Skip Reason'] !== undefined) row[colMap['Signature Skip Reason']] = d.signatureSkipReason || '';
 
   validateRowAlignment('Time In Time Out', actualHeaders, row);

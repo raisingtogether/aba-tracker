@@ -336,6 +336,9 @@ function bqReadSessionRows(clientSS, client) {
       adjusted_end_time:          bqStr(cm, row, 'Adjusted End Time'),
       end_time_adjustment_reason: bqStr(cm, row, 'End Time Adjustment Reason'),
       notes:                      bqStr(cm, row, 'Notes'),
+      parent_signer_name:         bqStr(cm, row, 'Parent Signer Name'),
+      parent_signed_at:           bqStr(cm, row, 'Parent Signed At'),
+      signature_skip_reason:      bqStr(cm, row, 'Signature Skip Reason'),
       is_draft:                   bqBool(cm, row, 'isDraft'),
       manual_entry:               bqBool(cm, row, 'manualEntry'),
       entered_by:                 bqStr(cm, row, 'enteredBy'),
@@ -739,6 +742,16 @@ function bqEnsureDataset() {
  * Creates the table if it does not exist; replaces all data if it does.
  */
 function bqSyncTable(tableId, rows) {
+  // Data tables are built by reading client sheets, which can transiently fail.
+  // Skip the WRITE_TRUNCATE when the buffer is unexpectedly empty so we never
+  // wipe the last good copy to zero rows. Reference tables are left as-is.
+  var DATA_TABLES = { sessions: 1, behavior_records: 1, trial_records: 1, abc_incidents: 1, mastery_log: 1 };
+  if (DATA_TABLES[tableId] && (!rows || rows.length === 0)) {
+    Logger.log('bqSyncTable: skip WRITE_TRUNCATE for ' + tableId + ' — 0 rows (preserving last good copy)');
+    try { bqAuditLog('bigquery_sync_skip', 'Skipped truncate of ' + tableId + ' — 0 rows in buffer (likely a read failure)'); } catch (e) {}
+    return;
+  }
+
   var schema = bqCreateTableSchema(tableId);
 
   // Build newline-delimited JSON blob
@@ -848,7 +861,10 @@ function bqCreateTableSchema(tableId) {
       { name: 'manual_entry',               type: 'BOOLEAN', mode: 'NULLABLE' },
       { name: 'entered_by',                 type: 'STRING',  mode: 'NULLABLE' },
       { name: 'payload_hash',               type: 'STRING',  mode: 'NULLABLE' },
-      { name: 'submitted_at',               type: 'STRING',  mode: 'NULLABLE' }
+      { name: 'submitted_at',               type: 'STRING',  mode: 'NULLABLE' },
+      { name: 'parent_signer_name',         type: 'STRING',  mode: 'NULLABLE' },
+      { name: 'parent_signed_at',           type: 'STRING',  mode: 'NULLABLE' },
+      { name: 'signature_skip_reason',      type: 'STRING',  mode: 'NULLABLE' }
     ]};
   }
 

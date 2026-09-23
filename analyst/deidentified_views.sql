@@ -84,27 +84,48 @@ FROM `rt-aba-tracker.aba_tracker.behavior_records`
 WHERE IFNULL(is_draft, FALSE) = FALSE
 GROUP BY client_id, behavior_key, behavior_label, session_date;
 
--- ── Authorization utilization: authorized vs used hours per client × code ───
+-- ── Authorization utilization: authorized vs used hours per authorization ───
+-- One row PER AUTHORIZATION (keyed by authorization_number), with used hours
+-- scoped to that authorization's own date window — so multiple/expired auths on
+-- the same billing_code don't double-count or bleed across periods. authorization_number
+-- is used only for grouping and is NOT exposed (kept de-identified).
 CREATE OR REPLACE VIEW `rt-aba-tracker.aba_tracker.v_authorization_utilization` AS
-WITH used AS (
-  SELECT client_id, billing_code, SUM(hours) AS used_hours
-  FROM `rt-aba-tracker.aba_tracker.v_sessions_deid`
-  GROUP BY client_id, billing_code
+WITH auth AS (
+  SELECT
+    client_id, billing_code, payer_type, authorization_number,
+    authorized_hours, start_date, end_date, status,
+    SAFE.PARSE_DATE('%Y-%m-%d', start_date) AS start_d,
+    SAFE.PARSE_DATE('%Y-%m-%d', end_date)   AS end_d
+  FROM `rt-aba-tracker.aba_tracker.authorizations`
+),
+used AS (
+  SELECT
+    a.client_id, a.billing_code, a.authorization_number,
+    IFNULL(SUM(s.hours), 0) AS used_hours
+  FROM auth a
+  LEFT JOIN `rt-aba-tracker.aba_tracker.v_sessions_deid` s
+    ON s.client_id    = a.client_id
+   AND s.billing_code = a.billing_code
+   AND (a.start_d IS NULL OR s.session_date >= a.start_d)
+   AND (a.end_d   IS NULL OR s.session_date <= a.end_d)
+  GROUP BY a.client_id, a.billing_code, a.authorization_number
 )
 SELECT
   a.client_id,
   a.billing_code,
   a.payer_type,
   a.authorized_hours,
-  IFNULL(u.used_hours, 0)                                   AS used_hours,
-  a.authorized_hours - IFNULL(u.used_hours, 0)             AS remaining_hours,
-  SAFE_DIVIDE(IFNULL(u.used_hours, 0), a.authorized_hours) AS utilization_pct,
+  u.used_hours,
+  a.authorized_hours - u.used_hours                     AS remaining_hours,
+  SAFE_DIVIDE(u.used_hours, a.authorized_hours)         AS utilization_pct,
   a.start_date,
   a.end_date,
   a.status
-FROM `rt-aba-tracker.aba_tracker.authorizations` a
-LEFT JOIN used u
-  ON u.client_id = a.client_id AND u.billing_code = a.billing_code;
+FROM auth a
+JOIN used u
+  ON u.client_id            = a.client_id
+ AND u.billing_code         = a.billing_code
+ AND u.authorization_number = a.authorization_number;
 
 -- ── Mastery / RBT review: goal & behavior mastery entries + BCBA workflow ───
 -- Columns from BigQuerySync.gs bqReadMasteryRows. Excludes client_name (PHI).

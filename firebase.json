@@ -5,7 +5,11 @@
     "ignore": [
       "firebase.json",
       "**/.*",
-      "**/node_modules/**"
+      "**/node_modules/**",
+      "**/*.gs",
+      "**/*.jsx",
+      "**/*.md",
+      "analyst/**"
     ],
     "rewrites": [
       { "source": "/tracker", "destination": "/tracker/index.html" }

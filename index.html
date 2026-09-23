@@ -5164,11 +5164,11 @@ async function loadPayroll(start, end) {
       var bCodes = payroll[tName].billingCodes || {};
       var bCodeStr = Object.keys(bCodes).length ? Object.keys(bCodes).join(', ') : '—';
 
-      html += '<tr><td>' + tName + '</td><td>' + bCodeStr + '</td><td>' + hours.toFixed(2) + '</td><td>' + (rate ? '$' + rate.toFixed(2) : '—') + '</td><td class="payroll-total">' + (pay ? '$' + pay.toFixed(2) : '—') + '</td></tr>';
+      html += '<tr><td>' + escHtml(tName) + '</td><td>' + escHtml(bCodeStr) + '</td><td>' + hours.toFixed(2) + '</td><td>' + (rate ? '$' + rate.toFixed(2) : '—') + '</td><td class="payroll-total">' + (pay ? '$' + pay.toFixed(2) : '—') + '</td></tr>';
       // Client breakdown
       Object.keys(payroll[tName].clients || {}).forEach(function(cName) {
         var cHours = payroll[tName].clients[cName];
-        html += '<tr style="background:var(--g100)"><td style="padding-left:24px;color:var(--g400)">' + cName + '</td><td style="color:var(--g400)"></td><td style="color:var(--g400)">' + cHours.toFixed(2) + '</td><td></td><td></td></tr>';
+        html += '<tr style="background:var(--g100)"><td style="padding-left:24px;color:var(--g400)">' + escHtml(cName) + '</td><td style="color:var(--g400)"></td><td style="color:var(--g400)">' + cHours.toFixed(2) + '</td><td></td><td></td></tr>';
       });
     });
     html += '</tbody><tfoot><tr><td colspan="4" style="font-weight:800;padding:10px">Grand Total</td><td class="payroll-total">$' + grandTotal.toFixed(2) + '</td></tr></tfoot></table>';
@@ -5253,8 +5253,8 @@ function renderAdminsTab(container) {
   admins.forEach((a, i) => {
     const inactive = (a.status || 'active') === 'inactive';
     container.innerHTML += '<div class="admin-item' + (inactive ? ' inactive' : '') + '">' +
-      '<div class="admin-item-left"><div class="admin-av" style="background:var(--primary)">' + (a.name||'?')[0].toUpperCase() + '</div></div>' +
-      '<div class="admin-item-body"><div class="admin-item-name">' + (a.name||a.email) + '</div><div class="admin-item-sub">' + (a.email||'') + '</div></div>' +
+      '<div class="admin-item-left"><div class="admin-av" style="background:var(--primary)">' + escHtml((a.name||'?')[0].toUpperCase()) + '</div></div>' +
+      '<div class="admin-item-body"><div class="admin-item-name">' + escHtml(a.name||a.email||'') + '</div><div class="admin-item-sub">' + escHtml(a.email||'') + '</div></div>' +
       '<div class="admin-item-actions">' +
       '<button class="admin-act-btn" onclick="openEditAdminModal(' + i + ')">Edit</button>' +
       '<button class="admin-act-btn ' + (inactive ? 'act-activate' : 'act-deactivate') + '" onclick="toggleAdminStatus(' + i + ')">' + (inactive ? 'Activate' : 'Disable') + '</button>' +
@@ -5267,8 +5267,8 @@ function openEditAdminModal(idx) {
   const raw  = RAW_CONFIG || DEFAULT_CONFIG;
   const item = idx !== null ? (raw.admins || [])[idx] : {};
   document.getElementById('edit-form-body').innerHTML =
-    '<div class="form-group"><label class="form-lbl">Name</label><input class="form-ctrl" id="adm-name" value="' + (item.name||'') + '"></div>' +
-    '<div class="form-group"><label class="form-lbl">Google Email</label><input class="form-ctrl" id="adm-email" type="email" value="' + (item.email||'') + '"></div>';
+    '<div class="form-group"><label class="form-lbl">Name</label><input class="form-ctrl" id="adm-name" value="' + escAttr(item.name||'') + '"></div>' +
+    '<div class="form-group"><label class="form-lbl">Google Email</label><input class="form-ctrl" id="adm-email" type="email" value="' + escAttr(item.email||'') + '"></div>';
   editModalType = 'admins';
   editModalItem = item.email ? item : null;
   document.getElementById('modal-edit-title').textContent = idx !== null ? 'Edit Admin' : 'Add Admin';
@@ -5544,11 +5544,15 @@ async function verifyTOTPSetup() {
       method:'POST', headers:{'Content-Type':'text/plain'}, redirect:'follow',
       body: JSON.stringify({ action:'verifyTOTPTest', secret: secret, totp: code })
     });
+    const data = await resp2.json();
+    if (!data || !data.valid) {
+      errEl.textContent = 'Code incorrect \u2014 check the authenticator and try again';
+      return;   // keep modal open; do NOT claim success
+    }
     document.getElementById('modal-totp-setup').classList.remove('active');
     toast('TOTP configured \u2713', 'ok');
   } catch(e) {
-    document.getElementById('modal-totp-setup').classList.remove('active');
-    toast('TOTP saved (verify when online)', 'ok');
+    errEl.textContent = 'Could not verify \u2014 check your connection and try again';
   }
 }
 
@@ -6172,13 +6176,13 @@ function renderBillingReportResults(rows) {
     byCode[code].billable += billable;
 
     html += '<tr>' +
-      '<td>' + (r.date || '') + '</td>' +
-      '<td>' + (r.clientName || '') + '</td>' +
-      '<td>' + (r.therapist || '') + '</td>' +
-      '<td>' + code + '</td>' +
-      '<td>' + (r.sessionType || '') + '</td>' +
+      '<td>' + escHtml(r.date || '') + '</td>' +
+      '<td>' + escHtml(r.clientName || '') + '</td>' +
+      '<td>' + escHtml(r.therapist || '') + '</td>' +
+      '<td>' + escHtml(code) + '</td>' +
+      '<td>' + escHtml(r.sessionType || '') + '</td>' +
       '<td>' + (r.hours || 0).toFixed(2) + '</td>' +
-      '<td>' + (r.insuranceCompany || '\u2014') + '</td>' +
+      '<td>' + escHtml(r.insuranceCompany || '\u2014') + '</td>' +
       '<td>' + (r.unitRate   ? '$' + r.unitRate.toFixed(2)   : '\u2014') + '</td>' +
       '<td>' + (r.hourlyRate ? '$' + r.hourlyRate.toFixed(2) : '\u2014') + '</td>' +
       '<td class="payroll-total">' + (billable ? '$' + billable.toFixed(2) : '\u2014') + '</td>' +
@@ -6193,7 +6197,7 @@ function renderBillingReportResults(rows) {
   Object.keys(byCode).forEach(function(code) {
     var s = byCode[code];
     html += '<div style="display:flex;justify-content:space-between;font-size:13px;padding:4px 0;border-bottom:1px solid var(--g200)">' +
-      '<span><strong>' + code + '</strong> \u2014 ' + s.hours.toFixed(2) + 'h</span>' +
+      '<span><strong>' + escHtml(code) + '</strong> \u2014 ' + s.hours.toFixed(2) + 'h</span>' +
       '<span>' + (s.billable ? '$' + s.billable.toFixed(2) : '\u2014') + '</span></div>';
   });
   html += '<div style="display:flex;justify-content:space-between;font-size:14px;font-weight:900;color:var(--g800);padding-top:10px">' +
