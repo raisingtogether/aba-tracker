@@ -1,0 +1,102 @@
+{
+  "$comment": "Canonical event catalog for the RT ABA Tracker integration bus. This is THE contract shared by every producer (PWA, video device, wearable SDK) and every consumer (BigQuery warehouse, LHBM training + inference, VANT dashboard, webhooks). It formalizes the in-app EventBus vocabulary (f17) into a versioned, transport-agnostic schema. Pairs with analyst/semantic/schema.json (the warehouse data dictionary).",
+  "version": "1.0.0",
+  "envelope": {
+    "$comment": "Every event on the bus shares this envelope. payload shape is per event type below.",
+    "fields": {
+      "eventId":      { "type": "string", "desc": "UUID v4, unique per event — idempotency key for the bus (dedup on redelivery)." },
+      "type":         { "type": "string", "desc": "Event type, e.g. 'behavior.recorded' (see catalog)." },
+      "v":            { "type": "integer", "desc": "Schema version of this event type (starts at 1)." },
+      "ts":           { "type": "string", "desc": "ISO-8601 UTC timestamp when the event occurred (device clock)." },
+      "submissionId": { "type": "string", "desc": "Stable session id — correlates all events of one session; matches sessions.submission_id in BigQuery. THE join key across the bus." },
+      "clientId":     { "type": "string", "desc": "Patient id (FK clients.id). PHI-adjacent — pseudonymize for training." },
+      "therapistEmail": { "type": "string", "desc": "Producer identity (also the auth subject for device tokens)." },
+      "source":       { "type": "string", "enum": ["pwa", "video-device", "wearable", "backend", "manual-entry"], "desc": "Which producer emitted it." },
+      "deviceId":     { "type": "string", "desc": "Opaque device id (for device-token auth + provenance). Optional for pwa." },
+      "payload":      { "type": "object", "desc": "Event-type-specific body (below)." }
+    },
+    "delivery": "at-least-once; consumers MUST dedup on eventId. Session-level dedup uses submissionId (already enforced server-side by _sessionAlreadyRecorded)."
+  },
+  "events": {
+    "session.started": {
+      "v": 1, "producers": ["pwa"], "warehouse": "sessions",
+      "payload": {
+        "clientId": "string", "sessionType": "string", "location": "string",
+        "timeIn": "string (12h display)", "appStartTime": "string", "actualStartTime": "string",
+        "lateStartReason": "string"
+      }
+    },
+    "session.paused": {
+      "v": 1, "producers": ["pwa"], "warehouse": null,
+      "$comment": "Transient/operational (Suspended Sessions). Not a warehouse fact; useful as a real-time signal + for engagement analytics.",
+      "payload": { "reason": "string (Travel|Patient break|Bathroom|Connectivity|Other)", "activeMs": "number", "pausedMsTotal": "number" }
+    },
+    "session.resumed": {
+      "v": 1, "producers": ["pwa"], "warehouse": null,
+      "payload": { "resumedOnDevice": "string", "gapMs": "number" }
+    },
+    "behavior.recorded": {
+      "v": 1, "producers": ["pwa", "wearable", "video-device"], "warehouse": "behavior_records",
+      "$comment": "One event per behavior count change (or a per-session rollup). Wearable/video can emit the SAME event type once VANT (Phase 3) auto-detects behaviors — this is where multimodal corroboration happens.",
+      "payload": {
+        "behaviorKey": "string (FK behaviors_reference.key)", "behaviorLabel": "string",
+        "count": "number", "location": "string",
+        "detectionSource": "string (manual|skeleton|audio) — v2, defaults 'manual'"
+      }
+    },
+    "trial.scored": {
+      "v": 1, "producers": ["pwa"], "warehouse": "trial_records",
+      "payload": {
+        "goalCode": "string (FK goals_reference.code)", "goalDescription": "string",
+        "trials": "array<boolean|null>", "correctTrials": "number", "totalTrials": "number",
+        "percentage": "number (0-100)",
+        "promptLevel": "string (independent|verbal|gestural|model|partial-physical|full-physical) — f30, per-trial; HIGH-VALUE LHBM signal"
+      }
+    },
+    "abc.logged": {
+      "v": 1, "producers": ["pwa"], "warehouse": "abc_incidents",
+      "payload": {
+        "behavior": "string", "setting": "string",
+        "antecedent": "string (PHI — exclude from training)", "consequence": "string (PHI — exclude)",
+        "hypothesizedFunction": "string (comma-sep: escape|attention|tangible|sensory)"
+      }
+    },
+    "session.completed": {
+      "v": 1, "producers": ["pwa", "manual-entry"], "warehouse": "sessions",
+      "$comment": "Terminal event. Carries billing + signature metadata. Idempotent via submissionId.",
+      "payload": {
+        "timeOut": "string", "durationMin": "number (billable/active)", "billingCode": "string",
+        "supervisionOccurred": "boolean", "everPaused": "boolean", "pausedMsTotal": "number",
+        "parentSignerName": "string", "parentSignedAt": "string", "signatureSkipReason": "string",
+        "manualEntry": "boolean"
+      }
+    },
+    "mastery.changed": {
+      "v": 1, "producers": ["backend"], "warehouse": "mastery_log",
+      "payload": {
+        "type": "string (goal|behavior)", "code": "string", "status": "string (recommended|pendingGeneralization|confirmed|dismissed)",
+        "approvedBy": "string", "settingsObserved": "string"
+      }
+    },
+    "consent.recorded": {
+      "v": 1, "producers": ["pwa"], "warehouse": "consents (planned)",
+      "$comment": "Parent consent (session signature f28 today; recording consent v6 for Phase 2 video). Revocable.",
+      "payload": { "consentType": "string (session|recording)", "signerName": "string", "signedAt": "string", "revoked": "boolean" }
+    },
+    "inference.requested": {
+      "v": 1, "producers": ["pwa", "wearable", "backend"], "warehouse": null,
+      "$comment": "Real-time (Phase C). A behavioral profile sent to the LHBM inference API (m16). Response is inference.produced.",
+      "payload": { "clientId": "string", "context": "object (recent behaviors/goals/session context)", "requestId": "string" }
+    },
+    "inference.produced": {
+      "v": 1, "producers": ["backend (LHBM)"], "warehouse": "predictions (planned)",
+      "$comment": "LHBM output → drives wearable push (JUAN l7), smart notes (m17), pattern alerts (m18).",
+      "payload": { "requestId": "string", "prediction": "object", "reasoning": "string", "recommendation": "string", "confidence": "number" }
+    }
+  },
+  "notes": {
+    "training_use": "For LHBM training, consume the warehouse tables built from these events (not raw events). Apply the de-identification exclusions in analyst/semantic/schema.json (notes, names, antecedent/consequence, authorization_number). Filter is_draft.",
+    "wearables": "JUAN (l7/l8) is BOTH a producer (behavior.recorded via sensors) and a consumer (inference.produced → haptic/audio). It needs device-token auth (f26a) and the real-time broker (f26b).",
+    "evolution": "Add new event types or bump a type's v; never repurpose an existing field. Producers may emit a subset; consumers must tolerate unknown fields (forward-compatible)."
+  }
+}

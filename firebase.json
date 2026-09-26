@@ -9,7 +9,8 @@
       "**/*.gs",
       "**/*.jsx",
       "**/*.md",
-      "analyst/**"
+      "analyst/**",
+      "docs/**"
     ],
     "rewrites": [
       { "source": "/tracker", "destination": "/tracker/index.html" }
