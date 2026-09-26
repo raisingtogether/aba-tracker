@@ -1114,22 +1114,6 @@ function writeBehaviorData(ss, d) {
     if (h && colMap[h] === undefined) { colMap[h] = hi; }
   }
 
-  // ── Diagnostics (visible in Apps Script execution log) ──────────────
-  Logger.log('[writeBehaviorData] sid=' + (d.submissionId || 'none') +
-    ' client=' + (d.clientName || '?') + ' date=' + (d.dateISO || d.date || '?'));
-  Logger.log('[writeBehaviorData] lastCol=' + lastCol +
-    ' headers=' + JSON.stringify(actualHeaders));
-  Logger.log('[writeBehaviorData] colMap: submissionId=' + colMap['submissionId'] +
-    ' clientName=' + colMap['clientName'] + ' clientId=' + colMap['clientId'] +
-    ' therapistEmail=' + colMap['therapistEmail']);
-  // Warn if any blank header exists (blank column in sheet — may cause misalignment confusion)
-  for (var whi = 0; whi < actualHeaders.length; whi++) {
-    if (String(actualHeaders[whi]).trim() === '') {
-      Logger.log('[writeBehaviorData] WARNING: blank header at col index ' + whi +
-        ' (sheet col ' + (whi + 1) + ') — this column is skipped in colMap');
-    }
-  }
-
   // Build row sized to actual header count, default '' per cell
   var row = [];
   for (var ri = 0; ri < lastCol; ri++) { row.push(''); }
@@ -1157,12 +1141,6 @@ function writeBehaviorData(ss, d) {
   if (colMap['payloadHash']    !== undefined) { row[colMap['payloadHash']]    = d.payloadHash    || ''; }
   if (colMap['submittedAt']    !== undefined) { row[colMap['submittedAt']]    = d.submittedAt    || new Date().toISOString(); }
   if (colMap['dateISO']        !== undefined) { row[colMap['dateISO']]        = d.dateISO        || ''; }
-
-  // Log the exact analytics slice being written so we can verify positions
-  Logger.log('[writeBehaviorData] row[clientName@' + colMap['clientName'] + ']=' +
-    row[colMap['clientName']] + ' row[clientId@' + colMap['clientId'] + ']=' +
-    row[colMap['clientId']] + ' row[therapistEmail@' + colMap['therapistEmail'] + ']=' +
-    row[colMap['therapistEmail']]);
 
   validateRowAlignment('Behavior Data', actualHeaders, row);
   sheet.appendRow(row);
@@ -2603,6 +2581,11 @@ function getBillingReport(clientId, weekStart, clients) {
   startDate.setUTCHours(0, 0, 0, 0);
   var endDate = new Date(startDate);
   endDate.setDate(endDate.getDate() + 7);
+  // Compare on dateISO strings (like getWeeklyHours/getBiweeklyHours) to avoid a
+  // timezone off-by-one: parsing the local "Date" cell against a UTC-midnight
+  // window shifted boundary sessions into the wrong week.
+  var startISO = Utilities.formatDate(startDate, 'UTC', 'yyyy-MM-dd');
+  var endISO   = Utilities.formatDate(endDate,   'UTC', 'yyyy-MM-dd');  // exclusive
 
   // Read authorizations once from admin sheet
   var adminSS = SpreadsheetApp.openById(ADMIN_SHEET_ID);
@@ -2640,17 +2623,19 @@ function getBillingReport(clientId, weekStart, clients) {
       for (var ri = 1; ri < data.length; ri++) {
         var row     = data[ri];
         var rowDate = new Date(row[dateIdx]);
-        if (rowDate < startDate || rowDate >= endDate) continue;
+
+        // Prefer the dateISO column; fall back to the Date cell. Filter on the
+        // ISO string against the half-open [startISO, endISO) window.
+        var dateISO = dateISOIdx >= 0 ? toDateISO(row[dateISOIdx]) : '';
+        if (!dateISO) {
+          dateISO = Utilities.formatDate(rowDate, 'UTC', 'yyyy-MM-dd');
+        }
+        if (!dateISO || dateISO < startISO || dateISO >= endISO) continue;
 
         var bCode    = billingIdx  >= 0 ? String(row[billingIdx]   || '').trim() : '';
         var duration = parseFloat(row[durationIdx]) || 0;
         var therapist = therapistIdx >= 0 ? String(row[therapistIdx] || '').trim() : '';
         var sessType  = sessTypeIdx  >= 0 ? String(row[sessTypeIdx]  || '').trim() : '';
-
-        var dateISO = dateISOIdx >= 0 ? toDateISO(row[dateISOIdx]) : '';
-        if (!dateISO) {
-          dateISO = Utilities.formatDate(rowDate, 'UTC', 'yyyy-MM-dd');
-        }
 
         // Match authorization for this client + billing code
         var matchAuth = null;

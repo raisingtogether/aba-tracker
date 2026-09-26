@@ -529,9 +529,6 @@ function bqReadTrialRows(clientSS, client, goalDescMap) {
     hi2 = j;
   }
 
-  Logger.log('[BQ TRIAL PARSE] Client: ' + client.name +
-             ' | Goals found: ' + goalGroups.length +
-             ' | Headers scanned: ' + headers.length);
 
   if (!goalGroups.length) return [];
 

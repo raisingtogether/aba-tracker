@@ -1,7 +1,7 @@
 // Raising Together ABA Tracker — Service Worker
 // Bump CACHE on every deploy so clients pick up the new index.html and old
 // caches are purged on activate.
-const CACHE = 'rt-aba-v4';
+const CACHE = 'rt-aba-v5';
 const ASSETS = [
   './',
   './index.html',
@@ -23,14 +23,19 @@ self.addEventListener('activate', e => {
 });
 
 self.addEventListener('fetch', e => {
-  // Network-first for GAS POST calls; cache-first for everything else
+  // POST (GAS calls) bypass the SW entirely — go straight to network.
   if (e.request.method === 'POST') return;
 
+  // Network-first: try the network, cache the result, fall back to cache offline.
   e.respondWith(
     fetch(e.request)
       .then(resp => {
-        const clone = resp.clone();
-        caches.open(CACHE).then(c => c.put(e.request, clone));
+        // Only cache good, cacheable responses — never cache a 404/500/opaque
+        // error page (which would then be served offline as if valid).
+        if (resp && resp.ok && (resp.type === 'basic' || resp.type === 'cors')) {
+          const clone = resp.clone();
+          caches.open(CACHE).then(c => c.put(e.request, clone));
+        }
         return resp;
       })
       .catch(() => caches.match(e.request))

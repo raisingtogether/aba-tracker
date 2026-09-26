@@ -1086,20 +1086,6 @@ FOCUS FOR NEXT SESSION: Outline priorities and goals for the next session"
   </div>
 </div>
 
-<!-- PIN MODAL -->
-<div class="modal-overlay" id="modal-pin">
-  <div class="modal-sheet" style="text-align:center">
-    <div class="modal-title" style="justify-content:center;display:flex;margin-bottom:10px">&#128274; Admin Access</div>
-    <div class="pin-hint">Enter your 4-digit PIN</div>
-    <input class="form-ctrl" id="pin-input" type="password" inputmode="numeric" maxlength="4"
-      placeholder="&#8226;&#8226;&#8226;&#8226;"
-      style="text-align:center;font-size:28px;letter-spacing:0.5em"
-      onkeydown="if(event.key==='Enter')checkPin()">
-    <div class="pin-error" id="pin-error"></div>
-    <button class="btn btn-primary" onclick="checkPin()" style="margin-bottom:10px">Unlock</button>
-    <button class="btn btn-ghost" onclick="document.getElementById('modal-pin').classList.remove('active')">Cancel</button>
-  </div>
-</div>
 
 <!-- EDIT / ADD MODAL -->
 <div class="modal-overlay" id="modal-edit">
@@ -2115,23 +2101,33 @@ function hasPendingSubmits() { return readPendingSubmits().length > 0; }
 
 // Flush queued offline submissions; safe to call repeatedly (server dedups by
 // submissionId). Items are kept if still offline or on a server error.
+var _flushingQueue = false;
 async function flushSubmitQueue() {
   if (GAS_URL === 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') return;
-  var q = readPendingSubmits();
-  if (!q.length) return;
-  var remaining = [];
-  var sent = 0;
-  for (var i = 0; i < q.length; i++) {
-    try {
-      var resp = await fetch(GAS_URL, { method:'POST', headers:{'Content-Type':'text/plain'}, redirect:'follow',
-        body: JSON.stringify(q[i]) });
-      var data = await resp.json();
-      if (data && data.success) { sent++; }
-      else { remaining.push(q[i]); }   // server error — keep for retry
-    } catch (e) { remaining.push(q[i]); } // still offline — keep
+  // Re-entrancy guard: 'online' + afterAuth() can call this near-simultaneously.
+  // Without it, two runs read the same queue, double-POST, and the slower run's
+  // writePendingSubmits can resurrect items the faster run already cleared.
+  if (_flushingQueue) return;
+  _flushingQueue = true;
+  try {
+    var q = readPendingSubmits();
+    if (!q.length) return;
+    var remaining = [];
+    var sent = 0;
+    for (var i = 0; i < q.length; i++) {
+      try {
+        var resp = await fetch(GAS_URL, { method:'POST', headers:{'Content-Type':'text/plain'}, redirect:'follow',
+          body: JSON.stringify(q[i]) });
+        var data = await resp.json();
+        if (data && data.success) { sent++; }
+        else { remaining.push(q[i]); }   // server error — keep for retry
+      } catch (e) { remaining.push(q[i]); } // still offline — keep
+    }
+    writePendingSubmits(remaining);
+    if (sent > 0) toast(sent + ' offline session' + (sent === 1 ? '' : 's') + ' submitted', 'ok');
+  } finally {
+    _flushingQueue = false;
   }
-  writePendingSubmits(remaining);
-  if (sent > 0) toast(sent + ' offline session' + (sent === 1 ? '' : 's') + ' submitted', 'ok');
 }
 
 // On reconnect: sync any pending paused session, then flush queued submits.
@@ -2895,6 +2891,8 @@ function resetState() {
   S.suspendId = null; S.submissionId = null; S.everPaused = false; S.paused = false;
   S.pauseStartTs = null; S.segStartTs = null;
   S.activeMsAccum = 0; S.pausedMsTotal = 0; S.pauseLog = []; S.isResumed = false;
+  _submitting = false;   // defensively clear so a stuck flag can't block future submits
+  _pauseReason = '';
   stopAutoSave();
   if (S.clockInterval) { clearInterval(S.clockInterval); S.clockInterval = null; }
   if (S.sessInterval)  { clearInterval(S.sessInterval);  S.sessInterval  = null; }
@@ -2922,22 +2920,6 @@ function openAdmin() {
   const firstTab = (role === 'admin') ? 'therapists' : 'behaviors';
   showAdminTab(firstTab);
   goTo('admin');
-}
-
-function checkPin() {
-  const pin = document.getElementById('pin-input').value;
-  const stored = getAdminPin();
-  const hashed = simpleHash('rtadmin:' + pin);
-  if (hashed === stored || pin === stored) {
-    // Migrate plaintext PIN to hash on first successful use
-    if (pin === stored) localStorage.setItem('adminPin', hashed);
-    document.getElementById('modal-pin').classList.remove('active');
-    showAdminTab('therapists');
-    goTo('admin');
-  } else {
-    document.getElementById('pin-error').textContent = 'Incorrect PIN';
-    document.getElementById('pin-input').value = '';
-  }
 }
 
 function showAdminTab(tab) {
@@ -3361,9 +3343,11 @@ function saveEntity() {
   const list = raw[type] || [];
   let idx = -1;
   if (editModalItem) {
-    // Goals: find by code only (globally unique). Do NOT match on clientId — it changes
-    // when a goal is reassigned to different clients, causing a duplicate entry bug.
-    if (type === 'goals')      idx = list.findIndex(x => String(x.code || '') === String(editModalItem.code || ''));
+    // Goals are unique PER CLIENT (clientId|code), not globally. The same
+    // standard-assessment code (e.g. an ABLLS item) can legitimately exist for
+    // multiple patients, and each patient's goal + data must stay separate — so
+    // match on clientId AND code to edit the right patient's record.
+    if (type === 'goals')      idx = list.findIndex(x => String(x.clientId || '') === String(editModalItem.clientId || '') && String(x.code || '') === String(editModalItem.code || ''));
     else if (type==='behaviors') idx = list.findIndex(x => x.key===editModalItem.key);
     else                       idx = list.findIndex(x => x.id===editModalItem.id);
   }
@@ -3826,10 +3810,6 @@ function logoutUser(reason) {
   goTo('login');
 }
 
-function adminBack() {
-  goTo('therapist');
-}
-
 // ── LOCKOUT ──────────────────────────────────────────────────────────
 function getLockoutData(email) {
   return JSON.parse(localStorage.getItem('loginAttempts_' + email) || '{"count":0,"lockedUntil":0}');
@@ -3995,8 +3975,6 @@ async function handleGoogleOAuthReturn(preToken) {
     if (!hash) return;
     const params = new URLSearchParams(hash.replace(/^#/, ''));
     token = params.get('access_token');
-    console.log('[Auth] URL hash keys:', Array.from(params.keys()));
-    console.log('[Auth] access_token present:', !!token);
     if (!token) return;
     // Clean token from address bar immediately
     history.replaceState(null, '', window.location.pathname);
@@ -4028,15 +4006,11 @@ async function handleGoogleOAuthReturn(preToken) {
 
     const raw = RAW_CONFIG || DEFAULT_CONFIG;
 
-    console.log('[Auth] Google email received:', JSON.stringify(email));
-    console.log('[Auth] admins in config:', (raw.admins || []).map(function(a) { return { email: a.email, role: a.role, status: a.status }; }));
-    console.log('[Auth] therapists in config:', (raw.therapists || []).map(function(t) { return { email: t.email, role: t.role, status: t.status }; }));
 
     // 1. Check admins list first
     const admins = (raw.admins || []).filter(function(a) { return (a.status || 'active') !== 'inactive'; });
     var aMatch = null;
     for (var j = 0; j < admins.length; j++) {
-      console.log('[Auth] admin compare:', JSON.stringify(String(admins[j].email || '').toLowerCase()), 'vs', JSON.stringify(email), '->', String(admins[j].email || '').toLowerCase() === email);
       if (String(admins[j].email || '').toLowerCase() === email) { aMatch = admins[j]; break; }
     }
     if (aMatch) {
@@ -4067,7 +4041,6 @@ async function handleGoogleOAuthReturn(preToken) {
     var tMatch = null;
     for (var i = 0; i < therapists.length; i++) {
       var t = therapists[i];
-      console.log('[Auth] therapist compare:', JSON.stringify(String(t.email || '').toLowerCase()), 'vs', JSON.stringify(email), '->', String(t.email || '').toLowerCase() === email);
       if (String(t.email || '').toLowerCase() === email && (t.status || 'active') !== 'inactive') {
         tMatch = t;
         break;
@@ -4109,7 +4082,6 @@ async function handleGoogleOAuthReturn(preToken) {
 }
 
 // ── TIER 2 LOGIN ──────────────────────────────────────────────────────
-let _tier2Step = 1; // 1=email+pin, 2=totp
 
 function loginCheckTOTP() {
   const email = document.getElementById('login-email').value.trim().toLowerCase();
