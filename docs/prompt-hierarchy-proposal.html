@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  @page { size: Letter; margin: 0.5in; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; color: #1f2d3d; font-size: 11.5px; line-height: 1.4; }
+  .head { background: linear-gradient(100deg, #00A7C7, #0787a0); color: #fff; border-radius: 14px; padding: 15px 20px; margin-bottom: 13px; }
+  .head h1 { font-size: 20px; font-weight: 800; }
+  .head p { font-size: 12px; opacity: .95; margin-top: 3px; }
+  .tag { display:inline-block; background: rgba(255,255,255,.2); border:1px solid rgba(255,255,255,.5); border-radius: 999px; padding: 3px 10px; font-size: 10px; font-weight:700; margin-top:8px; }
+  h2 { font-size: 13.5px; color: #067a92; margin: 14px 0 6px; }
+  p.lead { margin-bottom: 8px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 4px; }
+  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid #e3e8ee; vertical-align: top; }
+  th { background: #f0f9fb; color: #067a92; font-size: 10.5px; text-transform: uppercase; letter-spacing: .3px; }
+  .abbr { display:inline-block; min-width: 26px; text-align:center; background:#00A7C7; color:#fff; border-radius:6px; padding:2px 6px; font-weight:800; font-size:11px; }
+  .abbr.err { background:#e05353; }
+  .two { display:flex; gap:14px; }
+  .col { flex:1; }
+  /* mockup */
+  .mock { border:2px solid #cfd8e0; border-radius:12px; padding:12px; background:#fbfdfe; }
+  .mock-goal { font-weight:800; color:#0d3b45; font-size:12px; margin-bottom:2px; }
+  .mock-desc { color:#6b7a86; font-size:10.5px; margin-bottom:8px; }
+  .mock-trial { font-size:10.5px; color:#6b7a86; margin:8px 0 4px; }
+  .btnrow { display:flex; gap:5px; flex-wrap:wrap; }
+  .pbtn { border:1.5px solid #00A7C7; color:#0787a0; border-radius:7px; padding:5px 8px; font-weight:800; font-size:11px; background:#fff; }
+  .pbtn.on { background:#00A7C7; color:#fff; }
+  .pbtn.err { border-color:#e05353; color:#e05353; }
+  .pct { margin-top:8px; font-size:11px; font-weight:800; color:#16a34a; }
+  .q { background:#fff8e6; border:1px solid #f2e0ac; border-radius:12px; padding:12px 15px; margin-top:12px; }
+  .q h2 { color:#9a6a00; margin-top:0; }
+  .q ol { margin:4px 0 0 18px; }
+  .q li { margin-bottom:7px; }
+  .sign { margin-top:14px; display:flex; gap:20px; font-size:11px; color:#6b7a86; }
+  .sign div { flex:1; border-top:1px solid #b9c4cd; padding-top:5px; }
+  .foot { margin-top:12px; text-align:center; color:#7a8794; font-size:10px; }
+  strong { color:#0d3b45; }
+  .note { font-size:10.5px; color:#6b7a86; font-style:italic; }
+</style>
+</head>
+<body>
+  <div class="head">
+    <h1>Prompt Hierarchy — Design Proposal</h1>
+    <p>For BCBA review before we build it. Please confirm or adjust the clinical details below.</p>
+    <span class="tag">Needs Tatiana's sign-off</span>
+  </div>
+
+  <p class="lead"><strong>What we want to add:</strong> today each trial is scored only correct (✓) or incorrect (✗).
+  We propose capturing <strong>the prompt level</strong> the learner needed on each trial — so the data shows movement
+  toward <strong>independence</strong>, not just accuracy. This is standard DTT data and is also the single most valuable
+  signal for the future behavioral model. <strong>Before we build it, we need you to confirm the levels, the order, and how
+  the percentage is calculated.</strong></p>
+
+  <div class="two">
+    <div class="col">
+      <h2>Proposed prompt levels (least → most support)</h2>
+      <table>
+        <tr><th>Code</th><th>Level</th><th>Meaning</th></tr>
+        <tr><td><span class="abbr">I</span></td><td>Independent</td><td>Correct with no help</td></tr>
+        <tr><td><span class="abbr">G</span></td><td>Gestural</td><td>Point/nod toward the answer</td></tr>
+        <tr><td><span class="abbr">V</span></td><td>Verbal</td><td>Spoken cue beyond the instruction</td></tr>
+        <tr><td><span class="abbr">M</span></td><td>Model</td><td>Demonstrate for learner to imitate</td></tr>
+        <tr><td><span class="abbr">PP</span></td><td>Partial Physical</td><td>Light guidance (e.g., elbow tap)</td></tr>
+        <tr><td><span class="abbr">FP</span></td><td>Full Physical</td><td>Hand-over-hand</td></tr>
+        <tr><td><span class="abbr err">E</span></td><td>Error / No response</td><td>Incorrect or no response</td></tr>
+      </table>
+      <p class="note" style="margin-top:6px">Order and set are a clinical choice — adjust freely (add Visual/Textual, remove any, reorder).</p>
+    </div>
+    <div class="col">
+      <h2>How it looks for the RBT (one tap per trial)</h2>
+      <div class="mock">
+        <div class="mock-goal">G12 · Receptive ID</div>
+        <div class="mock-desc">"Touch the ___" (5 trials)</div>
+        <div class="mock-trial">Trial 1 — tap the level used:</div>
+        <div class="btnrow">
+          <span class="pbtn on">I</span><span class="pbtn">G</span><span class="pbtn">V</span>
+          <span class="pbtn">M</span><span class="pbtn">PP</span><span class="pbtn">FP</span><span class="pbtn err">E</span>
+        </div>
+        <div class="mock-trial">Trial 2 — tap the level used:</div>
+        <div class="btnrow">
+          <span class="pbtn">I</span><span class="pbtn">G</span><span class="pbtn on">V</span>
+          <span class="pbtn">M</span><span class="pbtn">PP</span><span class="pbtn">FP</span><span class="pbtn err">E</span>
+        </div>
+        <div class="pct">% Independent: 20% &nbsp;·&nbsp; % Correct (any level): 40%</div>
+      </div>
+      <p class="note" style="margin-top:6px">Same speed as today — one tap instead of ✓/✗. Nothing else in the session changes.</p>
+    </div>
+  </div>
+
+  <h2>What this gives you</h2>
+  <p class="lead">• <strong>Progress toward independence</strong> visible per goal over time (not just accuracy).
+  &nbsp;• Prompt-fading trends for programming decisions. &nbsp;• Richer data for insurance justification.
+  &nbsp;• The key signal the behavioral model needs to predict which goals will master first.</p>
+
+  <div class="q">
+    <h2>Please confirm (or edit) before we build</h2>
+    <ol>
+      <li><strong>Levels &amp; order:</strong> Is the 6-level set above correct, in this order? Add or remove any?
+        (e.g., include <em>Visual/Textual</em>? separate <em>No response</em> from <em>Error</em>?)</li>
+      <li><strong>Percentage:</strong> Which should be the headline number on the trial screen — <strong>% Independent</strong>,
+        <strong>% Correct (any prompted level counts)</strong>, or show <strong>both</strong>?</li>
+      <li><strong>Mastery:</strong> Should goal mastery (currently 80% × 5 sessions) be based on <strong>% Independent</strong>
+        going forward, or stay on % Correct?</li>
+      <li><strong>Required vs optional:</strong> Must the RBT pick a level on every trial, or may they leave it blank?</li>
+    </ol>
+  </div>
+
+  <div class="sign">
+    <div>Approved / adjusted by (BCBA): ______________________</div>
+    <div>Date: ____________</div>
+  </div>
+
+  <div class="foot">Raising Together · ABA Tracker · Prompt Hierarchy proposal (f30) — no code built yet; awaiting BCBA confirmation.</div>
+</body>
+</html>
