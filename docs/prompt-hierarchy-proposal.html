@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<title>Prompt Hierarchy — Design Proposal v2</title>
 <style>
   @page { size: Letter; margin: 0.5in; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -11,107 +12,194 @@
   .head p { font-size: 12px; opacity: .95; margin-top: 3px; }
   .tag { display:inline-block; background: rgba(255,255,255,.2); border:1px solid rgba(255,255,255,.5); border-radius: 999px; padding: 3px 10px; font-size: 10px; font-weight:700; margin-top:8px; }
   h2 { font-size: 13.5px; color: #067a92; margin: 14px 0 6px; }
+  h3 { font-size: 11.5px; color: #0d3b45; margin: 0 0 5px; }
   p.lead { margin-bottom: 8px; }
   table { width: 100%; border-collapse: collapse; margin-top: 4px; }
   th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid #e3e8ee; vertical-align: top; }
   th { background: #f0f9fb; color: #067a92; font-size: 10.5px; text-transform: uppercase; letter-spacing: .3px; }
   .abbr { display:inline-block; min-width: 26px; text-align:center; background:#00A7C7; color:#fff; border-radius:6px; padding:2px 6px; font-weight:800; font-size:11px; }
-  .abbr.err { background:#e05353; }
   .two { display:flex; gap:14px; }
   .col { flex:1; }
-  /* mockup */
-  .mock { border:2px solid #cfd8e0; border-radius:12px; padding:12px; background:#fbfdfe; }
-  .mock-goal { font-weight:800; color:#0d3b45; font-size:12px; margin-bottom:2px; }
-  .mock-desc { color:#6b7a86; font-size:10.5px; margin-bottom:8px; }
-  .mock-trial { font-size:10.5px; color:#6b7a86; margin:8px 0 4px; }
-  .btnrow { display:flex; gap:5px; flex-wrap:wrap; }
-  .pbtn { border:1.5px solid #00A7C7; color:#0787a0; border-radius:7px; padding:5px 8px; font-weight:800; font-size:11px; background:#fff; }
+  .changed { background:#eefaf3; border:1px solid #bfe5d1; border-left:4px solid #16a34a; border-radius:10px; padding:10px 14px; margin-bottom:12px; page-break-inside:avoid; }
+  .changed h3 { color:#15803d; }
+  /* mockups */
+  .mock { border:2px solid #cfd8e0; border-radius:12px; padding:10px 12px; background:#fbfdfe; page-break-inside:avoid; }
+  .mock-goal { font-weight:800; color:#0d3b45; font-size:12px; }
+  .mock-desc { color:#6b7a86; font-size:10.5px; margin-bottom:7px; }
+  .mock-row { display:flex; align-items:center; gap:8px; margin-bottom:7px; }
+  .sel { border:1.5px solid #00A7C7; border-radius:7px; padding:4px 9px; font-weight:800; font-size:11px; color:#0787a0; background:#fff; }
+  .sel .caret { color:#8aa3ad; margin-left:5px; }
+  .lbl { font-size:10px; color:#6b7a86; text-transform:uppercase; letter-spacing:.3px; font-weight:700; }
+  .btnrow { display:flex; gap:4px; flex-wrap:wrap; }
+  .pbtn { border:1.5px solid #00A7C7; color:#0787a0; border-radius:7px; padding:4px 7px; font-weight:800; font-size:11px; background:#fff; }
   .pbtn.on { background:#00A7C7; color:#fff; }
-  .pbtn.err { border-color:#e05353; color:#e05353; }
-  .pct { margin-top:8px; font-size:11px; font-weight:800; color:#16a34a; }
-  .q { background:#fff8e6; border:1px solid #f2e0ac; border-radius:12px; padding:12px 15px; margin-top:12px; }
+  .tslot { display:inline-block; text-align:center; margin-right:6px; }
+  .tnum { font-size:9px; color:#8aa3ad; font-weight:700; }
+  .tmark { border:1.5px solid #dbe3ea; border-radius:6px; padding:3px 7px; font-size:11px; font-weight:800; color:#16a34a; background:#fff; }
+  .tmark.no { color:#e05353; }
+  .pct { margin-top:6px; font-size:11px; font-weight:800; color:#16a34a; }
+  .q { background:#fff8e6; border:1px solid #f2e0ac; border-radius:12px; padding:12px 15px; margin-top:12px; page-break-inside:avoid; }
   .q h2 { color:#9a6a00; margin-top:0; }
   .q ol { margin:4px 0 0 18px; }
   .q li { margin-bottom:7px; }
-  .sign { margin-top:14px; display:flex; gap:20px; font-size:11px; color:#6b7a86; }
+  .rec { display:inline-block; background:#16a34a; color:#fff; border-radius:5px; padding:1px 6px; font-size:9.5px; font-weight:800; letter-spacing:.2px; }
+  .small { margin-top:6px; }
+  .small li { margin-bottom:3px; font-size:11px; }
+  .sign { margin-top:14px; display:flex; gap:20px; font-size:11px; color:#6b7a86; page-break-inside:avoid; }
   .sign div { flex:1; border-top:1px solid #b9c4cd; padding-top:5px; }
   .foot { margin-top:12px; text-align:center; color:#7a8794; font-size:10px; }
   strong { color:#0d3b45; }
   .note { font-size:10.5px; color:#6b7a86; font-style:italic; }
+  code { background:#eef3f6; border-radius:4px; padding:1px 4px; font-size:10.5px; }
 </style>
 </head>
 <body>
   <div class="head">
-    <h1>Prompt Hierarchy — Design Proposal</h1>
-    <p>For BCBA review before we build it. Please confirm or adjust the clinical details below.</p>
-    <span class="tag">Needs Tatiana's sign-off</span>
+    <h1>Prompt Hierarchy — Design Proposal v2</h1>
+    <p>Revised after BCBA review. Simplified to <strong>one prompt level per goal, per session</strong>.</p>
+    <span class="tag">Revision 2 · Design approved by BCBA Sep 27, 2026 · detailed rulings pending</span>
   </div>
 
-  <p class="lead"><strong>What we want to add:</strong> today each trial is scored only correct (✓) or incorrect (✗).
-  We propose capturing <strong>the prompt level</strong> the learner needed on each trial — so the data shows movement
-  toward <strong>independence</strong>, not just accuracy. This is standard DTT data and is also the single most valuable
-  signal for the future behavioral model. <strong>Before we build it, we need you to confirm the levels, the order, and how
-  the percentage is calculated.</strong></p>
+  <div class="changed">
+    <h3>What changed from v1 — and why</h3>
+    v1 asked the RBT to choose a prompt level on <em>every trial</em>: roughly <strong>40 seven-way decisions per session</strong>,
+    during live therapy. Tatiana's review: too complex and too long for the therapist. Agreed — that design fails in a predictable
+    way, with RBTs defaulting to one value or filling it in from memory afterward, producing a column that looks rich and isn't.
+    <strong>v2 records one prompt level per goal per session — 5 to 8 decisions instead of 40.</strong>
+    The per-trial ✓/✗ scoring stays exactly as it is today. Nothing else in the session changes.
+  </div>
 
   <div class="two">
     <div class="col">
-      <h2>Proposed prompt levels (least → most support)</h2>
+      <h2>Prompt levels (least → most support)</h2>
       <table>
         <tr><th>Code</th><th>Level</th><th>Meaning</th></tr>
-        <tr><td><span class="abbr">I</span></td><td>Independent</td><td>Correct with no help</td></tr>
+        <tr><td><span class="abbr">I</span></td><td>Independent</td><td>No help needed</td></tr>
         <tr><td><span class="abbr">G</span></td><td>Gestural</td><td>Point/nod toward the answer</td></tr>
         <tr><td><span class="abbr">V</span></td><td>Verbal</td><td>Spoken cue beyond the instruction</td></tr>
         <tr><td><span class="abbr">M</span></td><td>Model</td><td>Demonstrate for learner to imitate</td></tr>
         <tr><td><span class="abbr">PP</span></td><td>Partial Physical</td><td>Light guidance (e.g., elbow tap)</td></tr>
         <tr><td><span class="abbr">FP</span></td><td>Full Physical</td><td>Hand-over-hand</td></tr>
-        <tr><td><span class="abbr err">E</span></td><td>Error / No response</td><td>Incorrect or no response</td></tr>
       </table>
-      <p class="note" style="margin-top:6px">Order and set are a clinical choice — adjust freely (add Visual/Textual, remove any, reorder).</p>
+      <p class="note" style="margin-top:6px"><strong>Six levels, not seven.</strong> v1 had a 7th code, <em>E — Error/No response</em>.
+      It is gone: errors are already recorded by the ✗ on each individual trial, so "error" was never a level of support.
+      Your simplification removed it automatically.</p>
     </div>
+
     <div class="col">
-      <h2>How it looks for the RBT (one tap per trial)</h2>
+      <h2>What the RBT sees — one choice per goal</h2>
       <div class="mock">
-        <div class="mock-goal">G12 · Receptive ID</div>
+        <div class="mock-row" style="justify-content:space-between">
+          <span class="mock-goal">G12 · Receptive ID</span>
+          <span class="sel">Gestural <span class="caret">&#9662;</span></span>
+        </div>
         <div class="mock-desc">"Touch the ___" (5 trials)</div>
-        <div class="mock-trial">Trial 1 — tap the level used:</div>
-        <div class="btnrow">
-          <span class="pbtn on">I</span><span class="pbtn">G</span><span class="pbtn">V</span>
-          <span class="pbtn">M</span><span class="pbtn">PP</span><span class="pbtn">FP</span><span class="pbtn err">E</span>
+        <div class="btnrow" style="margin-bottom:2px">
+          <span class="tslot"><div class="tnum">T1</div><span class="tmark">&#10003;</span></span>
+          <span class="tslot"><div class="tnum">T2</div><span class="tmark no">&#10007;</span></span>
+          <span class="tslot"><div class="tnum">T3</div><span class="tmark">&#10003;</span></span>
+          <span class="tslot"><div class="tnum">T4</div><span class="tmark">&#10003;</span></span>
+          <span class="tslot"><div class="tnum">T5</div><span class="tmark">&#10003;</span></span>
         </div>
-        <div class="mock-trial">Trial 2 — tap the level used:</div>
-        <div class="btnrow">
-          <span class="pbtn">I</span><span class="pbtn">G</span><span class="pbtn on">V</span>
-          <span class="pbtn">M</span><span class="pbtn">PP</span><span class="pbtn">FP</span><span class="pbtn err">E</span>
-        </div>
-        <div class="pct">% Independent: 20% &nbsp;·&nbsp; % Correct (any level): 40%</div>
+        <div class="pct">80% &nbsp;@&nbsp; Gestural</div>
       </div>
-      <p class="note" style="margin-top:6px">Same speed as today — one tap instead of ✓/✗. Nothing else in the session changes.</p>
+      <p class="note" style="margin-top:6px">The ✓/✗ row is unchanged from today. The only new interaction is the level,
+      chosen once per goal.</p>
     </div>
   </div>
 
-  <h2>What this gives you</h2>
-  <p class="lead">• <strong>Progress toward independence</strong> visible per goal over time (not just accuracy).
-  &nbsp;• Prompt-fading trends for programming decisions. &nbsp;• Richer data for insurance justification.
-  &nbsp;• The key signal the behavioral model needs to predict which goals will master first.</p>
+  <h2>What the field means — please confirm</h2>
+  <p class="lead">"One level for the goal" can mean three different things, and they are not interchangeable. If the rule isn't
+  written down, one RBT will record one meaning and another will record a different one, and the column stops being comparable
+  across therapists — which is worse than not collecting it at all.</p>
+  <table>
+    <tr><th style="width:26%">Reading</th><th>What it records</th><th style="width:31%">Assessment</th></tr>
+    <tr>
+      <td><strong>A. Target level</strong> <span class="rec">RECOMMENDED</span></td>
+      <td>The support level this goal is <em>programmed</em> to run at this session — "G12 is being run at Gestural this week."</td>
+      <td>Unambiguous, checkable against the program book, and it makes the one-level-per-goal assumption <strong>true by
+      definition</strong> rather than an approximation.</td>
+    </tr>
+    <tr><td><strong>B. Most intrusive used</strong></td><td>The highest level of support needed at any point.</td><td>Defensible, but biases the record toward more support than was typical.</td></tr>
+    <tr><td><strong>C. Typical / representative</strong></td><td>What the RBT judges as representative of the set.</td><td>Subjective — varies by therapist, hardest to compare over time.</td></tr>
+  </table>
+
+  <h2>What you gain — and what this version gives up</h2>
+  <p class="lead"><strong>Gained:</strong> correctness at a <em>known support level</em> — "G12, 80% at Gestural" — which is the
+  pairing that drives programming decisions (90% at Gestural for five sessions → time to fade). Prompt-fading trends
+  <strong>across</strong> sessions are fully preserved, and that is the trend used for insurance justification and for predicting
+  mastery. &nbsp;<strong>Given up:</strong> fading <em>within</em> a single set (trial 1 needed full physical, trial 5 independent)
+  is not captured. That is a real loss, accepted deliberately in exchange for data the therapist can actually record accurately.</p>
+
+  <h2>One addition we recommend — automatic timestamps (nothing changes for the RBT)</h2>
+  <p class="lead">Today a goal's trial block records a <strong>date but no clock time</strong>. (Your ABC incidents already capture
+  a time; trials don't.) We propose the app record automatically <em>when</em> each goal block was scored.
+  <strong>This adds no step for the therapist</strong> — the app stamps each ✓/✗ tap by itself, invisibly, with nothing new on screen.
+  <br><strong>Why it matters later:</strong> to compare this data against session video (Phase 2), skeleton detection (Phase 3), or a
+  wearable signal (Phase 4), we have to know <em>when</em> in the session a goal was run. With only a date, the closest possible match
+  is the whole two-hour session — too coarse to correlate with anything. With a time, <em>every</em> session ever recorded becomes
+  alignable to those later signals — thousands of goal blocks, not just the ~100 sessions that will eventually get video-annotated.</p>
 
   <div class="q">
-    <h2>Please confirm (or edit) before we build</h2>
+    <h2>Decisions needed before we build</h2>
     <ol>
-      <li><strong>Levels &amp; order:</strong> Is the 6-level set above correct, in this order? Add or remove any?
-        (e.g., include <em>Visual/Textual</em>? separate <em>No response</em> from <em>Error</em>?)</li>
-      <li><strong>Percentage:</strong> Which should be the headline number on the trial screen — <strong>% Independent</strong>,
-        <strong>% Correct (any prompted level counts)</strong>, or show <strong>both</strong>?</li>
-      <li><strong>Mastery:</strong> Should goal mastery (currently 80% × 5 sessions) be based on <strong>% Independent</strong>
-        going forward, or stay on % Correct?</li>
-      <li><strong>Required vs optional:</strong> Must the RBT pick a level on every trial, or may they leave it blank?</li>
+      <li><strong>Levels &amp; order:</strong> is the six-level set above correct, in this order? Add <em>Visual/Textual</em>? Remove any?</li>
+      <li><strong>Meaning of the field:</strong> A, B, or C above? (We recommend <strong>A — target level</strong>.)</li>
+      <li><strong>Required or optional:</strong> must the RBT set a level on every goal they run? <em>Blank must stay legal</em> and
+        must mean "goal not run today" — clearly different from "Independent / no prompt needed."</li>
+      <li><strong>Dropdown or buttons?</strong> A dropdown spells out "Gestural" but on an iPhone opens a scroll wheel that covers
+        part of the screen (tap → scroll → confirm). A row of six small buttons in the goal header is a single tap, but shows
+        only <code>G</code>. Same data either way — your call on which the RBTs will use more reliably.</li>
+      <li><strong>Mastery rule (this is f30b, below):</strong> should goal mastery stay at <strong>80% × 5 consecutive sessions</strong>,
+        or become <strong>80% × 5 consecutive at Independent</strong>? If it changes, we also need your ruling on history: every
+        session recorded before this ships has no level, and blank must be treated as <em>unknown</em> rather than
+        <em>not independent</em>, or mastery would silently stop working for existing data.</li>
+      <li><strong>Smaller rulings:</strong>
+        <ul class="small">
+          <li>Goal run in two different settings in one session — one level, or one per setting?</li>
+          <li>Baseline / probe trials, which are unprompted by definition — record "Independent," or flag separately?</li>
+          <li>May the level be corrected after the session is submitted?</li>
+          <li>Should prompt level appear on the parent/caregiver dashboard? (Our recommendation: no — "needed hand-over-hand
+            support" is easy for a family to misread without context.)</li>
+        </ul>
+      </li>
+      <li><strong>Automatic timestamps:</strong> please confirm you are comfortable with the app recording the time each goal block
+        is scored (see the section above). <em>No action and no extra step for the RBT</em> — the app does it silently. Needed so
+        this data can be aligned with video, skeleton, and wearable signals later.</li>
     </ol>
   </div>
+
+  <h2>How this lands on the roadmap — f30 splits in two</h2>
+  <p class="lead">Splitting it the same way f26 was split, so the cheap, time-sensitive half isn't held up by the clinical
+  decision in question 5.</p>
+  <table>
+    <tr><th style="width:11%">ID</th><th style="width:31%">Scope</th><th style="width:11%">Priority</th><th>Timing</th></tr>
+    <tr>
+      <td><strong>f30a</strong></td>
+      <td>Capture the level per goal, store it, sync it to BigQuery, add it to the canonical event schema. Also records the time each goal block is scored (automatic, invisible to the RBT).</td>
+      <td>P1<br><span class="note">was P2</span></td>
+      <td><strong>Next few weeks.</strong> About a day of work. Should land before f26a (REST API) freezes the external event
+        contract — adding the field now is free, adding it afterward is a versioning exercise.</td>
+    </tr>
+    <tr>
+      <td><strong>f30b</strong></td>
+      <td>Mastery keyed on % Independent, the blank-history policy, and reporting.</td>
+      <td>P2</td>
+      <td>Whenever question 5 is decided. Deliberately separate so it can't block f30a.</td>
+    </tr>
+  </table>
+  <p class="lead" style="margin-top:8px"><strong>Why the date matters:</strong> prompt level cannot be backfilled — no one can
+  reconstruct what support Camila needed on G12 last March. The field only exists for sessions recorded after it ships. Phase 1.5
+  (the first behavioral model) trains on data through <strong>February 2027</strong>: shipping f30a in October yields about four
+  months of prompt history to train on; shipping in December yields two, covering so few sessions that the model would learn the
+  gap rather than the signal. Prompt level is also the best single predictor of the metric that phase is evaluated on — mastery
+  timing — because today the data cannot distinguish 80%-with-full-physical-support from 80%-independent.</p>
 
   <div class="sign">
     <div>Approved / adjusted by (BCBA): ______________________</div>
     <div>Date: ____________</div>
   </div>
 
-  <div class="foot">Raising Together · ABA Tracker · Prompt Hierarchy proposal (f30) — no code built yet; awaiting BCBA confirmation.</div>
+  <div class="foot">Raising Together · ABA Tracker · Prompt Hierarchy proposal v2 (f30a / f30b) — design approved by BCBA Sep 27, 2026; rulings in the yellow box pending. No code built yet.</div>
 </body>
 </html>
