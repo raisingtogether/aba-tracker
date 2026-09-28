@@ -108,6 +108,15 @@ function doPost(e) {
       var cleanupResult = cleanupStaleSuspendedSessions(data.maxAgeDays);
       result = { success: true, removed: cleanupResult.removed };
 
+    } else if (data.action === 'listParentAlerts') {
+      result = listParentAlerts(data.status, data.approverRole);
+
+    } else if (data.action === 'approveParentAlert') {
+      result = approveParentAlert(data.alertId, data.approverEmail, data.approverRole);
+
+    } else if (data.action === 'dismissParentAlert') {
+      result = dismissParentAlert(data.alertId, data.approverEmail, data.approverRole, data.reason);
+
     } else {
       processSession(data);
       result = { success: true };
@@ -529,12 +538,14 @@ function saveConfig(cfg) {
 
     if (cfg.clients !== undefined)
       objectsToSheet(ss, 'Clients',
-        ['id', 'name', 'initials', 'sheetId', 'status'],
+        ['id', 'name', 'initials', 'sheetId', 'status',
+         'parentName', 'parentEmail', 'parentLang', 'alertConsent', 'alertConsentDate'],
         cfg.clients);
 
     if (cfg.behaviors !== undefined)
       objectsToSheet(ss, 'Behaviors',
-        ['key', 'label', 'icon', 'color', 'clientIds', 'status'],
+        ['key', 'label', 'icon', 'color', 'clientIds', 'status',
+         'alertEnabled', 'alertThreshold', 'alertMode'],
         cfg.behaviors);
 
     if (cfg.goals !== undefined) {
@@ -989,6 +1000,20 @@ function processSession(d) {
     d.clientName || '',
     'Session ' + (d.submissionId || '') + ' duration=' + (d.durationMin || 0) + 'min'
   );
+
+  // Parent behavior alerts (f54). Runs AFTER the data is safely written and is
+  // never allowed to throw — a mail or config failure must not cost a therapist
+  // their session. Failures are recorded in the Audit Log instead.
+  try {
+    evaluateParentAlerts(d);
+  } catch (alertErr) {
+    Logger.log('processSession: evaluateParentAlerts failed: ' + alertErr.message);
+    try {
+      writeAuditLog(new Date().toISOString(), 'system', 'parent_alert_error',
+        d.clientName || '', 'evaluateParentAlerts failed for submission ' +
+        (d.submissionId || '') + ': ' + alertErr.message);
+    } catch (ae) { /* audit failure must not propagate */ }
+  }
 
   // Remove the suspended/live backup record for this session, if any (delete
   // happens AFTER a successful write so a failure never orphans the data).
@@ -3614,4 +3639,429 @@ function recoverTrialData(dryRun, onlyClientIds) {
   Logger.log('=== recoverTrialData END ===');
 
   return { grandStats: grandStats, clients: clientReports };
+}
+
+
+// ── PARENT BEHAVIOR ALERTS (f54) ──────────────────────────────────────
+/**
+ * HIPAA-compliant parent alerting.
+ *
+ * When a behavior meets its configured threshold in a submitted session, one
+ * alert row per behavior is created in the "Parent Alerts" tab of RT Admin.
+ * Behaviors configured mode='auto' are emailed immediately; mode='review'
+ * waits for BCBA/Admin approval in the admin panel.
+ *
+ * Disclosure rules enforced here — do NOT relax without a consent/BAA review:
+ *   1. CONSENT GATE. No email is ever sent unless the client row has
+ *      alertConsent === 'yes' AND a syntactically valid parentEmail. Otherwise
+ *      the alert is recorded with status 'blocked' and nothing leaves the app.
+ *      Consent is re-checked at approval time, not just at session time.
+ *   2. MINIMAL CONTENT. First name, session date, behavior label and count
+ *      only. No session notes, no full name, no ABC detail, no diagnosis.
+ *   3. AUDIT. Every send, block, failure and dismissal is written to the HIPAA
+ *      Audit Log. A 'sent' entry is a disclosure record and names the recipient.
+ *
+ * evaluateParentAlerts must never throw into processSession — a mail failure
+ * must not cost a therapist their session data.
+ */
+
+var PARENT_ALERT_HEADERS = [
+  'alertId', 'createdAt', 'submissionId', 'dateISO', 'clientId', 'clientName',
+  'behaviorKey', 'behaviorLabel', 'count', 'threshold', 'mode', 'status',
+  'recipient', 'sentAt', 'sentBy', 'note'
+];
+
+var PARENT_ALERT_FROM_NAME = 'Raising Together';
+
+function _parentAlertsSheet() {
+  var ss = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var sheet = getOrCreateSheet(ss, 'Parent Alerts', PARENT_ALERT_HEADERS);
+  ensureSheetColumns(sheet, PARENT_ALERT_HEADERS);
+  return sheet;
+}
+
+function _alertColMap(headerRow) {
+  var map = {};
+  for (var i = 0; i < headerRow.length; i++) {
+    map[String(headerRow[i]).trim()] = i;
+  }
+  return map;
+}
+
+function _isValidEmail(value) {
+  var s = String(value || '').trim();
+  if (!s || s.length > 254) return false;
+  return /^[^\s@,;]+@[^\s@,;]+\.[A-Za-z]{2,}$/.test(s);
+}
+
+function _firstNameOf(fullName) {
+  var s = String(fullName || '').trim();
+  if (!s) return '';
+  return s.split(/\s+/)[0];
+}
+
+/** Deterministic id — also the dedup key for offline retries / resubmits. */
+function _parentAlertId(submissionId, behaviorKey) {
+  var sid = String(submissionId || '').replace(/[^A-Za-z0-9]/g, '').substring(0, 24);
+  var bk  = String(behaviorKey  || '').replace(/[^A-Za-z0-9]/g, '').substring(0, 16);
+  return 'pa_' + sid + '_' + bk;
+}
+
+function _setAlertCells(sheet, sheetRow, cm, updates) {
+  for (var field in updates) {
+    if (!updates.hasOwnProperty(field)) continue;
+    if (cm[field] === undefined) continue;
+    sheet.getRange(sheetRow, cm[field] + 1).setValue(updates[field]);
+  }
+}
+
+function _findClientRecord(clients, clientId, clientName) {
+  var wantId   = String(clientId   || '').trim();
+  var wantName = String(clientName || '').trim().toLowerCase();
+  for (var ci = 0; ci < clients.length; ci++) {
+    var c = clients[ci];
+    if (wantId && String(c.id || '').trim() === wantId) return c;
+  }
+  if (!wantName) return null;
+  for (var cj = 0; cj < clients.length; cj++) {
+    if (String(clients[cj].name || '').trim().toLowerCase() === wantName) return clients[cj];
+  }
+  return null;
+}
+
+/**
+ * Build and send ONE minimal-content email covering every behavior in records.
+ * records: array of { behaviorLabel, count }.
+ * Re-checks the consent gate itself so no call path can bypass it.
+ */
+function _sendParentAlertEmail(client, records, dateISO) {
+  try {
+    if (!client) return { sent: false, error: 'No client record' };
+    var to = String(client.parentEmail || '').trim();
+    if (!_isValidEmail(to)) return { sent: false, error: 'Invalid or missing parentEmail' };
+    if (String(client.alertConsent || '').trim().toLowerCase() !== 'yes') {
+      return { sent: false, error: 'Parent alert consent not on file' };
+    }
+    if (!records || !records.length) return { sent: false, error: 'Nothing to send' };
+
+    var lang = String(client.parentLang || 'en').trim().toLowerCase();
+    if (lang !== 'es') lang = 'en';
+
+    var firstName = _firstNameOf(client.name) || (lang === 'es' ? 'su hijo/a' : 'your child');
+    var lines = [];
+    for (var i = 0; i < records.length; i++) {
+      lines.push('  - ' + String(records[i].behaviorLabel || '') + ': ' + String(records[i].count || ''));
+    }
+    var listText = lines.join('\n');
+    var subject, body;
+
+    if (lang === 'es') {
+      subject = 'Raising Together — actualización de la sesión de ' + firstName;
+      body =
+        'Hola,\n\n' +
+        'Le escribimos sobre la sesión de ' + firstName + ' del ' + dateISO + '.\n\n' +
+        'Durante la sesión registramos:\n' + listText + '\n\n' +
+        'Compartimos esta información para que esté al tanto. Si desea más detalles, ' +
+        'comuníquese con su BCBA — podemos conversar por teléfono o en persona.\n\n' +
+        'Este mensaje es breve a propósito y no incluye notas clínicas. El correo electrónico ' +
+        'no es un canal completamente seguro, por eso limitamos la información.\n' +
+        'Por favor NO responda a este correo con información médica.\n\n' +
+        '— Raising Together';
+    } else {
+      subject = 'Raising Together — session update for ' + firstName;
+      body =
+        'Hello,\n\n' +
+        'This is an update about ' + firstName + '\'s session on ' + dateISO + '.\n\n' +
+        'During the session we recorded:\n' + listText + '\n\n' +
+        'We are sharing this so you are aware. If you would like more detail, please ' +
+        'contact your BCBA — we can talk by phone or in person.\n\n' +
+        'This message is intentionally brief and contains no clinical notes. Email is not a ' +
+        'fully secure channel, so we keep the detail to a minimum.\n' +
+        'Please do NOT reply to this email with medical information.\n\n' +
+        '— Raising Together';
+    }
+
+    MailApp.sendEmail({ to: to, subject: subject, body: body, name: PARENT_ALERT_FROM_NAME });
+    return { sent: true, error: '' };
+  } catch (e) {
+    return { sent: false, error: e.message };
+  }
+}
+
+/**
+ * Evaluate a submitted session against the Behaviors alert config.
+ * Returns { created, sent, pending, blocked, failed }.
+ */
+function evaluateParentAlerts(d) {
+  var summary = { created: 0, sent: 0, pending: 0, blocked: 0, failed: 0 };
+  var behaviorData = d.behaviorData;
+  if (!behaviorData) return summary;
+
+  var adminSS   = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var behaviors = sheetToObjects(adminSS, 'Behaviors');
+  if (!behaviors.length) return summary;
+
+  // Which behaviors tripped their threshold this session?
+  var triggered = [];
+  for (var bi = 0; bi < behaviors.length; bi++) {
+    var b   = behaviors[bi];
+    var key = String(b.key || '').trim();
+    if (!key) continue;
+    if (String(b.alertEnabled || '').trim().toLowerCase() !== 'yes') continue;
+    if (String(b.status || 'active').trim().toLowerCase() === 'inactive') continue;
+
+    var raw = behaviorData[key];
+    if (raw === undefined || raw === null || raw === '') continue;
+    var count = Number(raw);
+    if (isNaN(count) || count <= 0) continue;
+
+    var threshold = Number(b.alertThreshold);
+    if (isNaN(threshold) || threshold < 1) threshold = 1;
+    if (count < threshold) continue;
+
+    var mode = String(b.alertMode || 'review').trim().toLowerCase();
+    if (mode !== 'auto') mode = 'review';
+
+    triggered.push({
+      key: key, label: String(b.label || key),
+      count: count, threshold: threshold, mode: mode
+    });
+  }
+  if (!triggered.length) return summary;
+
+  var clients = sheetToObjects(adminSS, 'Clients');
+  var client  = _findClientRecord(clients, d.clientId, d.clientName);
+
+  var recipient = client ? String(client.parentEmail  || '').trim() : '';
+  var emailOk   = _isValidEmail(recipient);
+  var consentOk = client
+    ? (String(client.alertConsent || '').trim().toLowerCase() === 'yes')
+    : false;
+  var canSend   = emailOk && consentOk;
+
+  var blockNote = '';
+  if (!client)         blockNote = 'No matching client row in RT Admin';
+  else if (!emailOk)   blockNote = 'No valid parentEmail on file';
+  else if (!consentOk) blockNote = 'Parent alert consent not on file (alertConsent != yes)';
+
+  var sheet  = _parentAlertsSheet();
+  var values = sheet.getDataRange().getValues();
+  var cm     = _alertColMap(values[0]);
+  var seen   = {};
+  for (var ri = 1; ri < values.length; ri++) {
+    var seenId = String(values[ri][cm['alertId']] || '').trim();
+    if (seenId) seen[seenId] = true;
+  }
+
+  var nowISO  = new Date().toISOString();
+  var dateISO = String(d.dateISO || '').trim() || nowISO.substring(0, 10);
+  var created = [];
+  var autoBatch = [];
+
+  for (var ti = 0; ti < triggered.length; ti++) {
+    var t  = triggered[ti];
+    var id = _parentAlertId(d.submissionId, t.key);
+    if (seen[id]) continue;
+
+    var status = canSend ? (t.mode === 'auto' ? 'sending' : 'pending') : 'blocked';
+    var rec = {
+      alertId:       id,
+      createdAt:     nowISO,
+      submissionId:  String(d.submissionId || ''),
+      dateISO:       dateISO,
+      clientId:      String(d.clientId   || ''),
+      clientName:    String(d.clientName || ''),
+      behaviorKey:   t.key,
+      behaviorLabel: t.label,
+      count:         t.count,
+      threshold:     t.threshold,
+      mode:          t.mode,
+      status:        status,
+      recipient:     canSend ? recipient : '',
+      sentAt:        '',
+      sentBy:        '',
+      note:          canSend ? '' : blockNote
+    };
+    created.push(rec);
+    if (status === 'sending') autoBatch.push(rec);
+  }
+  if (!created.length) return summary;
+
+  // Auto-send path: ONE email covering every auto behavior in this session,
+  // so a family gets a single message rather than one per behavior.
+  if (autoBatch.length) {
+    var sendResult = _sendParentAlertEmail(client, autoBatch, dateISO);
+    var sentAt = new Date().toISOString();
+    for (var ai = 0; ai < autoBatch.length; ai++) {
+      autoBatch[ai].status = sendResult.sent ? 'sent' : 'failed';
+      autoBatch[ai].sentAt = sendResult.sent ? sentAt : '';
+      autoBatch[ai].sentBy = sendResult.sent ? 'auto' : '';
+      if (!sendResult.sent) autoBatch[ai].note = sendResult.error || 'Send failed';
+    }
+  }
+
+  // colMap-based append — never hardcode column positions.
+  var headerRow = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  var hm  = _alertColMap(headerRow);
+  var out = [];
+  for (var ni = 0; ni < created.length; ni++) {
+    var row = [];
+    for (var k = 0; k < headerRow.length; k++) row.push('');
+    var recN = created[ni];
+    for (var field in recN) {
+      if (!recN.hasOwnProperty(field)) continue;
+      if (hm[field] !== undefined) row[hm[field]] = recN[field];
+    }
+    out.push(row);
+  }
+  sheet.getRange(sheet.getLastRow() + 1, 1, out.length, headerRow.length).setValues(out);
+
+  var actor = d.therapistEmail || d.therapist || 'system';
+  for (var oi = 0; oi < created.length; oi++) {
+    var r = created[oi];
+    summary.created++;
+    if (r.status === 'sent')         summary.sent++;
+    else if (r.status === 'pending') summary.pending++;
+    else if (r.status === 'blocked') summary.blocked++;
+    else if (r.status === 'failed')  summary.failed++;
+
+    var detail = r.behaviorLabel + ' count=' + r.count + ' threshold=' + r.threshold +
+                 ' mode=' + r.mode + ' session=' + r.dateISO;
+    if (r.status === 'sent') {
+      detail = 'DISCLOSURE — ' + detail + ' recipient=' + r.recipient + ' sentBy=auto';
+    } else if (r.note) {
+      detail = detail + ' note=' + r.note;
+    }
+    writeAuditLog(new Date().toISOString(), actor,
+      'parent_alert_' + r.status, r.clientName, detail + ' alertId=' + r.alertId);
+  }
+  return summary;
+}
+
+/**
+ * Admin panel: list alerts, newest first. statusFilter '' or 'all' = everything.
+ * Role-gated: the rows carry parent email addresses alongside behavior data.
+ * NOTE: like every other action on this endpoint, the role is supplied by the
+ * caller — real enforcement arrives with device-token auth (f26a).
+ */
+function listParentAlerts(statusFilter, approverRole) {
+  if (!approverRole || (approverRole !== 'Admin' && approverRole !== 'BCBA')) {
+    return { success: false, error: 'Unauthorized: BCBA or Admin role required' };
+  }
+  var sheet  = _parentAlertsSheet();
+  var values = sheet.getDataRange().getValues();
+  if (values.length < 2) return { success: true, alerts: [] };
+  var cm   = _alertColMap(values[0]);
+  var want = String(statusFilter || '').trim().toLowerCase();
+  var out  = [];
+  for (var ri = 1; ri < values.length; ri++) {
+    var row = values[ri];
+    if (cm['alertId'] === undefined) break;
+    var id = String(row[cm['alertId']] || '').trim();
+    if (!id) continue;
+    var st = String(row[cm['status']] || '').trim().toLowerCase();
+    if (want && want !== 'all' && st !== want) continue;
+    var obj = {};
+    for (var h = 0; h < PARENT_ALERT_HEADERS.length; h++) {
+      var name = PARENT_ALERT_HEADERS[h];
+      var cell = (cm[name] !== undefined) ? row[cm[name]] : '';
+      obj[name] = (cell === null || cell === undefined) ? '' : String(cell);
+    }
+    out.push(obj);
+  }
+  out.reverse();
+  return { success: true, alerts: out };
+}
+
+/**
+ * BCBA/Admin approves a pending alert → sends it.
+ * Re-checks consent at send time: it may have been withdrawn since the session.
+ */
+function approveParentAlert(alertId, approverEmail, approverRole) {
+  if (!approverRole || (approverRole !== 'Admin' && approverRole !== 'BCBA')) {
+    return { success: false, error: 'Unauthorized: BCBA or Admin role required' };
+  }
+  var id = String(alertId || '').trim();
+  if (!id) return { success: false, error: 'Missing alertId' };
+
+  var sheet  = _parentAlertsSheet();
+  var values = sheet.getDataRange().getValues();
+  var cm     = _alertColMap(values[0]);
+  var rowIdx = -1;
+  for (var ri = 1; ri < values.length; ri++) {
+    if (String(values[ri][cm['alertId']] || '').trim() === id) { rowIdx = ri; break; }
+  }
+  if (rowIdx < 0) return { success: false, error: 'Alert not found' };
+
+  var status = String(values[rowIdx][cm['status']] || '').trim().toLowerCase();
+  if (status === 'sent')      return { success: false, error: 'This alert was already sent' };
+  if (status === 'dismissed') return { success: false, error: 'This alert was dismissed' };
+
+  var clientName = String(values[rowIdx][cm['clientName']] || '');
+  var clientId   = String(values[rowIdx][cm['clientId']]   || '');
+  var dateISO    = String(values[rowIdx][cm['dateISO']]    || '');
+  var label      = String(values[rowIdx][cm['behaviorLabel']] || '');
+  var count      = String(values[rowIdx][cm['count']] || '');
+  var nowISO     = new Date().toISOString();
+
+  var adminSS = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var client  = _findClientRecord(sheetToObjects(adminSS, 'Clients'), clientId, clientName);
+  if (!client) return { success: false, error: 'Client record not found' };
+
+  if (String(client.alertConsent || '').trim().toLowerCase() !== 'yes') {
+    _setAlertCells(sheet, rowIdx + 1, cm,
+      { status: 'blocked', note: 'Consent not on file at approval time' });
+    writeAuditLog(nowISO, approverEmail || '', 'parent_alert_blocked', clientName,
+      'Approval refused — consent not on file. alertId=' + id);
+    return { success: false, error: 'Parent alert consent is not on file for this client' };
+  }
+
+  var sendResult = _sendParentAlertEmail(client, [{ behaviorLabel: label, count: count }], dateISO);
+  if (!sendResult.sent) {
+    _setAlertCells(sheet, rowIdx + 1, cm,
+      { status: 'failed', note: sendResult.error || 'Send failed' });
+    writeAuditLog(nowISO, approverEmail || '', 'parent_alert_failed', clientName,
+      label + ' alertId=' + id + ' error=' + (sendResult.error || ''));
+    return { success: false, error: sendResult.error || 'Send failed' };
+  }
+
+  var recipient = String(client.parentEmail || '').trim();
+  _setAlertCells(sheet, rowIdx + 1, cm, {
+    status: 'sent', sentAt: nowISO, sentBy: approverEmail || '', recipient: recipient, note: ''
+  });
+  writeAuditLog(nowISO, approverEmail || '', 'parent_alert_sent', clientName,
+    'DISCLOSURE — ' + label + ' count=' + count + ' session=' + dateISO +
+    ' recipient=' + recipient + ' approvedBy=' + (approverEmail || '') + ' alertId=' + id);
+  return { success: true, sent: true };
+}
+
+/** BCBA/Admin dismisses an alert — nothing is sent. */
+function dismissParentAlert(alertId, approverEmail, approverRole, reason) {
+  if (!approverRole || (approverRole !== 'Admin' && approverRole !== 'BCBA')) {
+    return { success: false, error: 'Unauthorized: BCBA or Admin role required' };
+  }
+  var id = String(alertId || '').trim();
+  if (!id) return { success: false, error: 'Missing alertId' };
+
+  var sheet  = _parentAlertsSheet();
+  var values = sheet.getDataRange().getValues();
+  var cm     = _alertColMap(values[0]);
+  var rowIdx = -1;
+  for (var ri = 1; ri < values.length; ri++) {
+    if (String(values[ri][cm['alertId']] || '').trim() === id) { rowIdx = ri; break; }
+  }
+  if (rowIdx < 0) return { success: false, error: 'Alert not found' };
+  if (String(values[rowIdx][cm['status']] || '').trim().toLowerCase() === 'sent') {
+    return { success: false, error: 'This alert was already sent and cannot be dismissed' };
+  }
+
+  var nowISO = new Date().toISOString();
+  var note   = String(reason || '').trim();
+  _setAlertCells(sheet, rowIdx + 1, cm,
+    { status: 'dismissed', sentBy: approverEmail || '', note: note || 'Dismissed by reviewer' });
+  writeAuditLog(nowISO, approverEmail || '', 'parent_alert_dismissed',
+    String(values[rowIdx][cm['clientName']] || ''),
+    String(values[rowIdx][cm['behaviorLabel']] || '') + ' alertId=' + id +
+    (note ? ' reason=' + note : ''));
+  return { success: true, dismissed: true };
 }

@@ -1077,6 +1077,7 @@ FOCUS FOR NEXT SESSION: Outline priorities and goals for the next session"
         <button class="admin-tab-btn admin-only-tab" id="atab-payroll" onclick="showAdminTab('payroll')">Payroll</button>
         <button class="admin-tab-btn admin-only-tab" id="atab-admins" onclick="showAdminTab('admins')">Admins</button>
         <button class="admin-tab-btn admin-only-tab" id="atab-mastery" onclick="showAdminTab('mastery')">Mastery</button>
+        <button class="admin-tab-btn" id="atab-alerts" onclick="showAdminTab('alerts')">Alerts</button>
         <button class="admin-tab-btn admin-only-tab" id="atab-billing" onclick="showAdminTab('billing')">Billing</button>
         <button class="admin-tab-btn admin-only-tab" id="atab-manual" onclick="showAdminTab('manual')">Manual Entry</button>
   </div>
@@ -2935,7 +2936,7 @@ function showAdminTab(tab) {
   document.querySelectorAll('.admin-tab-btn').forEach(b => b.classList.remove('active'));
   const tabEl = document.getElementById('atab-' + tab);
   if (tabEl) tabEl.classList.add('active');
-  const noAddBar = ['settings','authorizations','payroll','admins','mastery','billing','manual'];
+  const noAddBar = ['settings','authorizations','payroll','admins','mastery','billing','manual','alerts'];
   document.getElementById('admin-add-bar').style.display = noAddBar.indexOf(tab) >= 0 ? 'none' : '';
   renderAdminList(tab);
 }
@@ -2949,6 +2950,7 @@ function renderAdminList(type) {
   if (type === 'payroll')        { renderPayrollTab(container);        return; }
   if (type === 'admins')         { renderAdminsTab(container);         return; }
   if (type === 'mastery')        { renderMasteryReportTab(container);  return; }
+  if (type === 'alerts')         { renderParentAlertsTab(container);   return; }
   if (type === 'billing')        { renderBillingReportTab(container);  return; }
   if (type === 'manual')         { renderManualEntryTab(container);    return; }
 
@@ -3166,10 +3168,32 @@ function buildEditForm(type, item) {
             + '<div id="ef-sheet-status" style="margin-top:8px;font-size:12px;color:var(--muted)"></div></div>'
           : '<div class="form-group"><button type="button" class="admin-act-btn" id="ef-provision-btn" onclick="provisionClientSheetFor(\'' + esc(savedClient.id) + '\')">➕ Auto-create Google Sheet</button>'
             + '<div style="margin-top:6px;font-size:12px;color:var(--muted)">Creates a new spreadsheet owned by the app and links it automatically. Data tabs are generated on the first submitted session.</div></div>');
+    const consentOnNow = String(item.alertConsent || '').toLowerCase() === 'yes';
     form.innerHTML =
       fld('Name', 'name', item.name) +
       fld('Initials (2-3 letters)', 'initials', item.initials, 'text', 'maxlength="3"') +
       fld('Google Sheet ID', 'sheetId', item.sheetId, 'text', 'placeholder="1BxiM..."') +
+      '<div class="settings-hdr" style="margin-top:14px">Parent contact &amp; behavior alerts</div>' +
+      fld('Parent / Guardian Name', 'parentName', item.parentName) +
+      fld('Parent Email', 'parentEmail', item.parentEmail, 'email', 'placeholder="parent@example.com"') +
+      `<div class="form-group">
+        <label class="form-lbl" for="ef-parentLang">Email language</label>
+        <select class="form-ctrl" id="ef-parentLang">
+          <option value="en"${(item.parentLang||'en')==='en'?' selected':''}>English</option>
+          <option value="es"${(item.parentLang||'en')==='es'?' selected':''}>Espa\u00f1ol</option>
+        </select>
+      </div>` +
+      `<div class="form-group">
+        <label class="client-cb-row" style="margin:0">
+          <input type="checkbox" id="ef-alertConsent" ${consentOnNow?'checked':''}>
+          Parent has consented in writing to behavior alerts by email
+        </label>
+        <div style="margin-top:6px;font-size:12px;color:var(--muted)">
+          Required before any alert email can be sent. Keep the signed consent on file &mdash; it must
+          state that ordinary email is not a fully secure channel.
+        </div>
+        ${item.alertConsentDate ? '<div style="margin-top:4px;font-size:12px;color:var(--muted)">Consent recorded: ' + escHtml(String(item.alertConsentDate)) + '</div>' : ''}
+      </div>` +
       sheetTools;
 
   } else if (type === 'behaviors') {
@@ -3189,6 +3213,24 @@ function buildEditForm(type, item) {
       `<div class="form-group">
         <label class="form-lbl">Assign to Clients</label>
         <div class="client-cb-grid" id="ef-client-checkboxes">${cbRows}</div>
+      </div>` +
+      '<div class="settings-hdr" style="margin-top:14px">Parent alert</div>' +
+      `<div class="form-group">
+        <label class="client-cb-row" style="margin:0">
+          <input type="checkbox" id="ef-alertEnabled" ${String(item.alertEnabled||'').toLowerCase()==='yes'?'checked':''}>
+          Alert the parent when this behavior occurs
+        </label>
+      </div>` +
+      fld('Send when the session count reaches', 'alertThreshold', item.alertThreshold||'1', 'number', 'min="1" max="99"') +
+      `<div class="form-group">
+        <label class="form-lbl" for="ef-alertMode">Sending</label>
+        <select class="form-ctrl" id="ef-alertMode">
+          <option value="review"${(item.alertMode||'review')!=='auto'?' selected':''}>Hold for BCBA review (recommended)</option>
+          <option value="auto"${(item.alertMode||'review')==='auto'?' selected':''}>Send automatically</option>
+        </select>
+        <div style="margin-top:6px;font-size:12px;color:var(--muted)">
+          An automatic send cannot be recalled &mdash; a data-entry mistake reaches the family immediately.
+        </div>
       </div>`;
 
   } else if (type === 'goals') {
@@ -3296,7 +3338,25 @@ function saveEntity() {
                      name.split(' ').map(w=>w[0]).join('');
     const sheetId  = document.getElementById('ef-sheetId').value.trim();
     if (!name) { toast('Name required', 'err'); return; }
+    const parentName  = (document.getElementById('ef-parentName')?.value || '').trim();
+    const parentEmail = (document.getElementById('ef-parentEmail')?.value || '').trim();
+    const parentLang  = document.getElementById('ef-parentLang')?.value || 'en';
+    const consentOn   = !!document.getElementById('ef-alertConsent')?.checked;
+    if (parentEmail && !/^[^\s@,;]+@[^\s@,;]+\.[A-Za-z]{2,}$/.test(parentEmail)) {
+      toast('Parent email looks invalid', 'err'); return;
+    }
+    if (consentOn && !parentEmail) {
+      toast('A parent email is required before consent can be recorded', 'err'); return;
+    }
+    // Stamp the consent date when consent is first turned on; clear it when revoked.
+    const hadConsent = String((editModalItem||{}).alertConsent || '').toLowerCase() === 'yes';
+    const alertConsent = consentOn ? 'yes' : 'no';
+    const alertConsentDate = consentOn
+      ? ((hadConsent && (editModalItem||{}).alertConsentDate) ? editModalItem.alertConsentDate
+                                                              : new Date().toISOString().slice(0,10))
+      : '';
     updated = { ...(editModalItem||{}), name, initials, sheetId,
+      parentName, parentEmail, parentLang, alertConsent, alertConsentDate,
       status: editModalItem ? (editModalItem.status||'active') : 'active' };
     if (!updated.id) updated.id = 'C' + Date.now();
 
@@ -3308,7 +3368,12 @@ function saveEntity() {
       document.querySelectorAll('.ef-client-cb:checked')
     ).map(cb => cb.value).join(',');
     if (!key || !label) { toast('Key and label required', 'err'); return; }
+    const alertEnabled = document.getElementById('ef-alertEnabled')?.checked ? 'yes' : 'no';
+    let alertThreshold = parseInt(document.getElementById('ef-alertThreshold')?.value || '1', 10);
+    if (isNaN(alertThreshold) || alertThreshold < 1) alertThreshold = 1;
+    const alertMode = document.getElementById('ef-alertMode')?.value === 'auto' ? 'auto' : 'review';
     updated = { ...(editModalItem||{}), key, label, color, clientIds,
+      alertEnabled, alertThreshold: String(alertThreshold), alertMode,
       status: editModalItem ? (editModalItem.status||'active') : 'active' };
 
   } else if (type === 'goals') {
@@ -4710,6 +4775,178 @@ async function masteryDismiss(clientSheetId, clientId, behaviorKey, btn) {
       btn.disabled = false; btn.textContent = 'Dismiss';
     }
   } catch(e) {
+    toast('Error: ' + e.message, 'err');
+    btn.disabled = false; btn.textContent = 'Dismiss';
+  }
+}
+
+// ─── PARENT BEHAVIOR ALERTS (f54) ─────────────────────────────────────
+// Review queue for alerts raised when a behavior reaches its threshold in a
+// submitted session. Sending is a PHI disclosure: the server re-checks consent
+// and writes every send to the Audit Log. Role-gated to Admin/BCBA here AND
+// server-side (never rely on the UI check alone).
+let _parentAlertFilter = 'pending';
+
+function renderParentAlertsTab(container) {
+  const statuses = [
+    ['pending','Pending review'], ['sent','Sent'], ['blocked','Blocked'],
+    ['failed','Failed'], ['dismissed','Dismissed'], ['all','All']
+  ];
+  const opts = statuses.map(st =>
+    '<option value="' + st[0] + '"' + (_parentAlertFilter === st[0] ? ' selected' : '') + '>' + st[1] + '</option>'
+  ).join('');
+  container.innerHTML =
+    '<div class="settings-section">' +
+      '<div class="settings-hdr">Parent Behavior Alerts</div>' +
+      '<div style="font-size:12px;color:var(--muted);margin-bottom:10px">' +
+        'An alert is raised when a behavior reaches its configured threshold in a submitted session. ' +
+        'Nothing is emailed unless that family has consent on file. Every send is recorded in the Audit Log as a disclosure.' +
+      '</div>' +
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
+        '<select class="form-ctrl" id="pa-filter" style="width:auto" ' +
+          'onchange="_parentAlertFilter=this.value;loadParentAlerts()">' + opts + '</select>' +
+        '<button class="btn btn-primary" style="width:auto;padding:10px 16px" onclick="loadParentAlerts()">Refresh</button>' +
+      '</div>' +
+    '</div>' +
+    '<div id="pa-body"><div class="empty-msg">Loading…</div></div>';
+  loadParentAlerts();
+}
+
+async function loadParentAlerts() {
+  const body = document.getElementById('pa-body');
+  if (!body) return;
+  body.innerHTML = '<div class="empty-msg">Loading…</div>';
+  try {
+    const resp = await fetch(GAS_URL, {
+      method: 'POST', headers: {'Content-Type': 'text/plain'}, redirect: 'follow',
+      body: JSON.stringify({
+        action: 'listParentAlerts',
+        status: _parentAlertFilter,
+        approverRole: AUTH.role === 'admin' ? 'Admin' : (AUTH.role === 'bcba' ? 'BCBA' : AUTH.role)
+      })
+    });
+    const data = await resp.json();
+    if (!data.success) {
+      body.innerHTML = '<div class="empty-msg">' + escHtml(data.error || 'Failed to load alerts') + '</div>';
+      return;
+    }
+    renderParentAlertsResults(data.alerts || []);
+  } catch (e) {
+    body.innerHTML = '<div class="empty-msg">Error: ' + escHtml(e.message) + '</div>';
+  }
+}
+
+function _paBadge(status) {
+  const map = {
+    pending:   ['#CA8A04', 'Pending review'],
+    sent:      ['#16A34A', 'Sent'],
+    blocked:   ['#EF4444', 'Blocked'],
+    failed:    ['#EF4444', 'Failed'],
+    dismissed: ['#6B7280', 'Dismissed']
+  };
+  const m = map[String(status || '').toLowerCase()] || ['#6B7280', String(status || '')];
+  return '<span style="display:inline-block;margin-left:6px;padding:2px 9px;border-radius:100px;' +
+         'font-size:10px;font-weight:800;color:#fff;background:' + m[0] + '">' + escHtml(m[1]) + '</span>';
+}
+
+function renderParentAlertsResults(alerts) {
+  const body = document.getElementById('pa-body');
+  if (!body) return;
+  if (!alerts.length) {
+    body.innerHTML = '<div class="empty-msg">No alerts for this filter.</div>';
+    return;
+  }
+  const canAct = (AUTH.role === 'admin' || AUTH.role === 'bcba');
+  let html = '';
+  alerts.forEach(a => {
+    const st = String(a.status || '').toLowerCase();
+    let actions = '';
+    if (canAct && (st === 'pending' || st === 'failed')) {
+      const aid = esc(a.alertId || '');
+      actions =
+        '<div style="margin-top:8px">' +
+          '<button class="btn btn-sm" style="padding:3px 12px;font-size:11px;background:#16A34A;color:white;' +
+            'border-radius:100px;border:none;cursor:pointer" ' +
+            'onclick="parentAlertApprove(\'' + aid + '\',this)">Approve &amp; send</button> ' +
+          '<button class="btn btn-sm" style="padding:3px 12px;font-size:11px;background:transparent;color:#EF4444;' +
+            'border:1px solid #EF4444;border-radius:100px;cursor:pointer" ' +
+            'onclick="parentAlertDismiss(\'' + aid + '\',this)">Dismiss</button>' +
+        '</div>';
+    }
+    const sentBit = a.sentAt
+      ? ' | sent ' + escHtml(String(a.sentAt).slice(0,16).replace('T',' ')) +
+        (a.sentBy ? ' by ' + escHtml(a.sentBy) : '')
+      : '';
+    html +=
+      '<div class="mastery-report-card">' +
+        '<div class="mastery-report-ttl">' + escHtml(a.clientName || '') + ' — ' +
+          escHtml(a.behaviorLabel || '') + _paBadge(st) + '</div>' +
+        '<div class="mastery-entry-client">' +
+          'Session ' + escHtml(a.dateISO || '') +
+          ' | count ' + escHtml(String(a.count || '')) +
+          ' (threshold ' + escHtml(String(a.threshold || '')) + ')' +
+          ' | ' + escHtml(a.mode === 'auto' ? 'automatic' : 'review') +
+          (a.recipient ? ' | to ' + escHtml(a.recipient) : '') +
+          sentBit +
+          (a.note ? '<br><span style="color:var(--danger)">' + escHtml(a.note) + '</span>' : '') +
+        '</div>' +
+        actions +
+      '</div>';
+  });
+  body.innerHTML = html;
+}
+
+async function parentAlertApprove(alertId, btn) {
+  if (!AUTH.user) { toast('Not authenticated', 'err'); return; }
+  if (AUTH.role !== 'admin' && AUTH.role !== 'bcba') {
+    toast('Only BCBA or Admin can send parent alerts', 'err'); return;
+  }
+  if (!confirm('Send this alert to the parent now?\n\nAn email cannot be recalled once sent.')) return;
+  btn.disabled = true; btn.textContent = 'Sending…';
+  try {
+    const resp = await fetch(GAS_URL, {
+      method: 'POST', headers: {'Content-Type': 'text/plain'}, redirect: 'follow',
+      body: JSON.stringify({
+        action: 'approveParentAlert',
+        alertId: alertId,
+        approverEmail: AUTH.user.email,
+        approverRole: AUTH.role === 'admin' ? 'Admin' : 'BCBA'
+      })
+    });
+    const data = await resp.json();
+    if (data.success) { toast('Alert sent to parent', 'ok'); loadParentAlerts(); }
+    else {
+      toast(data.error || 'Failed to send', 'err');
+      btn.disabled = false; btn.innerHTML = 'Approve &amp; send';
+    }
+  } catch (e) {
+    toast('Error: ' + e.message, 'err');
+    btn.disabled = false; btn.innerHTML = 'Approve &amp; send';
+  }
+}
+
+async function parentAlertDismiss(alertId, btn) {
+  if (!AUTH.user) { toast('Not authenticated', 'err'); return; }
+  if (AUTH.role !== 'admin' && AUTH.role !== 'bcba') {
+    toast('Only BCBA or Admin can dismiss parent alerts', 'err'); return;
+  }
+  if (!confirm('Dismiss this alert without notifying the parent?')) return;
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    const resp = await fetch(GAS_URL, {
+      method: 'POST', headers: {'Content-Type': 'text/plain'}, redirect: 'follow',
+      body: JSON.stringify({
+        action: 'dismissParentAlert',
+        alertId: alertId,
+        approverEmail: AUTH.user.email,
+        approverRole: AUTH.role === 'admin' ? 'Admin' : 'BCBA',
+        reason: ''
+      })
+    });
+    const data = await resp.json();
+    if (data.success) { toast('Alert dismissed', 'ok'); loadParentAlerts(); }
+    else { toast(data.error || 'Failed to dismiss', 'err'); btn.disabled = false; btn.textContent = 'Dismiss'; }
+  } catch (e) {
     toast('Error: ' + e.message, 'err');
     btn.disabled = false; btn.textContent = 'Dismiss';
   }
