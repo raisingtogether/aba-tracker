@@ -846,7 +846,7 @@
     <button class="logout-btn" onclick="confirmLogout()">Logout</button>
   </div>
   <div id="resume-section" style="display:none">
-    <div class="section-lbl">Paused sessions — tap to resume</div>
+    <div class="section-lbl">Paused sessions — tap to resume, &#10005; to discard</div>
     <div class="client-list" id="resume-list"></div>
   </div>
   <div class="section-lbl">Active Clients</div>
@@ -2003,6 +2003,123 @@ function applySessionSnapshot(snap) {
 }
 
 // Populate the "Paused sessions" cards on the client screen (server + local).
+// ── Discard a trial / abandoned session ───────────────────────────────
+// A session started "just to try something" must be removable without ever
+// writing data. Three places remember it and all three have to be cleared, or
+// it comes back: the server backup row, the device-local snapshot, and the
+// offline submit queue (which would otherwise auto-submit on reconnect).
+//
+// Logout is deliberately NOT a discard: logging out on one device and resuming
+// on another is a supported flow, so logout leaves the server row alone.
+
+function purgePendingSubmit(submissionId) {
+  if (!submissionId) return 0;
+  var q = readPendingSubmits();
+  var before = q.length;
+  q = q.filter(function(p){ return p.submissionId !== submissionId; });
+  if (q.length !== before) writePendingSubmits(q);
+  return before - q.length;
+}
+
+async function deleteSuspendedRecord(suspendId) {
+  if (!suspendId || GAS_URL === 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') return false;
+  try {
+    var resp = await fetch(GAS_URL, {
+      method: 'POST', headers: {'Content-Type': 'text/plain'}, redirect: 'follow',
+      body: JSON.stringify({
+        action: 'deleteSuspendedSession',
+        suspendId: suspendId,
+        reason: 'discarded',
+        therapistEmail: AUTH.user ? AUTH.user.email : ''
+      })
+    });
+    var data = await resp.json();
+    return !!(data && data.success);
+  } catch (e) { return false; }   // offline — local cleanup still proceeds
+}
+
+// Discard one card from the "Paused sessions" list.
+let _resumeCards = [];
+async function discardSuspendedSession(idx, btn) {
+  var sess = _resumeCards[idx];
+  if (!sess) return;
+  // If this is the session currently open on screen, the live autosave would
+  // re-create the row right after we delete it. Send them to the in-session
+  // discard instead.
+  if (S.client && sess.suspendId && S.suspendId === sess.suspendId) {
+    toast('This session is open right now — use Pause \u2192 Discard session', 'err');
+    return;
+  }
+  var label = sess.clientName || 'this session';
+  if (!window.confirm('Discard the paused session for ' + label + '?\n\n' +
+      'Nothing will be written to the client\'s sheet. This cannot be undone.')) return;
+
+  btn.disabled = true;
+  btn.innerHTML = '&#8230;';
+
+  var subId = (sess.state && sess.state.submissionId) || null;
+  var serverOk = true;
+  if (sess.suspendId) serverOk = await deleteSuspendedRecord(sess.suspendId);
+
+  // Clear the local snapshot if it is the same session, else it reappears.
+  var local = readLocalBackup();
+  if (local && local.snapshot && (
+        sess._local ||
+        (sess.suspendId && local.snapshot.suspendId === sess.suspendId) ||
+        (subId && local.snapshot.submissionId === subId))) {
+    clearLocalAutoSave();
+  }
+  var purged = purgePendingSubmit(subId);
+
+  logAuditEvent('session_discarded', AUTH.user ? AUTH.user.email : '', sess.clientName || '',
+    'Paused session discarded without submitting' +
+    (sess.suspendId ? ' (suspendId ' + sess.suspendId + ')' : ' (device-local only)') +
+    (purged ? ' — also removed ' + purged + ' queued submit' : ''));
+
+  if (!sess.suspendId || serverOk) {
+    toast('Session discarded — no data written', 'ok');
+  } else {
+    toast('Cleared on this device; the server copy could not be reached', 'err');
+  }
+  renderResumeCards();
+}
+
+// Discard the session currently open on screen (the test-run case).
+async function discardActiveSession() {
+  if (!S.client) { toast('No active session to discard', 'err'); return; }
+  var label = S.client.name || 'this client';
+  if (!window.confirm('Discard this session for ' + label + '?\n\n' +
+      'Everything collected in this session will be deleted and NOTHING will be ' +
+      'written to the client\'s sheet. Use this for test sessions only.')) return;
+  if (!window.confirm('Last check — permanently discard the session for ' + label + '?')) return;
+
+  var email = AUTH.user ? AUTH.user.email : '';
+  var cname = S.client.name || '';
+  var sid   = S.suspendId;
+  var subId = S.submissionId;
+
+  // Stop the autosave tick before any await, so it cannot re-push a live
+  // backup while the delete is in flight.
+  stopAutoSave();
+  S.submitted = true;
+  window.onbeforeunload = null;
+  if (typeof closePauseModal === 'function') closePauseModal();
+
+  if (sid) await deleteSuspendedRecord(sid);
+  clearLocalAutoSave();
+  var purged = purgePendingSubmit(subId);
+
+  logAuditEvent('session_discarded', email, cname,
+    'Active session discarded without submitting' +
+    (sid ? ' (suspendId ' + sid + ')' : '') +
+    (purged ? ' — also removed ' + purged + ' queued submit' : ''));
+
+  resetState();          // clears timers, autosave, and all session fields
+  toast('Session discarded — no data written', 'ok');
+  goTo('client');
+  renderResumeCards();
+}
+
 async function renderResumeCards() {
   const section = document.getElementById('resume-section');
   const listEl  = document.getElementById('resume-list');
@@ -2049,7 +2166,8 @@ async function renderResumeCards() {
 
   if (!sessions.length) { section.style.display = 'none'; return; }
   section.style.display = '';
-  sessions.forEach(function(s){
+  _resumeCards = sessions;
+  sessions.forEach(function(s, idx){
     const when = s.updatedAt ? new Date(s.updatedAt) : null;
     const whenStr = when ? (when.toLocaleDateString() + ' ' + when.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})) : '';
     const tag = s._recovered ? ' • recovered (unsaved)' : (s._local && !s._synced ? ' • on this device' : '');
@@ -2065,7 +2183,22 @@ async function renderResumeCards() {
         toast('Session resumed', 'ok');
       }
     };
-    listEl.appendChild(btn);
+    // Discard control — a trial session must be clearable without finishing it.
+    // Separate sibling button: a button cannot be nested inside another button.
+    btn.style.flex = '1';
+    const del = document.createElement('button');
+    del.className = 'client-btn';
+    del.title = 'Discard without saving any data';
+    del.setAttribute('aria-label', 'Discard session for ' + (s.clientName || 'this client'));
+    del.style.cssText = 'flex:0 0 auto;width:auto;padding:18px 15px;justify-content:center;' +
+      'color:#EF4444;font-size:19px;font-weight:900;border-color:#FCA5A5';
+    del.innerHTML = '&#10005;';
+    del.onclick = function(){ discardSuspendedSession(idx, del); };
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:stretch;gap:6px';
+    row.appendChild(btn);
+    row.appendChild(del);
+    listEl.appendChild(row);
   });
 }
 
@@ -6604,6 +6737,13 @@ init();
       <div class="late-modal-btns" style="margin-top:12px">
         <button class="btn btn-primary" id="pause-confirm-btn" onclick="doPauseSession()">&#10073;&#10073; Pause &amp; Save</button>
         <button class="btn btn-ghost" onclick="closePauseModal()">Cancel</button>
+      </div>
+      <div style="margin-top:14px;border-top:1px solid var(--g200);padding-top:12px">
+        <div class="late-modal-q" style="margin-bottom:8px">Only opened this session to try something out?
+          <strong>Discard</strong> it instead &mdash; nothing is written to the client's sheet and it will not
+          come back as a paused session.</div>
+        <button class="btn btn-ghost" onclick="discardActiveSession()"
+          style="color:#EF4444;border-color:#EF4444">&#10005; Discard session (no data saved)</button>
       </div>
     </div>
   </div>

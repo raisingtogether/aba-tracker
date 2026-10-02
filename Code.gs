@@ -101,7 +101,7 @@ function doPost(e) {
       result = { success: true, sessions: ssList };
 
     } else if (data.action === 'deleteSuspendedSession') {
-      var delResult = deleteSuspendedSession(data.suspendId);
+      var delResult = deleteSuspendedSession(data.suspendId, data.reason, data.therapistEmail);
       result = { success: true, deleted: delResult.deleted };
 
     } else if (data.action === 'cleanupSuspendedSessions') {
@@ -878,7 +878,14 @@ function listSuspendedSessions(therapistEmail, clientId) {
  * Remove a paused session by suspendId (called after the session is finally
  * submitted, or when abandoned). Returns { deleted: true|false }.
  */
-function deleteSuspendedSession(suspendId) {
+/**
+ * Remove a suspended/live backup row.
+ * reason='discarded' means the therapist abandoned the session on purpose (a
+ * trial run) — audited as session_discarded so the trail does not claim the
+ * session was completed. Any other value keeps the historical
+ * session_resumed_completed action used by processSession after a real write.
+ */
+function deleteSuspendedSession(suspendId, reason, actorEmail) {
   if (!suspendId) return { deleted: false };
 
   var lock = LockService.getScriptLock();
@@ -890,16 +897,23 @@ function deleteSuspendedSession(suspendId) {
     var sheet = ss.getSheetByName(SUSPENDED_TAB);
     if (!sheet) return { deleted: false };
 
-    var cm     = _colMapOf(sheet);
-    var idIdx  = cm.map['suspendId'];
+    var cm      = _colMapOf(sheet);
+    var idIdx   = cm.map['suspendId'];
+    var nameIdx = cm.map['clientName'];
     if (idIdx === undefined) return { deleted: false };
 
-    var values  = sheet.getDataRange().getValues();
+    var isDiscard = String(reason || '') === 'discarded';
+    var values    = sheet.getDataRange().getValues();
     for (var r = values.length - 1; r >= 1; r--) {
       if (String(values[r][idIdx] || '') === String(suspendId)) {
+        var rowClient = (nameIdx !== undefined) ? String(values[r][nameIdx] || '') : '';
         sheet.deleteRow(r + 1);
-        writeAuditLog(new Date().toISOString(), 'system', 'session_resumed_completed',
-          '', 'Suspended session ' + suspendId + ' removed');
+        writeAuditLog(new Date().toISOString(), actorEmail || 'system',
+          isDiscard ? 'session_discarded' : 'session_resumed_completed',
+          rowClient,
+          isDiscard
+            ? 'Session ' + suspendId + ' discarded by therapist without submitting — no session data written'
+            : 'Suspended session ' + suspendId + ' removed');
         return { deleted: true };
       }
     }
