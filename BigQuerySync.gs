@@ -13,6 +13,14 @@
  */
 
 // ── CONFIGURATION ─────────────────────────────────────────────────────
+/**
+ * Deployment canary — keep in sync with APP_BUILD in Code.gs and bump both on
+ * every release. doGet reports this value, so one unauthenticated call proves
+ * whether THIS file was pasted too (the two are pasted separately).
+ */
+var BQ_SYNC_BUILD = '2026-10-02-f30a';
+function bqSyncBuild() { return BQ_SYNC_BUILD; }
+
 var BQ_PROJECT     = 'rt-aba-tracker';
 var BQ_DATASET     = 'aba_tracker';
 var BQ_ADMIN_SHEET  = '1VPBADMXvhOww_52O1n2CieTsQB6XCotLt6XdAQsq0ik';

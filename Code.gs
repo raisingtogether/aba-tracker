@@ -7,6 +7,18 @@
  * functions, no spread, no let/const, no Array.from.
  */
 
+/**
+ * Deployment canary. BUMP THIS ON EVERY RELEASE, before pasting into the Apps
+ * Script editor. doGet reports it unauthenticated, so a deploy can be verified
+ * from outside without touching patient data. An unchanged marker makes a
+ * successful deploy indistinguishable from a stale paste — which has already
+ * cost one debugging round on this project.
+ *
+ * Keep BQ_SYNC_BUILD in BigQuerySync.gs set to the same value: the two files are
+ * pasted separately, so a stale BigQuerySync is otherwise invisible.
+ */
+var APP_BUILD = '2026-10-02-f30a';
+
 var ADMIN_SHEET_ID = '1VPBADMXvhOww_52O1n2CieTsQB6XCotLt6XdAQsq0ik';
 var AUDIT_SHEET_ID = '1tf98iS18vV08mQtPV9Vq6hQVkEp6Qg-ebUwHkeRlwaQ';
 
@@ -134,8 +146,22 @@ function doPost(e) {
 }
 
 function doGet() {
+  // Report BigQuerySync's own build so one call verifies BOTH pastes. The files
+  // share an Apps Script project, so a missing function means it was never
+  // pasted; a mismatched value means it is stale.
+  var bqBuild;
+  try {
+    bqBuild = (typeof bqSyncBuild === 'function') ? bqSyncBuild() : 'MISSING';
+  } catch (e) {
+    bqBuild = 'ERROR: ' + e.message;
+  }
   return ContentService
-    .createTextOutput(JSON.stringify({ status: 'RT ABA Tracker v4 - online', build: 'f54-parent-alerts' }))
+    .createTextOutput(JSON.stringify({
+      status:      'RT ABA Tracker v4 - online',
+      build:       APP_BUILD,
+      bqSyncBuild: bqBuild,
+      buildsMatch: (bqBuild === APP_BUILD)
+    }))
     .setMimeType(ContentService.MimeType.JSON);
 }
 

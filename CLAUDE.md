@@ -223,11 +223,34 @@ All sheet writes use `ensureSheetColumns` + colMap-based row building. **Never h
 - After Code.gs changes: always create a new deployment version (don't reuse old URL)
 
 ### GAS Deployment (CRITICAL)
-Code.gs changes require TWO steps to take effect:
+**Step 0 — `git push` FIRST.** Step 1 copies from GitHub Raw, which serves
+`origin/main`, NOT the working tree. A commit that has not been pushed is
+invisible to the paste, and the symptom is identical to a botched deploy: the
+web app keeps answering with the old code. This has already cost one debugging
+round. Firebase Hosting deploys from the working tree while GAS deploys from
+GitHub — two sources of truth for one release, so push before pasting.
+
+**Bump `APP_BUILD` (Code.gs) and `BQ_SYNC_BUILD` (BigQuerySync.gs) to the same
+new value on every release**, before pasting. `doGet` reports both plus a
+`buildsMatch` flag, so one unauthenticated GET proves which version is live
+without touching patient data. An unchanged marker makes a real deploy
+indistinguishable from a stale paste.
+
+Then:
 1. Copy from GitHub Raw → paste in script.google.com → Cmd+S
+   (**both** `Code.gs` and `BigQuerySync.gs` if both changed — they are pasted
+   separately, and a stale BigQuerySync is otherwise invisible)
 2. Deploy → Manage deployments → edit (pencil icon) → Version: New version → Deploy
 
-Without step 2, the web app continues running the old version.
+Without step 2, the web app continues running the old version. Choosing
+"New deployment" instead of "New version" mints a NEW URL and leaves the old one
+frozen — the app's `GAS_URL` constant would then need updating too.
+
+Verify after deploying:
+```
+curl -sL '<GAS_URL>'   # expect {"build":"<APP_BUILD>", "buildsMatch":true}
+```
+
 **App version**: v4 (status string `RT ABA Tracker v4 - online`). URL (unchanged across redeploys): `https://script.google.com/macros/s/AKfycbz8AJ-6WIoNdBNh-z3iuT9BXNnw3r95gTqONo78wpTJDXQ9QPGaIp_fmR6gjZlB2yQf/exec`
 
 ---
