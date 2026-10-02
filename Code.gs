@@ -135,7 +135,7 @@ function doPost(e) {
 
 function doGet() {
   return ContentService
-    .createTextOutput(JSON.stringify({ status: 'RT ABA Tracker v4 - online' }))
+    .createTextOutput(JSON.stringify({ status: 'RT ABA Tracker v4 - online', build: 'f54-parent-alerts' }))
     .setMimeType(ContentService.MimeType.JSON);
 }
 
