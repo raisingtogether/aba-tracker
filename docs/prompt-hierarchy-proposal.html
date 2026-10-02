@@ -57,7 +57,7 @@
   <div class="head">
     <h1>Prompt Hierarchy — Design Proposal v2</h1>
     <p>Revised after BCBA review. Simplified to <strong>one prompt level per goal, per session</strong>.</p>
-    <span class="tag">Revision 2 · Design approved by BCBA Sep 27, 2026 · detailed rulings pending</span>
+    <span class="tag">Revision 2 · Signed off by BCBA · all rulings answered Oct 2026 · BUILT (f30a / f30b)</span>
   </div>
 
   <div class="changed">
@@ -67,6 +67,32 @@
     way, with RBTs defaulting to one value or filling it in from memory afterward, producing a column that looks rich and isn't.
     <strong>v2 records one prompt level per goal per session — 5 to 8 decisions instead of 40.</strong>
     The per-trial ✓/✗ scoring stays exactly as it is today. Nothing else in the session changes.
+  </div>
+
+  <div class="changed" style="background:#eef6fb;border-color:#b9d9ec;border-left-color:#0787a0">
+    <h3 style="color:#0a6a85">Signed-off answers &mdash; these are what was built</h3>
+    <table style="margin-top:2px">
+      <tr><th style="width:30%">Question</th><th>Ruling</th></tr>
+      <tr><td>1. Levels &amp; order</td><td><strong>Visual / Textual added</strong> &mdash; seven levels:
+        I, VT, G, V, M, PP, FP. <em>VT placed between Independent and Gestural; confirm the placement
+        &mdash; the stored value is the code, so reordering needs no data migration.</em></td></tr>
+      <tr><td>2. Meaning of the field</td><td><strong>A &mdash; the programmed / target level.</strong>
+        The one irreversible choice, now fixed.</td></tr>
+      <tr><td>3. Required?</td><td><strong>Required</strong> for every goal that was run. Blank stays legal
+        and means &ldquo;not run today&rdquo;.</td></tr>
+      <tr><td>4. Control</td><td><strong>Dropdown.</strong></td></tr>
+      <tr><td>5. Mastery</td><td><strong>80% &times; 5 consecutive sessions at Independent</strong> (f30b).
+        Blank history counts as unknown, never independent.</td></tr>
+      <tr><td>6a. Two settings in one session</td><td><strong>One level per setting.</strong> A session
+        currently carries a single Setting, so one-per-session already satisfies this; the grain would
+        need extending only if multi-setting sessions are added.</td></tr>
+      <tr><td>6b. Baseline / probe trials</td><td><strong>Recorded as Independent.</strong>
+        <em>Read from &ldquo;record independently&rdquo; &mdash; confirm this is what was meant rather
+        than &ldquo;flag separately&rdquo;. It is a convention, not code.</em></td></tr>
+      <tr><td>6c. Editable after submit?</td><td><strong>No.</strong></td></tr>
+      <tr><td>6d. Parent dashboard</td><td><strong>No prompt level shown</strong> (constrains f29).</td></tr>
+      <tr><td>7. Automatic timestamps</td><td><strong>Yes</strong> &mdash; stamped per trial, invisible to the RBT.</td></tr>
+    </table>
   </div>
 
   <div class="two">
@@ -200,6 +226,6 @@
     <div>Date: ____________</div>
   </div>
 
-  <div class="foot">Raising Together · ABA Tracker · Prompt Hierarchy proposal v2 (f30a / f30b) — design approved by BCBA Sep 27, 2026; rulings in the yellow box pending. No code built yet.</div>
+  <div class="foot">Raising Together · ABA Tracker · Prompt Hierarchy proposal v2 (f30a / f30b) — signed off and implemented Oct 2026. Retained as the decision record for the field’s meaning.</div>
 </body>
 </html>

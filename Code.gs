@@ -1289,7 +1289,11 @@ function writeTrialData(ss, d) {
   var analyticsHeaders = [
     'submissionId', 'clientName', 'clientId', 'therapistEmail',
     'sessionType', 'billingCode', 'isDraft', 'payloadHash',
-    'submittedAt', 'dateISO', 'Percent Correct'
+    'submittedAt', 'dateISO', 'Percent Correct',
+    // f30a — ONE column each, whatever the goal count. Mirrors the
+    // 'Percent Correct' pattern deliberately: a per-goal column pair would
+    // multiply the dynamic columns this tab has already been repaired for.
+    'Prompt Levels', 'Trial Times'
   ];
 
   // Per-goal trial count map (goal code upper → numTrials)
@@ -1402,6 +1406,24 @@ function writeTrialData(ss, d) {
     if (colMap['submittedAt']     !== undefined) { row[colMap['submittedAt']]     = d.submittedAt    || new Date().toISOString(); }
     if (colMap['dateISO']         !== undefined) { row[colMap['dateISO']]         = d.dateISO        || ''; }
     if (colMap['Percent Correct'] !== undefined) { row[colMap['Percent Correct']] = percentCorrectJSON; }
+
+  // f30a: prompt level per goal (one level per goal per session — the level the
+  // goal was PROGRAMMED to run at) and the automatic per-trial timestamps.
+  var promptLevelMap = {};
+  var trialTimeMap   = {};
+  for (var pli = 0; pli < d.trialData.length; pli++) {
+    var pg     = d.trialData[pli];
+    var pgCode = String(pg.goalCode || '');
+    if (!pgCode) continue;
+    if (pg.promptLevel) promptLevelMap[pgCode] = String(pg.promptLevel);
+    if (pg.trialTimes && pg.trialTimes.length) trialTimeMap[pgCode] = pg.trialTimes;
+  }
+  if (colMap['Prompt Levels'] !== undefined) {
+    row[colMap['Prompt Levels']] = JSON.stringify(promptLevelMap);
+  }
+  if (colMap['Trial Times'] !== undefined) {
+    row[colMap['Trial Times']] = JSON.stringify(trialTimeMap);
+  }
 
     validateRowAlignment('Trial Data', actualHeaders, row);
     sheet.appendRow(row);
@@ -1819,12 +1841,17 @@ function _ensureTrialGoalColumns(sheet, goalCodes, trialCountMap) {
  */
 function _appendTrialSummaryRows(ss, d, goalDescMap, tz) {
   try {
+    // NOTE: rows below are built as fixed-position arrays, so anything new must
+    // be APPENDED here and appended in the same order to the row push.
     var TS_HEADERS = [
       'Date', 'Therapist', 'Setting', 'Goal Code', 'Goal Description',
       'Trial 1', 'Trial 2', 'Trial 3', 'Trial 4', 'Trial 5',
-      'Percentage', 'Source', 'Session ID'
+      'Percentage', 'Source', 'Session ID',
+      // f30a — this tab's grain is already one row per goal per session, which
+      // is exactly the grain of the prompt level. No new dynamic columns.
+      'Prompt Level', 'Prompt Level Label', 'First Scored At', 'Last Scored At'
     ];
-    var TS_COLS = TS_HEADERS.length; // 13
+    var TS_COLS = TS_HEADERS.length; // 17
 
     var sumSheet;
     var existing = ss.getSheetByName('Trial Summary');
@@ -1892,7 +1919,11 @@ function _appendTrialSummaryRows(ss, d, goalDescMap, tz) {
         tr.length > 4 ? tr[4] : '',
         pctVal,
         'Live',
-        d.submissionId || ''
+        d.submissionId || '',
+        String(g.promptLevel || ''),
+        _promptLevelLabel(g.promptLevel),
+        String(g.firstScoredAt || ''),
+        String(g.lastScoredAt  || '')
       ]);
     }
 
@@ -1972,7 +2003,11 @@ function objectsToSheet(ss, tabName, headers, objects) {
 
 /**
  * Check goal and behavior mastery for a client.
- * Goal mastery: 80%+ for 5 consecutive sessions → status 'confirmed'.
+ * Goal mastery (f30b): 80%+ for 5 consecutive sessions AT THE INDEPENDENT
+ * prompt level → status 'confirmed'. A blank prompt level means UNKNOWN (every
+ * session recorded before f30a shipped), never 'independent', so historical
+ * rows cannot satisfy the rule. Already-confirmed masteries are never revoked —
+ * isMasteryLogged only ever suppresses a re-log.
  * Behavior mastery: <=1 occurrence for 10 consecutive sessions →
  *   'recommended' (2+ distinct settings observed) or
  *   'pendingGeneralization' (only 1 setting observed).
@@ -1999,10 +2034,13 @@ function checkGoalMastery(ss, clientId, clientName, therapistName, therapistEmai
   if (rows.length < 2) return;
 
   var headers = rows[0];
-  // Find "Percent Correct" column (JSON map of goal->numeric pct)
+  // "Percent Correct" and "Prompt Levels" are both JSON maps keyed by goal code.
   var pctJsonCol = -1;
+  var lvlJsonCol = -1;
   for (var hi = 0; hi < headers.length; hi++) {
-    if (String(headers[hi]).trim() === 'Percent Correct') { pctJsonCol = hi; break; }
+    var hName = String(headers[hi]).trim();
+    if (hName === 'Percent Correct') pctJsonCol = hi;
+    if (hName === 'Prompt Levels')   lvlJsonCol = hi;
   }
   if (pctJsonCol < 0) return;
 
@@ -2010,7 +2048,11 @@ function checkGoalMastery(ss, clientId, clientName, therapistName, therapistEmai
   var dataRows = [];
   for (var ri = 1; ri < rows.length; ri++) {
     var pctJson = String(rows[ri][pctJsonCol] || '').trim();
-    if (pctJson) dataRows.push(pctJson);
+    if (!pctJson) continue;
+    dataRows.push({
+      pct: pctJson,
+      lvl: (lvlJsonCol >= 0) ? String(rows[ri][lvlJsonCol] || '').trim() : ''
+    });
   }
 
   // Need at least 5 rows to check mastery
@@ -2022,33 +2064,45 @@ function checkGoalMastery(ss, clientId, clientName, therapistName, therapistEmai
   // Collect all goal codes seen across these 5 sessions
   var goalMap = {};
   for (var di = 0; di < last5.length; di++) {
-    try {
-      var pctObj = JSON.parse(last5[di]);
-      var codes = Object.keys(pctObj);
-      for (var ki = 0; ki < codes.length; ki++) {
-        var code = codes[ki];
-        if (!goalMap[code]) goalMap[code] = [];
-        goalMap[code].push(parseFloat(pctObj[code]));
-      }
-    } catch(e) {}
+    var pctObj = null;
+    var lvlObj = {};
+    try { pctObj = JSON.parse(last5[di].pct); } catch (e) { continue; }
+    if (!pctObj) continue;
+    if (last5[di].lvl) {
+      try { lvlObj = JSON.parse(last5[di].lvl) || {}; } catch (e) { lvlObj = {}; }
+    }
+    var codes = Object.keys(pctObj);
+    for (var ki = 0; ki < codes.length; ki++) {
+      var code = codes[ki];
+      if (!goalMap[code]) goalMap[code] = [];
+      goalMap[code].push({
+        pct:   parseFloat(pctObj[code]),
+        level: String(lvlObj[code] || '').trim()
+      });
+    }
   }
 
   var today = new Date().toISOString().substring(0, 10);
   var codes = Object.keys(goalMap);
   for (var gi = 0; gi < codes.length; gi++) {
     var code = codes[gi];
-    var scores = goalMap[code];
-    if (scores.length < 5) { result.goals[code] = false; continue; }
-    // Check if all 5 are >= 80
+    var entries = goalMap[code];
+    if (entries.length < 5) { result.goals[code] = false; continue; }
+    // All 5 sessions must be >= 80% AND run at the Independent level (f30b).
+    // 80% with support is not mastery, and a blank level is unknown, not
+    // independent — so pre-f30a history can never satisfy this on its own.
     var allMastered = true;
-    for (var si = 0; si < scores.length; si++) {
-      if (isNaN(scores[si]) || scores[si] < 80) { allMastered = false; break; }
+    var scoreList   = [];
+    for (var si = 0; si < entries.length; si++) {
+      scoreList.push(isNaN(entries[si].pct) ? '?' : entries[si].pct);
+      if (isNaN(entries[si].pct) || entries[si].pct < 80) { allMastered = false; break; }
+      if (entries[si].level !== 'I') { allMastered = false; break; }
     }
     result.goals[code] = allMastered;
     if (allMastered) {
       // Check if this mastery is already recorded in Mastery Log
       if (!isMasteryLogged(ss, 'goal', code)) {
-        var scoresStr = scores.join(', ') + '%';
+        var scoresStr = scoreList.join(', ') + '% at Independent';
         writeMasteryLog(ss, 'goal', code, '', today, scoresStr, therapistName, therapistEmail, clientName, clientId);
         result.newMasteries.push({ type: 'goal', code: code, description: '', masteryDate: today, lastScores: scoresStr });
       }
@@ -3678,6 +3732,26 @@ function recoverTrialData(dryRun, onlyClientIds) {
  * evaluateParentAlerts must never throw into processSession — a mail failure
  * must not cost a therapist their session data.
  */
+
+/**
+ * f30a prompt hierarchy, server side. Order is clinical and matches the
+ * PROMPT_LEVELS array in index.html; the CODE is what gets stored, so the order
+ * can change later with no migration. 'V' is Verbal, 'VT' is Visual/Textual.
+ */
+var PROMPT_LEVEL_ORDER = ['I', 'VT', 'G', 'V', 'M', 'PP', 'FP'];
+var PROMPT_LEVEL_LABELS = {
+  I:  'Independent',
+  VT: 'Visual / Textual',
+  G:  'Gestural',
+  V:  'Verbal',
+  M:  'Model',
+  PP: 'Partial Physical',
+  FP: 'Full Physical'
+};
+function _promptLevelLabel(code) {
+  var c = String(code || '').trim();
+  return PROMPT_LEVEL_LABELS[c] || '';
+}
 
 var PARENT_ALERT_HEADERS = [
   'alertId', 'createdAt', 'submissionId', 'dateISO', 'clientId', 'clientName',

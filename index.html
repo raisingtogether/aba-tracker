@@ -1314,6 +1314,8 @@ let S = {
   behaviors: {},
   tantrum: { count:0, totalSec:0, curSec:0, running:false, interval:null, startTs:null },
   trials: {},
+  promptLevels: {},   // f30a: goalCode -> level code, one per goal per session
+  trialTimes:   {},   // f30a: goalCode -> [ISO per trial], captured automatically
   abc: [],
   clockInterval: null, sessInterval: null, sessStartTs: null,
   // Late-start adherence tracking
@@ -1716,6 +1718,26 @@ function updateElapsed() {
 // to the client's real data tabs — only the completed session is, on submit.
 
 const LOCAL_BACKUP_KEY = 'rtSessionBackup';  // transient; cleared on logout/complete
+// f30a — prompt hierarchy. ORDER IS CLINICAL and comes from this array's index;
+// the stored value is the CODE, never the rank, so Tatiana can reorder or insert
+// a level later with no migration of historical data.
+// 'V' is Verbal and 'VT' is Visual/Textual — distinct codes on purpose.
+const PROMPT_LEVELS = [
+  { code: 'I',  label: 'Independent' },
+  { code: 'VT', label: 'Visual / Textual' },
+  { code: 'G',  label: 'Gestural' },
+  { code: 'V',  label: 'Verbal' },
+  { code: 'M',  label: 'Model' },
+  { code: 'PP', label: 'Partial Physical' },
+  { code: 'FP', label: 'Full Physical' }
+];
+function promptLevelLabel(code) {
+  for (var i = 0; i < PROMPT_LEVELS.length; i++) {
+    if (PROMPT_LEVELS[i].code === code) return PROMPT_LEVELS[i].label;
+  }
+  return '';
+}
+
 const AUTOSAVE_MS      = 15000;              // crash-safe local auto-save cadence
 let _pauseReason = '';
 
@@ -1753,6 +1775,8 @@ function buildSessionSnapshot(status) {
     notes:    notes,
     behaviors: JSON.parse(JSON.stringify(S.behaviors || {})),
     trials:    JSON.parse(JSON.stringify(S.trials || {})),
+    promptLevels: JSON.parse(JSON.stringify(S.promptLevels || {})),
+    trialTimes:   JSON.parse(JSON.stringify(S.trialTimes   || {})),
     abc:       JSON.parse(JSON.stringify(S.abc || [])),
     tantrum:   { count: S.tantrum.count || 0, totalSec: S.tantrum.totalSec || 0, curSec: 0 },
     abcIdSeq:  abcIdSeq,
@@ -1931,6 +1955,8 @@ function applySessionSnapshot(snap) {
     S.notes     = snap.notes || '';
     S.behaviors = snap.behaviors || {};
     var restoredTrials = snap.trials || {};
+    var restoredLevels = snap.promptLevels || {};
+    var restoredTimes  = snap.trialTimes   || {};
     S.abc       = snap.abc || [];
     abcIdSeq    = snap.abcIdSeq || 0;
     S.tantrum   = { count: snap.tantrum ? (snap.tantrum.count||0) : 0,
@@ -1966,6 +1992,8 @@ function applySessionSnapshot(snap) {
 
     buildTrials();
     S.trials = restoredTrials;
+    S.promptLevels = restoredLevels;
+    S.trialTimes   = restoredTimes;
     Object.keys(restoredTrials).forEach(function(gcode){
       var arr = restoredTrials[gcode]; if (!arr) return;
       for (var i = 0; i < arr.length; i++) {
@@ -1976,6 +2004,7 @@ function applySessionSnapshot(snap) {
       }
       calcPct(gcode);
     });
+    restorePromptLevelSelects();
 
     var notesEl = document.getElementById('session-notes');
     if (notesEl) { notesEl.value = S.notes; updateWordCount(); }
@@ -2374,6 +2403,8 @@ function buildTrials() {
   S.client.goals.forEach(g => {
     const n = g.numTrials || 5;
     S.trials[g.code] = Array(n).fill(null);
+    S.promptLevels[g.code] = '';
+    S.trialTimes[g.code]   = Array(n).fill('');
     const card = document.createElement('div');
     card.className = 'goal-card';
     var slots = '';
@@ -2394,15 +2425,51 @@ function buildTrials() {
         '</span>' +
         '<span class="goal-pct" id="pct-' + g.code + '">\u2014</span>' +
       '</div>' +
+      '<div style="display:flex;align-items:center;gap:8px;margin:2px 0 9px">' +
+        '<label for="pl-' + escAttr(g.code) + '" style="font-size:10.5px;font-weight:800;' +
+          'color:var(--muted);text-transform:uppercase;letter-spacing:.3px;white-space:nowrap">Prompt level</label>' +
+        '<select class="form-ctrl" id="pl-' + escAttr(g.code) + '" ' +
+          'style="flex:1;padding:9px 10px;font-size:13px" ' +
+          'onchange="setPromptLevel(\'' + esc(g.code) + '\',this.value)">' +
+          '<option value="">\u2014 select \u2014</option>' + promptLevelOptions('') +
+        '</select>' +
+      '</div>' +
       '<div class="trial-btns">' + slots + '</div>';
     wrap.appendChild(card);
   });
+}
+
+// buildTrials() rebuilds the selects empty; push restored values back into them.
+function restorePromptLevelSelects() {
+  Object.keys(S.promptLevels || {}).forEach(function(gcode) {
+    var el = document.getElementById('pl-' + gcode);
+    if (el) el.value = S.promptLevels[gcode] || '';
+  });
+}
+
+function promptLevelOptions(selected) {
+  return PROMPT_LEVELS.map(function(p) {
+    return '<option value="' + p.code + '"' + (p.code === selected ? ' selected' : '') + '>' +
+      escHtml(p.label) + '</option>';
+  }).join('');
+}
+
+// One level per goal per session — the level the goal is PROGRAMMED to run at
+// (reading A in the signed-off proposal), not a summary of what happened.
+function setPromptLevel(code, value) {
+  S.promptLevels[code] = value || '';
+  EventBus.emit('trial:promptLevel', { goalCode: code, level: value || '' });
 }
 
 function setTrial(code, i, value) {
   const cur  = S.trials[code][i];
   const next = cur === value ? null : value;
   S.trials[code][i] = next;
+  // f30a: stamp WHEN this trial was scored. No therapist action, nothing on
+  // screen — it exists so trial data can later be aligned to video, skeleton
+  // and wearable timelines, which a date alone can never do.
+  if (!S.trialTimes[code]) S.trialTimes[code] = [];
+  S.trialTimes[code][i] = (next === null) ? '' : new Date().toISOString();
   document.getElementById(`tr-${code}-${i}-c`).classList.toggle('correct',   next === true);
   document.getElementById(`tr-${code}-${i}-x`).classList.toggle('incorrect', next === false);
   calcPct(code);
@@ -2830,6 +2897,24 @@ function submitSession() {
     console.log('[Submit] BLOCKED — word count below minimum');
     toast('Please write at least ' + NOTES_MIN_WORDS + ' content words in your notes', 'err'); return;
   }
+  // f30a: a prompt level is REQUIRED for every goal that was actually run.
+  // A goal with no trials scored stays blank — that means "not run today",
+  // which is a different fact from "needed no prompt".
+  var missingLevels = [];
+  var goalsForCheck = (S.client && S.client.goals) ? S.client.goals : [];
+  for (var gpi = 0; gpi < goalsForCheck.length; gpi++) {
+    var gc  = goalsForCheck[gpi].code;
+    var arr = S.trials[gc] || [];
+    var scored = arr.filter(function(x){ return x !== null; }).length;
+    if (scored > 0 && !(S.promptLevels[gc] || '')) missingLevels.push(gc);
+  }
+  if (missingLevels.length) {
+    console.log('[Submit] BLOCKED — prompt level missing for ' + missingLevels.join(', '));
+    toast('Select a prompt level for: ' + missingLevels.join(', '), 'err');
+    switchTab('trials');
+    return;
+  }
+
   // Parent/guardian signature — capture into S or block (validates + toasts).
   if (!captureSignatureOrBlock()) return;
   // Stop timers before showing modal
@@ -2906,7 +2991,17 @@ function buildPayload() {
     const t = S.trials[g.code] || [];
     const answered = t.filter(x => x !== null);
     const pct = answered.length ? Math.round(t.filter(x=>x===true).length/answered.length*100) : null;
-    return { goalCode:g.code, goalName:g.description, trials:t.map(v=>v===true?'\u2713':v===false?'\u2717':''), percentage:pct };
+    const times = (S.trialTimes[g.code] || []).slice(0, t.length);
+    const stamped = times.filter(function(x){ return !!x; });
+    return {
+      goalCode: g.code, goalName: g.description,
+      trials: t.map(v=>v===true?'\u2713':v===false?'\u2717':''),
+      percentage: pct,
+      promptLevel:  S.promptLevels[g.code] || '',
+      trialTimes:   times,
+      firstScoredAt: stamped.length ? stamped[0] : '',
+      lastScoredAt:  stamped.length ? stamped[stamped.length - 1] : ''
+    };
   });
 
   // Stable per-session id (set at beginSession / restored on resume) so retries
@@ -3015,7 +3110,7 @@ function resetState() {
   S.behaviors = {};
   CFG.BEHAVIORS.forEach(b => { S.behaviors[b.key] = 0; });
   S.tantrum = { count:0, totalSec:0, curSec:0, running:false, interval:null, startTs:null };
-  S.trials = {}; S.abc = []; abcIdSeq = 0;
+  S.trials = {}; S.promptLevels = {}; S.trialTimes = {}; S.abc = []; abcIdSeq = 0;
   S.appStartTime = null; S.actualStartTime = null; S.lateStartReason = '';
   S.adjustedEndTime = null; S.adjustedEndTimeDate = null; S.endTimeAdjustmentReason = '';
   S.parentSignerName = ''; S.parentSignedAt = ''; S.parentSignature = ''; S.signatureSkipReason = '';
@@ -4420,6 +4515,8 @@ function restoreSessionAfterReauth() {
     S.behaviors   = snap.behaviors || {};
     // Save the trial snapshot BEFORE calling buildTrials(), which resets S.trials to empty arrays
     var restoredTrials = snap.trials || {};
+    var restoredLevels = snap.promptLevels || {};
+    var restoredTimes  = snap.trialTimes   || {};
     S.abc         = snap.abc       || [];
     S.notes       = snap.notes     || '';
     S.sessType    = snap.sessType  || null;
@@ -4472,6 +4569,9 @@ function restoreSessionAfterReauth() {
     // buildTrials() resets S.trials to empty arrays — restore the snapshot AFTER the call
     buildTrials();
     S.trials = restoredTrials;
+    S.promptLevels = restoredLevels;
+    S.trialTimes   = restoredTimes;
+    restorePromptLevelSelects();
 
     // Restore trial ✓/✗ marks and recalculate percentages
     var gKeys = Object.keys(restoredTrials);

@@ -50,7 +50,10 @@
         "goalCode": "string (FK goals_reference.code)", "goalDescription": "string",
         "trials": "array<boolean|null>", "correctTrials": "number", "totalTrials": "number",
         "percentage": "number (0-100)",
-        "promptLevel": "string (independent|verbal|gestural|model|partial-physical|full-physical) — f30, per-trial; HIGH-VALUE LHBM signal"
+        "promptLevel": "string (I|VT|G|V|M|PP|FP) \u2014 f30a. ONE level per goal per session: the level the goal was PROGRAMMED to run at (BCBA sign-off Oct 2026), not a summary of what each trial needed. I=Independent, VT=Visual/Textual, G=Gestural, V=Verbal, M=Model, PP=Partial Physical, FP=Full Physical \u2014 least to most support. Blank means the goal was not run, which is NOT the same as Independent. The code is authoritative; rank is derived from this order, so the order can change with no migration. HIGH-VALUE LHBM signal and the label space for video annotation (v4) and skeleton classification (s3).",
+    "trialTimes": "array<string> \u2014 ISO-8601 per trial, stamped automatically with no therapist action (f30a). Exists so trial data can be aligned to video, skeleton and wearable timelines, which a session date alone cannot support.",
+    "firstScoredAt": "string (ISO-8601) \u2014 when this goal block was first scored.",
+    "lastScoredAt": "string (ISO-8601) \u2014 when it was last scored."
       }
     },
     "abc.logged": {

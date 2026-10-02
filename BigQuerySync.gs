@@ -27,7 +27,8 @@ var BQ_BEHAV_ANALYTICS = [
 // Analytics columns appended to Trial Data tab
 var BQ_TRIAL_ANALYTICS = [
   'submissionId', 'clientName', 'clientId', 'therapistEmail',
-  'sessionType', 'billingCode', 'isDraft', 'payloadHash', 'submittedAt', 'dateISO', 'Percent Correct'
+  'sessionType', 'billingCode', 'isDraft', 'payloadHash', 'submittedAt', 'dateISO', 'Percent Correct',
+  'Prompt Levels', 'Trial Times'
 ];
 
 
@@ -392,6 +393,20 @@ function bqReadBehaviorRows(clientSS, client, goalDescMap, labelToKeyMap) {
     var row = data[ri];
     if (!row[0]) continue;
 
+    // f30a: prompt level per goal, and the automatic per-trial timestamps.
+    var lvlMap  = {};
+    var timeMap = {};
+    var lvlJSONIdx = cm['Prompt Levels'];
+    if (lvlJSONIdx !== undefined && lvlJSONIdx < row.length) {
+      var lvlJSONStr = String(row[lvlJSONIdx] || '');
+      if (lvlJSONStr) { try { lvlMap = JSON.parse(lvlJSONStr) || {}; } catch (e) {} }
+    }
+    var timeJSONIdx = cm['Trial Times'];
+    if (timeJSONIdx !== undefined && timeJSONIdx < row.length) {
+      var timeJSONStr = String(row[timeJSONIdx] || '');
+      if (timeJSONStr) { try { timeMap = JSON.parse(timeJSONStr) || {}; } catch (e) {} }
+    }
+
     var submissionId   = bqStr(cm, row, 'submissionId');
     var dateISO        = bqStr(cm, row, 'dateISO');
     var dateDisplay    = bqDateCell(cm, row, 'Date');
@@ -452,6 +467,31 @@ function bqReadBehaviorRows(clientSS, client, goalDescMap, labelToKeyMap) {
     });
   }
   return result;
+}
+
+/**
+ * f30a helpers. Rank mirrors PROMPT_LEVEL_ORDER in Code.gs and PROMPT_LEVELS in
+ * index.html: 1 = Independent (least support) rising to 7 = Full Physical.
+ * Null for a blank level, which means UNKNOWN, never "independent".
+ */
+var BQ_PROMPT_LEVEL_ORDER = ['I', 'VT', 'G', 'V', 'M', 'PP', 'FP'];
+function bqPromptLevelRank(code) {
+  var c = String(code || '').trim();
+  if (!c) return null;
+  for (var i = 0; i < BQ_PROMPT_LEVEL_ORDER.length; i++) {
+    if (BQ_PROMPT_LEVEL_ORDER[i] === c) return i + 1;
+  }
+  return null;
+}
+function bqFirstStamp(arr) {
+  if (!arr || !arr.length) return '';
+  for (var i = 0; i < arr.length; i++) { if (arr[i]) return String(arr[i]); }
+  return '';
+}
+function bqLastStamp(arr) {
+  if (!arr || !arr.length) return '';
+  for (var i = arr.length - 1; i >= 0; i--) { if (arr[i]) return String(arr[i]); }
+  return '';
 }
 
 /**
@@ -615,7 +655,11 @@ function bqReadTrialRows(clientSS, client, goalDescMap) {
         total_trials:       totalTrials,
         correct_trials:     correctTrials,
         is_draft:           isDraft,
-        submitted_at:       submittedAt
+        submitted_at:       submittedAt,
+        prompt_level:       String(lvlMap[g.code] || ''),
+        prompt_level_rank:  bqPromptLevelRank(lvlMap[g.code]),
+        first_scored_at:    bqFirstStamp(timeMap[g.code]),
+        last_scored_at:     bqLastStamp(timeMap[g.code])
       });
     }
   }
@@ -913,6 +957,13 @@ function bqCreateTableSchema(tableId) {
       { name: 'percentage_numeric', type: 'FLOAT',   mode: 'NULLABLE' },
       { name: 'total_trials',       type: 'INTEGER', mode: 'NULLABLE' },
       { name: 'correct_trials',     type: 'INTEGER', mode: 'NULLABLE' },
+      // f30a — prompt_level is the stored CODE; prompt_level_rank is its
+      // position in the clinical order, denormalized so SQL can compare
+      // "more vs less support" without hardcoding the hierarchy.
+      { name: 'prompt_level',       type: 'STRING',  mode: 'NULLABLE' },
+      { name: 'prompt_level_rank',  type: 'INTEGER', mode: 'NULLABLE' },
+      { name: 'first_scored_at',    type: 'STRING',  mode: 'NULLABLE' },
+      { name: 'last_scored_at',     type: 'STRING',  mode: 'NULLABLE' },
       { name: 'is_draft',           type: 'BOOLEAN', mode: 'NULLABLE' },
       { name: 'submitted_at',       type: 'STRING',  mode: 'NULLABLE' }
     ]};
