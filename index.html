@@ -1071,13 +1071,13 @@ FOCUS FOR NEXT SESSION: Outline priorities and goals for the next session"
     <button class="admin-tab-btn active" id="atab-therapists" onclick="showAdminTab('therapists')">Therapists</button>
     <button class="admin-tab-btn" id="atab-clients"    onclick="showAdminTab('clients')">Clients</button>
     <button class="admin-tab-btn" id="atab-behaviors"  onclick="showAdminTab('behaviors')">Behaviors</button>
+    <button class="admin-tab-btn" id="atab-alerts"     onclick="showAdminTab('alerts')">Alerts</button>
     <button class="admin-tab-btn" id="atab-goals"      onclick="showAdminTab('goals')">Goals</button>
     <button class="admin-tab-btn" id="atab-settings"   onclick="showAdminTab('settings')">Settings</button>
         <button class="admin-tab-btn admin-only-tab" id="atab-authorizations" onclick="showAdminTab('authorizations')">Auth</button>
         <button class="admin-tab-btn admin-only-tab" id="atab-payroll" onclick="showAdminTab('payroll')">Payroll</button>
         <button class="admin-tab-btn admin-only-tab" id="atab-admins" onclick="showAdminTab('admins')">Admins</button>
         <button class="admin-tab-btn admin-only-tab" id="atab-mastery" onclick="showAdminTab('mastery')">Mastery</button>
-        <button class="admin-tab-btn" id="atab-alerts" onclick="showAdminTab('alerts')">Alerts</button>
         <button class="admin-tab-btn admin-only-tab" id="atab-billing" onclick="showAdminTab('billing')">Billing</button>
         <button class="admin-tab-btn admin-only-tab" id="atab-manual" onclick="showAdminTab('manual')">Manual Entry</button>
   </div>
@@ -3308,7 +3308,11 @@ function buildEditForm(type, item) {
       fld('Google Sheet ID', 'sheetId', item.sheetId, 'text', 'placeholder="1BxiM..."') +
       '<div class="settings-hdr" style="margin-top:14px">Parent contact &amp; behavior alerts</div>' +
       fld('Parent / Guardian Name', 'parentName', item.parentName) +
-      fld('Parent Email', 'parentEmail', item.parentEmail, 'email', 'placeholder="parent@example.com"') +
+      fld('Parent Email(s)', 'parentEmail', item.parentEmail, 'text',
+          'placeholder="mom@example.com, dad@example.com"') +
+      '<div class="form-group" style="margin-top:-8px;font-size:12px;color:var(--muted)">' +
+        'Separate multiple addresses with commas. Each recipient gets their own message &mdash; ' +
+        'addresses are never shown to each other.</div>' +
       `<div class="form-group">
         <label class="form-lbl" for="ef-parentLang">Email language</label>
         <select class="form-ctrl" id="ef-parentLang">
@@ -3475,10 +3479,11 @@ function saveEntity() {
     const parentEmail = (document.getElementById('ef-parentEmail')?.value || '').trim();
     const parentLang  = document.getElementById('ef-parentLang')?.value || 'en';
     const consentOn   = !!document.getElementById('ef-alertConsent')?.checked;
-    if (parentEmail && !/^[^\s@,;]+@[^\s@,;]+\.[A-Za-z]{2,}$/.test(parentEmail)) {
-      toast('Parent email looks invalid', 'err'); return;
-    }
-    if (consentOn && !parentEmail) {
+    const _emailRe = /^[^\s@,;]+@[^\s@,;]+\.[A-Za-z]{2,}$/;
+    const parentList = parentEmail.split(/[,;\n]+/).map(function(x){ return x.trim(); }).filter(Boolean);
+    const badEmail = parentList.filter(function(x){ return !_emailRe.test(x); });
+    if (badEmail.length) { toast('Invalid parent email: ' + badEmail[0], 'err'); return; }
+    if (consentOn && !parentList.length) {
       toast('A parent email is required before consent can be recorded', 'err'); return;
     }
     // Stamp the consent date when consent is first turned on; clear it when revoked.
@@ -3489,7 +3494,7 @@ function saveEntity() {
                                                               : new Date().toISOString().slice(0,10))
       : '';
     updated = { ...(editModalItem||{}), name, initials, sheetId,
-      parentName, parentEmail, parentLang, alertConsent, alertConsentDate,
+      parentName, parentEmail: parentList.join(', '), parentLang, alertConsent, alertConsentDate,
       status: editModalItem ? (editModalItem.status||'active') : 'active' };
     if (!updated.id) updated.id = 'C' + Date.now();
 
@@ -4920,6 +4925,76 @@ async function masteryDismiss(clientSheetId, clientId, behaviorKey, btn) {
 // server-side (never rely on the UI check alone).
 let _parentAlertFilter = 'pending';
 
+// Recipients & consent, editable from the Alerts tab. The Clients tab is in
+// bcbaBlocked, so without this a BCBA could review alerts but never set up a
+// recipient — the field that decides whether anything can be sent.
+let _paClients = [];
+
+function _paRecipientsHtml() {
+  const raw = RAW_CONFIG || DEFAULT_CONFIG;
+  _paClients = (raw.clients || []).filter(function(c){ return (c.status || 'active') !== 'inactive'; });
+  if (!_paClients.length) return '<div class="empty-msg">No active clients.</div>';
+  let rows = '';
+  _paClients.forEach(function(c, i){
+    const consent = String(c.alertConsent || '').toLowerCase() === 'yes';
+    rows +=
+      '<div style="border-top:1px solid var(--g100);padding:10px 0">' +
+        '<div style="font-weight:800;color:var(--g800);margin-bottom:6px">' + escHtml(c.name || '') + '</div>' +
+        '<input class="form-ctrl" id="pa-email-' + i + '" type="text" ' +
+          'placeholder="mom@example.com, dad@example.com" value="' + escAttr(c.parentEmail || '') + '">' +
+        '<div style="display:flex;gap:10px;align-items:center;margin-top:7px;flex-wrap:wrap">' +
+          '<select class="form-ctrl" id="pa-lang-' + i + '" style="width:auto">' +
+            '<option value="en"' + ((c.parentLang||'en')==='en' ? ' selected' : '') + '>English</option>' +
+            '<option value="es"' + ((c.parentLang||'en')==='es' ? ' selected' : '') + '>Español</option>' +
+          '</select>' +
+          '<label class="client-cb-row" style="margin:0"><input type="checkbox" id="pa-consent-' + i + '"' +
+            (consent ? ' checked' : '') + '> Consent on file</label>' +
+          (c.alertConsentDate
+            ? '<span style="font-size:11px;color:var(--muted)">since ' + escHtml(String(c.alertConsentDate)) + '</span>'
+            : '') +
+        '</div>' +
+      '</div>';
+  });
+  return rows +
+    '<div style="margin-top:12px;font-size:12px;color:var(--muted)">Separate multiple addresses with commas. ' +
+      'Each recipient receives their own message &mdash; addresses are never shown to each other.</div>' +
+    '<div style="margin-top:10px"><button class="btn btn-primary" style="padding:12px" ' +
+      'onclick="saveParentAlertRecipients()">Save recipients &amp; consent</button></div>';
+}
+
+function saveParentAlertRecipients() {
+  const raw = JSON.parse(JSON.stringify(RAW_CONFIG || DEFAULT_CONFIG));
+  const re  = /^[^\s@,;]+@[^\s@,;]+\.[A-Za-z]{2,}$/;
+  let changed = 0;
+  for (let i = 0; i < _paClients.length; i++) {
+    const emailEl = document.getElementById('pa-email-' + i);
+    if (!emailEl) continue;
+    const parts = (emailEl.value || '').split(/[,;\n]+/).map(function(x){ return x.trim(); }).filter(Boolean);
+    const bad   = parts.filter(function(x){ return !re.test(x); });
+    const cname = _paClients[i].name || '';
+    if (bad.length) { toast('Invalid email for ' + cname + ': ' + bad[0], 'err'); return; }
+    const consentOn = !!(document.getElementById('pa-consent-' + i) || {}).checked;
+    if (consentOn && !parts.length) {
+      toast('A parent email is required before consent for ' + cname, 'err'); return;
+    }
+    const target = (raw.clients || []).filter(function(c){ return c.id === _paClients[i].id; })[0];
+    if (!target) continue;
+    const had = String(target.alertConsent || '').toLowerCase() === 'yes';
+    target.parentEmail = parts.join(', ');
+    const langEl = document.getElementById('pa-lang-' + i);
+    target.parentLang   = langEl ? langEl.value : 'en';
+    target.alertConsent = consentOn ? 'yes' : 'no';
+    target.alertConsentDate = consentOn
+      ? ((had && target.alertConsentDate) ? target.alertConsentDate : new Date().toISOString().slice(0,10))
+      : '';
+    changed++;
+  }
+  persistConfig(raw);
+  logAuditEvent('parent_alert_recipients_updated', AUTH.user ? AUTH.user.email : '', '',
+    changed + ' client(s) updated');
+  toast('Saved recipients for ' + changed + ' client' + (changed === 1 ? '' : 's'), 'ok');
+}
+
 function renderParentAlertsTab(container) {
   const statuses = [
     ['pending','Pending review'], ['sent','Sent'], ['blocked','Blocked'],
@@ -4940,6 +5015,12 @@ function renderParentAlertsTab(container) {
           'onchange="_parentAlertFilter=this.value;loadParentAlerts()">' + opts + '</select>' +
         '<button class="btn btn-primary" style="width:auto;padding:10px 16px" onclick="loadParentAlerts()">Refresh</button>' +
       '</div>' +
+    '</div>' +
+    '<div class="settings-section" style="margin-top:8px">' +
+      '<details>' +
+        '<summary style="cursor:pointer;font-weight:800;color:var(--g800)">Recipients &amp; consent</summary>' +
+        '<div style="margin-top:8px">' + _paRecipientsHtml() + '</div>' +
+      '</details>' +
     '</div>' +
     '<div id="pa-body"><div class="empty-msg">Loading…</div></div>';
   loadParentAlerts();

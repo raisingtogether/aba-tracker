@@ -3708,6 +3708,26 @@ function _isValidEmail(value) {
   return /^[^\s@,;]+@[^\s@,;]+\.[A-Za-z]{2,}$/.test(s);
 }
 
+/**
+ * Parse a comma / semicolon / newline separated list of addresses into the
+ * valid, de-duplicated ones. Lets a client carry both parents (or a parent
+ * plus a legal guardian) in the single parentEmail field.
+ */
+function _parseRecipients(value) {
+  var raw  = String(value || '').split(/[,;\n]+/);
+  var out  = [];
+  var seen = {};
+  for (var i = 0; i < raw.length; i++) {
+    var e = raw[i].trim();
+    if (!e || !_isValidEmail(e)) continue;
+    var k = e.toLowerCase();
+    if (seen[k]) continue;
+    seen[k] = true;
+    out.push(e);
+  }
+  return out;
+}
+
 function _firstNameOf(fullName) {
   var s = String(fullName || '').trim();
   if (!s) return '';
@@ -3750,13 +3770,13 @@ function _findClientRecord(clients, clientId, clientName) {
  */
 function _sendParentAlertEmail(client, records, dateISO) {
   try {
-    if (!client) return { sent: false, error: 'No client record' };
-    var to = String(client.parentEmail || '').trim();
-    if (!_isValidEmail(to)) return { sent: false, error: 'Invalid or missing parentEmail' };
+    if (!client) return { sent: false, recipients: [], error: 'No client record' };
+    var list = _parseRecipients(client.parentEmail);
+    if (!list.length) return { sent: false, recipients: [], error: 'No valid parentEmail on file' };
     if (String(client.alertConsent || '').trim().toLowerCase() !== 'yes') {
-      return { sent: false, error: 'Parent alert consent not on file' };
+      return { sent: false, recipients: [], error: 'Parent alert consent not on file' };
     }
-    if (!records || !records.length) return { sent: false, error: 'Nothing to send' };
+    if (!records || !records.length) return { sent: false, recipients: [], error: 'Nothing to send' };
 
     var lang = String(client.parentLang || 'en').trim().toLowerCase();
     if (lang !== 'es') lang = 'en';
@@ -3795,10 +3815,29 @@ function _sendParentAlertEmail(client, records, dateISO) {
         '— Raising Together';
     }
 
-    MailApp.sendEmail({ to: to, subject: subject, body: body, name: PARENT_ALERT_FROM_NAME });
-    return { sent: true, error: '' };
+    // One message PER recipient — never a shared To: line. Co-parents must not
+    // learn each other's address from us: custody and contact arrangements vary,
+    // and that would be a disclosure nobody asked us to make.
+    var okList   = [];
+    var failList = [];
+    for (var ri = 0; ri < list.length; ri++) {
+      try {
+        MailApp.sendEmail({ to: list[ri], subject: subject, body: body, name: PARENT_ALERT_FROM_NAME });
+        okList.push(list[ri]);
+      } catch (se) {
+        failList.push(list[ri] + ' (' + se.message + ')');
+      }
+    }
+    if (!okList.length) {
+      return { sent: false, recipients: [], error: 'All sends failed: ' + failList.join('; ') };
+    }
+    return {
+      sent: true,
+      recipients: okList,
+      error: failList.length ? 'Partial send — failed for ' + failList.join('; ') : ''
+    };
   } catch (e) {
-    return { sent: false, error: e.message };
+    return { sent: false, recipients: [], error: e.message };
   }
 }
 
@@ -3846,8 +3885,9 @@ function evaluateParentAlerts(d) {
   var clients = sheetToObjects(adminSS, 'Clients');
   var client  = _findClientRecord(clients, d.clientId, d.clientName);
 
-  var recipient = client ? String(client.parentEmail  || '').trim() : '';
-  var emailOk   = _isValidEmail(recipient);
+  var recipientList = client ? _parseRecipients(client.parentEmail) : [];
+  var recipient = recipientList.join(', ');
+  var emailOk   = recipientList.length > 0;
   var consentOk = client
     ? (String(client.alertConsent || '').trim().toLowerCase() === 'yes')
     : false;
@@ -3910,7 +3950,12 @@ function evaluateParentAlerts(d) {
       autoBatch[ai].status = sendResult.sent ? 'sent' : 'failed';
       autoBatch[ai].sentAt = sendResult.sent ? sentAt : '';
       autoBatch[ai].sentBy = sendResult.sent ? 'auto' : '';
+      // Record who actually received it, not who was configured.
+      if (sendResult.sent && sendResult.recipients && sendResult.recipients.length) {
+        autoBatch[ai].recipient = sendResult.recipients.join(', ');
+      }
       if (!sendResult.sent) autoBatch[ai].note = sendResult.error || 'Send failed';
+      else if (sendResult.error) autoBatch[ai].note = sendResult.error;
     }
   }
 
@@ -4039,14 +4084,16 @@ function approveParentAlert(alertId, approverEmail, approverRole) {
     return { success: false, error: sendResult.error || 'Send failed' };
   }
 
-  var recipient = String(client.parentEmail || '').trim();
+  var recipient = (sendResult.recipients || []).join(', ');
   _setAlertCells(sheet, rowIdx + 1, cm, {
-    status: 'sent', sentAt: nowISO, sentBy: approverEmail || '', recipient: recipient, note: ''
+    status: 'sent', sentAt: nowISO, sentBy: approverEmail || '', recipient: recipient,
+    note: sendResult.error || ''
   });
   writeAuditLog(nowISO, approverEmail || '', 'parent_alert_sent', clientName,
     'DISCLOSURE — ' + label + ' count=' + count + ' session=' + dateISO +
-    ' recipient=' + recipient + ' approvedBy=' + (approverEmail || '') + ' alertId=' + id);
-  return { success: true, sent: true };
+    ' recipients=' + recipient + ' (' + (sendResult.recipients || []).length + ')' +
+    ' approvedBy=' + (approverEmail || '') + ' alertId=' + id);
+  return { success: true, sent: true, recipients: sendResult.recipients || [] };
 }
 
 /** BCBA/Admin dismisses an alert — nothing is sent. */
