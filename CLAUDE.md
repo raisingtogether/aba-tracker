@@ -38,20 +38,47 @@ ES5 for consistency and safety.
 | Tab | Columns |
 |-----|---------|
 | Therapists | id, name, initials, color, profile, email, pin, totpSecret, clientIds, weeklyHourLimit, payRate, status, role |
-| Clients | id, name, initials, sheetId, status |
-| Behaviors | key, label, icon, color, clientIds, status |
+| Clients | id, name, initials, sheetId, status, **parentName, parentEmail, parentLang, alertConsent, alertConsentDate** (f54) |
+| Behaviors | key, label, icon, color, clientIds, status, **alertEnabled, alertThreshold, alertMode** (f54) |
 | Goals | clientId, clientIds, code, description, numTrials, status |
 | Billing | profile, sessionType, code |
 | Authorizations | clientId, payerType, insuranceCompany, authorizationNumber, billingCode, authorizedHours, startDate, endDate, coInsurance, stepUpProgram, status, unitRate, hourlyRate |
 | Admins | email, name, status |
 | Suspended Sessions | suspendId, therapistEmail, clientId, clientName, sheetId, dateISO, updatedAt, status, stateJson **(v4 pause/resume; transient — NOT synced to BigQuery)** |
+| Parent Alerts | alertId, createdAt, submissionId, dateISO, clientId, clientName, behaviorKey, behaviorLabel, count, threshold, mode, status, recipient, sentAt, sentBy, note **(f54; status = blocked\|pending\|sent\|dismissed\|failed)** |
+
+**`parentEmail` is a comma-separated list.** `_parseRecipients` validates and
+de-duplicates it, and each recipient is sent a **separate** message — never a
+shared `To:` line, because co-parents must not learn each other's address from
+us. `alertConsent` must be `'yes'` AND at least one address must be valid or
+nothing sends; consent is re-checked at approval time, not only at session time.
 
 ### Per-client sheet tabs — analytics columns appended after core columns
 `Time In Time Out`: Date, Billing Code, Session Type, Time In, Time Out, Duration (min), Therapist, Submission ID, Notes, submissionId, clientName, clientId, therapistEmail, sessionType, billingCode, isDraft, payloadHash, submittedAt, dateISO
 
 `Behavior Data`: Date, Therapist, Setting, \<behavior labels\>, Tantrum Frequency, Tantrum Total (min), submissionId, clientName, clientId, therapistEmail, sessionType, billingCode, isDraft, payloadHash, submittedAt, dateISO
 
-`Trial Data`: Date, Therapist, \<goal code columns\>, Percent Correct (JSON), submissionId, ...analytics
+`Trial Data`: Date, Setting, Therapist, \<goal code columns\>, ...analytics, Percent Correct, **Prompt Levels, Trial Times, Probe Flags**
+
+**The three f30 columns are ONE column each, whatever the goal count** — JSON maps
+keyed by goal code, deliberately mirroring the `Percent Correct` pattern. Per-goal
+column pairs would multiply the dynamic columns this tab has already needed
+structural repairs for. Only `true` is written into `Probe Flags`, so an absent
+key reads as "not a probe" — the same convention as an absent prompt level.
+
+`Trial Summary` (normalized, one row per goal per session — 18 cols):
+Date, Therapist, Setting, Goal Code, Goal Description, Trial 1-5, Percentage,
+Source, Session ID, **Prompt Level, Prompt Level Label, First Scored At,
+Last Scored At, Is Probe**
+
+**Columns 1-13 are frozen.** Rows here are built as fixed-position arrays, and
+two legacy writers (`recoverTrialData`, `checkTrialSummaryHealth`) still use the
+original 13-column layout. Anything new must be **appended** to `TS_HEADERS` and
+appended in the same order to the row push, so those writers keep working
+untouched (they write/compare only columns 1-13).
+**Do not run `recoverTrialData(false)`** casually now — it clears and rewrites
+the tab 13 columns wide. It does preserve `Source = 'Live'` rows, which is what
+protects the f30 data.
 
 `Mastery Log`: type, code, description, masteryDate, lastScores, therapistName, therapistEmail, clientName, clientId, dateISO, **status**, **approvedBy**, **approvalDate**, **settingsObserved**
 
@@ -74,7 +101,14 @@ All sheet writes use `ensureSheetColumns` + colMap-based row building. **Never h
 | `checkGoalUsage` | Reads header row first; only scans full data when goal column found |
 | `getMasteryStatus` | Goal mastery: 80%+ for 5 consecutive → 'confirmed'; Behavior: ≤1 for 10 consecutive |
 | `getMasteryReport` | Aggregates mastery log across all clients; keeps most recent entry per behavior |
-| `processSession` | Writes all 4 tabs + audit log |
+| `processSession` | Writes all 4 tabs + audit log, then `evaluateParentAlerts` (wrapped — never blocks a session write) |
+| `evaluateParentAlerts` | f54. Behaviours past threshold → Parent Alerts rows; `auto` sends now, `review` queues |
+| `_sendParentAlertEmail` | One message PER recipient; re-checks the consent gate itself so no call path bypasses it |
+| `_parseRecipients` | Comma/semicolon/newline list → valid, de-duplicated addresses |
+| `listParentAlerts` / `approveParentAlert` / `dismissParentAlert` | Admin/BCBA-gated; approve re-checks consent then sends |
+| `deleteSuspendedSession(suspendId, reason, actorEmail)` | `reason='discarded'` audits as `session_discarded`; anything else keeps the historical `session_resumed_completed` |
+| `checkGoalMastery` | f30b. 80% × 5 consecutive sessions **the goal was run in**, at Independent. No level = not run = **skipped**, not a break |
+| `_promptLevelLabel` / `PROMPT_LEVEL_ORDER` | Server-side mirror of the frontend `PROMPT_LEVELS` order |
 
 ### Key index.html globals/functions
 | Symbol | Purpose |
@@ -92,6 +126,13 @@ All sheet writes use `ensureSheetColumns` + colMap-based row building. **Never h
 | `loadMasteryStatus()` | 5-min module-level cache keyed by clientId+date |
 | `loadAuthConsumedHours` | Parallel `Promise.all` fetches per billing code |
 | `loginCheckTOTP()` | Shows TOTP field on email blur if therapist has totpSecret |
+| `PROMPT_LEVELS` | f30a. Ordered array; **the stored value is the CODE, never the rank**, so reordering needs no migration. `V`=Verbal, `VT`=Visual/Textual |
+| `setPromptLevel` / `setProbe` | Probe ticks → level forced to `I` and the select locked; unticking **clears** it so an accidental tick can't record Independent |
+| `restorePromptLevelSelects()` | `buildTrials()` rebuilds the selects empty — call after BOTH snapshot restore paths (suspended session AND OAuth re-auth) |
+| `S.promptLevels` / `S.trialTimes` / `S.isProbe` | Per-goal session state; all default to `{}` so pre-f30a snapshots resume cleanly |
+| `discardActiveSession` / `discardSuspendedSession` | Clear a trial session from all **three** stores: server row, local snapshot, offline submit queue |
+| `purgePendingSubmit(submissionId)` | The one that matters — a queued test session would otherwise auto-submit on reconnect |
+| `renderParentAlertsTab` / `saveParentAlertRecipients` | f54 Alerts tab. Recipients live here too because `'clients'` is in `bcbaBlocked` |
 
 ---
 
@@ -351,6 +392,62 @@ When Sheets latency becomes noticeable:
 - BigQuery sync email alerts: tatiana@raising2gether.org notified on sync errors
 
 ---
+
+---
+
+## October 2026 — f54 alerts, f30 prompt hierarchy, session discard
+
+### Parent behavior alerts (f54)
+- Fires in `processSession` AFTER the data is written, wrapped in try/catch — a
+  mail or config failure must never cost a therapist their session.
+- **Disclosure controls (do not relax without a consent/BAA review):** consent
+  gate; minimal content tier; audit entry per send naming the recipient;
+  idempotent via `alertId = submissionId + behaviorKey`.
+- One email per session covering all auto behaviors, but **one message per
+  recipient** so addresses are never shared between parents.
+- Admin UI: **Alerts** tab (4th in the tab bar — it was 10th of 12 and scrolled
+  off-screen on a phone). Recipients + consent are editable there **because
+  `'clients'` is in `bcbaBlocked`**, which otherwise locks a BCBA out of the one
+  field that decides whether anything can be sent.
+- **Known limitation:** the role is caller-supplied, as with mastery
+  approve/dismiss. Real enforcement needs device-token auth (**f26a**), which
+  should land before auto-send is used widely.
+- **Prerequisites still open:** confirm the Workspace BAA covers Gmail, and pick
+  the sending From address (it sends as the Apps Script deployment owner).
+
+### Prompt hierarchy (f30a) + probe flag (f30c)
+- One level per goal per session, recording the **programmed** level — that makes
+  "one level per goal" true by definition rather than an approximation.
+- Rejected v1 design was a level on every trial: ~40 seven-way decisions per
+  session. The realistic failure there is RBTs backfilling from memory, giving a
+  column that looks rich and is fabricated.
+- Order lives in one array and the **code** is stored, so the hierarchy can be
+  reordered or extended with no migration. This is also the label space for
+  video annotation (**v4**) and the prompted-vs-independent skeleton classifier
+  (**s3**), so the vocabulary must stay consistent across all three.
+- **Probes are an RBT convention made structural:** there is no probe session
+  type; the checkbox implies Independent. Probe sessions therefore count toward
+  mastery. Whether mastery should *require* probes is an open clinical ruling.
+- **Admin manual entry sends no prompt level**, so backdated sessions read as
+  "not run" and are skipped from mastery streaks.
+
+### Goal mastery change (f30b) — expect a visible pause
+80% × 5 consecutive sessions **the goal was run in**, at Independent. Because no
+historical session carries a level, **no new goal mastery confirms until five
+Independent sessions accumulate per goal.** Nothing already confirmed is
+revoked. Tell the BCBA before she notices, or it reads as mastery being broken.
+
+### Discard a trial session
+Three stores remember an in-progress session and clearing fewer than all three
+brings it back: the `Suspended Sessions` row, `rtSessionBackup`, and
+**`rtPendingSubmits`** — the last being the one that would auto-submit a test
+session on reconnect. Logout deliberately does **not** discard: logging out on
+one device and resuming on another is a supported flow.
+
+### Service worker
+`sw.js` is **network-first**, so online clients pick up new code without a cache
+bump; the stale window is only a device that stayed offline across a release.
+Bump `CACHE` anyway on each deploy (currently `rt-aba-v6`).
 
 ## Roadmap reference
 

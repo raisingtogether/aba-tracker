@@ -2,6 +2,51 @@
 
 Mobile-first PWA for ABA therapy data collection with HIPAA compliance layer.
 
+## What's new since v4 (October 2026)
+
+- **Prompt hierarchy per goal (f30a)** — each goal card carries a **prompt level
+  dropdown**: `I → VT → G → V → M → PP → FP` (Independent, Visual/Textual,
+  Gestural, Verbal, Model, Partial Physical, Full Physical). **One level per goal
+  per session**, recording the level the goal is *programmed* to run at — not a
+  summary of each trial. Required for any goal that was run; blank means the goal
+  was not run that day, which is deliberately distinct from "needed no prompt".
+  The stored value is the **code**, with order derived from a single array, so the
+  hierarchy can be reordered later with no data migration.
+- **Probe flag (f30c)** — a **Probe** checkbox beside the level. Ticking it sets
+  the level to Independent and locks the dropdown (a probe is unprompted by
+  definition, so the level is implied rather than a second decision). This
+  separates clean measurement from intervention — teaching-trial accuracy is
+  confounded by the prompt, by practice effects and by the therapist.
+- **Automatic trial timestamps (f30a)** — every ✓/✗ is stamped with the time it
+  was scored. No UI, no therapist action. A goal block previously carried a date
+  and no clock time, so it could only ever be joined to video, skeleton or
+  wearable signals at whole-session grain.
+- **Goal mastery now requires independence (f30b)** — 80% for **5 consecutive
+  sessions the goal was run in, at the Independent level**. Sessions where the
+  goal was not run are *skipped*, not treated as a break:
+  `I, I, (not run), I, I, I → mastered`. A recorded level that is not
+  Independent does break the streak. Already-confirmed masteries are never
+  revoked. **Note:** because historical sessions carry no level, no *new* goal
+  mastery confirms until five Independent sessions accumulate per goal.
+- **HIPAA-compliant parent behavior alerts (f54)** — email a client's
+  parent(s) when a configured behavior reaches its threshold in a submitted
+  session. Per-behavior auto-send vs BCBA review queue; **consent gate** (nothing
+  sends without recorded consent and a valid address, re-checked at approval);
+  **minimal content** (first name, date, behavior, count — no notes, no ABC
+  detail); EN/ES; multiple recipients, **each receiving their own message** so
+  co-parents never see each other's address; every send written to the Audit Log
+  as a disclosure. Idempotent per `submissionId` + behavior.
+- **Discard a trial session** — a session opened just to try something can now be
+  cleared without writing data: a **✕** on each paused-session card, and
+  **Pause → Discard session** for the session on screen. Clears the server backup
+  row, the device-local snapshot, **and the offline submit queue** (which would
+  otherwise auto-submit on reconnect). Audited as `session_discarded`.
+- **Release canary** — `doGet` reports `APP_BUILD`, `BQ_SYNC_BUILD` and a
+  `buildsMatch` flag, so one unauthenticated request proves which version is live
+  and whether both Apps Script files were pasted. See the GAS deploy notes in
+  `CLAUDE.md` — **push to GitHub before pasting**, because the paste reads from
+  GitHub Raw, not your working tree.
+
 ## What's new in v4
 
 - **Pause & resume sessions** — a therapist can pause an in-progress session for

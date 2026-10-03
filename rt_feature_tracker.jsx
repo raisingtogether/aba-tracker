@@ -315,7 +315,7 @@ export default function Tracker() {
       <div style={{ textAlign: "center", marginBottom: "24px" }}>
         <h1 style={{ fontSize: "22px", fontWeight: 700, color: "#1a1a1a", margin: "0 0 4px" }}>Raising Together</h1>
         <p style={{ fontSize: "13px", color: "#00A7C7", fontWeight: 500, margin: 0 }}>Product & Feature Tracker</p>
-        <p style={{ fontSize: "11px", color: "#999", margin: "4px 0 0" }}>App v4 · Updated Sep 4, 2026</p>
+        <p style={{ fontSize: "11px", color: "#999", margin: "4px 0 0" }}>App v4 · Updated Oct 2, 2026</p>
       </div>
 
       <div style={{ display: "flex", gap: "6px", marginBottom: "16px", flexWrap: "wrap" }}>
