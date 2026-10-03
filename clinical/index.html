@@ -112,6 +112,9 @@
   .nav-btn .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--g200); flex: none; }
   .nav-btn[aria-current="true"] .dot { background: var(--primary); }
   .nav-btn .soon { margin-left: auto; font-size: 9.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--secondary); }
+  .nav-btn.out { color: var(--g600); }
+  .nav-btn.out .dot { background: transparent; border: 1.5px solid var(--g400); }
+  .nav-btn .ext { margin-left: auto; font-size: 13px; color: var(--g400); }
   .side-foot { margin-top: auto; padding: 14px; border-top: 1px solid var(--g100); }
 
   /* ── main ── */
@@ -199,6 +202,11 @@
       <button class="nav-btn" data-view="assessments"><span class="dot"></span>Assessments<span class="soon">f34</span></button>
       <button class="nav-btn" data-view="plans"><span class="dot"></span>Behavioral plans<span class="soon">f38</span></button>
       <button class="nav-btn" data-view="goals"><span class="dot"></span>Goals<span class="soon">f40</span></button>
+
+      <div class="side-lbl" style="padding-top:16px">Elsewhere</div>
+      <button class="nav-btn out" id="btn-admin">
+        <span class="dot"></span>Admin panel<span class="ext" aria-hidden="true">&#8599;</span>
+      </button>
     </nav>
 
     <div class="side-foot">
@@ -446,7 +454,7 @@ var VIEWS = {
 
 document.addEventListener('click', function (e) {
   var btn = e.target.closest ? e.target.closest('.nav-btn') : null;
-  if (!btn) return;
+  if (!btn || !btn.dataset.view) return;   // the Admin panel link has no view
   VIEW = btn.dataset.view;
   var all = document.querySelectorAll('.nav-btn');
   for (var i = 0; i < all.length; i++) {
@@ -501,6 +509,11 @@ function renderOverview() {
       'is where it belongs.</p>' +
       '<p>It reads the same configuration and writes through the same backend, so there is one source ' +
       'of truth. Nothing here duplicates the tracker.</p>' +
+      '<p style="margin-top:14px"><strong>Admin configuration stays in the app.</strong> Therapists, ' +
+      'clients, behaviors, goals, authorizations, payroll and billing are edited in the tracker\'s ' +
+      'admin panel &mdash; one implementation, not two. Config tabs are rewritten from a fixed list of ' +
+      'column names, so a second editor that forgot a field would silently erase it. Use ' +
+      '<em>Admin panel</em> in the sidebar.</p>' +
     '</div>' +
 
     '<div class="panel">' +
@@ -561,6 +574,15 @@ function renderStub(title) {
 // ── wiring ──
 $('btn-signin').addEventListener('click', startSignIn);
 $('btn-open-tracker').addEventListener('click', function () { window.location.href = '/'; });
+
+// Admin config editing lives in ONE place — the app's admin panel. It is not
+// duplicated here on purpose: objectsToSheet rewrites each config tab from a
+// fixed header list, so a second editor that forgot a field would silently wipe
+// it on save. Opening in a new tab keeps the console where it is.
+$('btn-admin').addEventListener('click', function () {
+  logAudit('clinical_open_admin', '', 'from console');
+  window.open('/', '_blank', 'noopener');
+});
 $('btn-signout').addEventListener('click', function () {
   logAudit('clinical_console_logout', '', '');
   clearToken();

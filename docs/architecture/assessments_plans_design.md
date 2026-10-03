@@ -67,6 +67,15 @@ deliberately avoided, for a team of one); and desktop-responsive screens inside
 **Still shared:** the GAS backend, RT Admin as config store, the audit log, and the role
 model. The console is a different *view*, not a different *system*.
 
+**Admin config editing is NOT duplicated into the console.** `objectsToSheet`
+rewrites each config tab from a fixed header list, so any column missing from that
+list is dropped on save — two editors feeding one destructive writer would mean one
+page silently erasing the other's fields. (We hit exactly that twice in a week with
+only one editor: `goalId` and `parentEmail`.) One implementation each, surfaced
+where it belongs, never copied; the console links out to the app's admin panel.
+Tabs that are genuinely desktop work — authorizations, payroll, billing, settings —
+may *move* here later, one at a time, deleting the app copy as each lands.
+
 ---
 
 ## 2. Instrument definition vs administration

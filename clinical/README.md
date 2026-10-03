@@ -63,3 +63,26 @@ assessments to BigQuery → **f38/f39** plan generator with rule-based suggestio
 
 `firebase deploy --only hosting`. The `/clinical` rewrite is in `firebase.json`;
 this README is excluded from hosting by the `**/*.md` ignore rule.
+
+## Admin capabilities — deliberately NOT duplicated here
+
+The console does **not** reproduce the app's 12 admin tabs, and copying them would
+be actively dangerous in this codebase: `objectsToSheet` rewrites each config tab
+from a **fixed header list in the backend**, so any column absent from that list is
+dropped on save. Two separate `saveEntity` implementations feeding one destructive
+writer means a BCBA saving from the console could silently wipe fields an admin
+entered in the app. We hit that failure mode twice in one week (`goalId`,
+`parentEmail`) with only *one* editor.
+
+So: **one implementation each, surfaced where it belongs — never copied.** The
+sidebar links out to the app's admin panel instead.
+
+| Stays in the app | May MOVE here later | Never duplicated |
+|---|---|---|
+| Mastery approve/dismiss | Authorizations | Clients, Behaviors, Goals config |
+| Alerts review queue | Payroll, Billing | |
+| Manual session entry | Settings, Admins, Therapists | |
+
+Anything in the middle column should be *moved* one at a time, deleting the app
+copy as each lands — which also shrinks the bundle an RBT downloads for screens
+they can never open.

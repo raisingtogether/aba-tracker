@@ -3393,7 +3393,16 @@ function openAdmin() {
 
 function showAdminTab(tab) {
   const role = AUTH.role || 'collector';
-  const bcbaBlocked = ['payroll','admins','authorizations','settings','therapists','clients','billing','mastery','manual'];
+  // 'mastery' was in this list, which locked a BCBA out of the one workflow built
+  // FOR them: approveBehaviorMastery/dismissBehaviorMastery are role-gated to
+  // Admin OR BCBA server-side, and the whole 3-state recommendation system exists
+  // for BCBA review. A bcba account could not open the screen.
+  // Still blocked for bcba, deliberately: payroll/billing/admins/settings/
+  // therapists/authorizations are business administration, 'clients' holds sheet
+  // ids and provisioning (its clinical half — alert recipients and consent — is
+  // reachable from the Alerts tab instead), and 'manual' creates billable session
+  // records, which stays an admin action.
+  const bcbaBlocked = ['payroll','admins','authorizations','settings','therapists','clients','billing','manual'];
   if (role === 'bcba' && bcbaBlocked.indexOf(tab) >= 0) {
     toast('Access restricted for BCBA role', 'err'); return;
   }
