@@ -81,8 +81,11 @@
       <tr><td>3. Required?</td><td><strong>Required</strong> for every goal that was run. Blank stays legal
         and means &ldquo;not run today&rdquo;.</td></tr>
       <tr><td>4. Control</td><td><strong>Dropdown.</strong></td></tr>
-      <tr><td>5. Mastery</td><td><strong>80% &times; 5 consecutive sessions at Independent</strong> (f30b).
-        Blank history counts as unknown, never independent.</td></tr>
+      <tr><td>5. Mastery</td><td><strong>80% &times; 5 consecutive sessions at Independent</strong> (f30b),
+        counting only sessions the goal was <strong>run</strong> in. A session with no level recorded means
+        the goal was not run, and is <strong>skipped</strong> rather than breaking the streak:
+        <em>I, I, (not run), I, I, I &rarr; mastered.</em> A recorded level that is not Independent
+        <strong>does</strong> break it. Clarified by BCBA Oct 2026.</td></tr>
       <tr><td>6a. Two settings in one session</td><td><strong>One level per setting.</strong> A session
         currently carries a single Setting, so one-per-session already satisfies this; the grain would
         need extending only if multi-setting sessions are added.</td></tr>

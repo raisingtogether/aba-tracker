@@ -17,7 +17,7 @@
  * Keep BQ_SYNC_BUILD in BigQuerySync.gs set to the same value: the two files are
  * pasted separately, so a stale BigQuerySync is otherwise invisible.
  */
-var APP_BUILD = '2026-10-02-f30a';
+var APP_BUILD = '2026-10-02-f30b2';
 
 var ADMIN_SHEET_ID = '1VPBADMXvhOww_52O1n2CieTsQB6XCotLt6XdAQsq0ik';
 var AUDIT_SHEET_ID = '1tf98iS18vV08mQtPV9Vq6hQVkEp6Qg-ebUwHkeRlwaQ';
@@ -2029,11 +2029,20 @@ function objectsToSheet(ss, tabName, headers, objects) {
 
 /**
  * Check goal and behavior mastery for a client.
- * Goal mastery (f30b): 80%+ for 5 consecutive sessions AT THE INDEPENDENT
- * prompt level → status 'confirmed'. A blank prompt level means UNKNOWN (every
- * session recorded before f30a shipped), never 'independent', so historical
- * rows cannot satisfy the rule. Already-confirmed masteries are never revoked —
- * isMasteryLogged only ever suppresses a re-log.
+ * Goal mastery (f30b): 80%+ at the INDEPENDENT prompt level for 5 consecutive
+ * sessions IN WHICH THE GOAL WAS RUN.
+ *
+ * Sessions with no recorded prompt level are SKIPPED, not treated as a break in
+ * the streak (BCBA ruling, Oct 2026). A blank level can only mean the goal was
+ * not run that day — f30a requires a level whenever a goal is run — or that the
+ * row predates f30a. Either way it is discarded from the sequence. So:
+ *   I, I, (not run), I, I, I  →  mastered on the fifth Independent session.
+ *
+ * A recorded level that is NOT Independent does break the streak: that is a
+ * known fact about a session the goal was actually run in, not a gap.
+ *
+ * Already-confirmed masteries are never revoked — isMasteryLogged only ever
+ * suppresses a re-log.
  * Behavior mastery: <=1 occurrence for 10 consecutive sessions →
  *   'recommended' (2+ distinct settings observed) or
  *   'pendingGeneralization' (only 1 setting observed).
@@ -2070,50 +2079,44 @@ function checkGoalMastery(ss, clientId, clientName, therapistName, therapistEmai
   }
   if (pctJsonCol < 0) return;
 
-  // Collect data rows (skip header)
-  var dataRows = [];
+  // Build, PER GOAL, the chronological sequence of sessions in which that goal
+  // was run with a prompt level recorded. Scanning every row (not just the last
+  // five) is what lets a not-run day be skipped instead of blocking mastery.
+  // A goal absent from Percent Correct had no trials scored that session, so it
+  // never enters its own sequence.
+  var goalSeq = {};
   for (var ri = 1; ri < rows.length; ri++) {
     var pctJson = String(rows[ri][pctJsonCol] || '').trim();
     if (!pctJson) continue;
-    dataRows.push({
-      pct: pctJson,
-      lvl: (lvlJsonCol >= 0) ? String(rows[ri][lvlJsonCol] || '').trim() : ''
-    });
-  }
-
-  // Need at least 5 rows to check mastery
-  if (dataRows.length < 5) return;
-
-  // Get the 5 most recent rows
-  var last5 = dataRows.slice(-5);
-
-  // Collect all goal codes seen across these 5 sessions
-  var goalMap = {};
-  for (var di = 0; di < last5.length; di++) {
     var pctObj = null;
-    var lvlObj = {};
-    try { pctObj = JSON.parse(last5[di].pct); } catch (e) { continue; }
+    try { pctObj = JSON.parse(pctJson); } catch (e) { continue; }
     if (!pctObj) continue;
-    if (last5[di].lvl) {
-      try { lvlObj = JSON.parse(last5[di].lvl) || {}; } catch (e) { lvlObj = {}; }
+
+    var lvlObj = {};
+    if (lvlJsonCol >= 0) {
+      var lvlStr = String(rows[ri][lvlJsonCol] || '').trim();
+      if (lvlStr) { try { lvlObj = JSON.parse(lvlStr) || {}; } catch (e) { lvlObj = {}; } }
     }
-    var codes = Object.keys(pctObj);
-    for (var ki = 0; ki < codes.length; ki++) {
-      var code = codes[ki];
-      if (!goalMap[code]) goalMap[code] = [];
-      goalMap[code].push({
-        pct:   parseFloat(pctObj[code]),
-        level: String(lvlObj[code] || '').trim()
-      });
+
+    var rowCodes = Object.keys(pctObj);
+    for (var ki = 0; ki < rowCodes.length; ki++) {
+      var rc  = rowCodes[ki];
+      var lvl = String(lvlObj[rc] || '').trim();
+      if (!lvl) continue;   // unknown → not run (or pre-f30a row) → skip entirely
+      if (!goalSeq[rc]) goalSeq[rc] = [];
+      goalSeq[rc].push({ pct: parseFloat(pctObj[rc]), level: lvl });
     }
   }
 
   var today = new Date().toISOString().substring(0, 10);
-  var codes = Object.keys(goalMap);
+  var codes = Object.keys(goalSeq);
   for (var gi = 0; gi < codes.length; gi++) {
     var code = codes[gi];
-    var entries = goalMap[code];
-    if (entries.length < 5) { result.goals[code] = false; continue; }
+    var allRuns = goalSeq[code];
+    if (allRuns.length < 5) { result.goals[code] = false; continue; }
+    // The 5 most recent sessions the goal was actually RUN in — days it was not
+    // run have already been skipped, so these need not be 5 calendar sessions.
+    var entries = allRuns.slice(-5);
     // All 5 sessions must be >= 80% AND run at the Independent level (f30b).
     // 80% with support is not mastery, and a blank level is unknown, not
     // independent — so pre-f30a history can never satisfy this on its own.
