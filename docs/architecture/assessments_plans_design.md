@@ -487,3 +487,94 @@ Confirmed as a requirement, and it constrains f40 more than it first appears.
   plan is revised. This is the single most dangerous edge in f40.
 - The reverse also holds: an ad-hoc goal that later belongs in the plan gets
   **adopted** (its `sourceStoId` filled in), never duplicated.
+
+---
+
+# PART 4 — The completed plan (read Oct 3 2026)
+
+A finished plan, not the template. Seven findings the blank form could not show.
+Structure only recorded here; the plan itself is PHI and stays out of the repo.
+
+## 1. Assessment billing codes the app cannot express
+
+The `Lists` sheet carries a **ServiceCode** vocabulary:
+
+```
+97151  Behavior Identification Assessment
+97152  Behavior ID Supporting Assessment
+97153  Adaptive Behavior Treatment by Protocol
+```
+
+The app's Billing matrix only knows 97153, 97155 and 97156 — **treatment codes**.
+So an **assessment session cannot currently be billed at all**: there is no
+session type that maps to 97151 or 97152.
+
+This lands directly on f58. A mobile assessment session is not just a different
+screen, it is a **differently billed activity**, and shipping it without the
+session type and Billing rows would repeat the student-analyst billing hole in a
+new place. f58 therefore needs: session types for assessment, Billing rows
+mapping them to 97151/97152, and a decision from Tatiana about which code applies
+to a student-analyst-run assessment versus a BCBA-run one.
+
+## 2. Her goal codes already encode assessment provenance
+
+The Curricular Assessments sheet lists target goals as `VL-DaR-10`, and the Goals
+tab already holds codes like `VL-16`, `VL17`, `VL25`, `VL-C`, `DaReMath02`.
+
+The pattern is **instrument + client initials + sequence**. She has been encoding
+*which assessment a goal came from* in the code string by hand, for years.
+
+So `sourceAssessmentId` / `sourceItemCode` provenance is not a new concept being
+imposed — it **formalises an existing convention** and frees the code string to be
+a readable label. Worth saying to her in those terms.
+
+## 3. Long-term objective domains are a controlled vocabulary
+
+`Domain` on the Lists sheet: **Health and Safety · Self-Advocacy · Social
+Relationships** (and more below the sample). The LTO row is
+`Domain | <value> | Description | <text> | Status | <value>` — so an LTO is a
+*domain* plus a narrative description plus a status, with the domain picked from a
+list rather than typed.
+
+## 4. Problem behaviors has two columns the template lacked
+
+The completed sheet adds **Expected mastery date** and **Status** to the template's
+columns. Expected mastery date is a clinical commitment with a date on it — which
+is exactly the quantity f61's prediction tier would eventually estimate, and which
+gives us a ready-made accuracy measure: predicted versus actual.
+
+## 5. Lists is 21 vocabularies, not the 9 the template showed
+
+Beyond the ones already recorded: **Dimension** (Frequency/Duration/Intensity),
+**Measure** (Frequency/Percentage/Duration — separate from Dimension),
+**Status** (New/Continued/Mastered), **CurricularAssessment**,
+**StaffRole** (Parent/Caregiver, BCBA, BCaBA), **FidelityFrequency**,
+**ServiceCode**, **Allocation** (Weekly/Monthly/Per Period),
+**Location** (Home/School/Community), **Satisfaction**, **YesNo**, **Domain**.
+
+Two to reconcile with the app:
+- **Location** (Home/School/Community) against the app's session Setting values.
+- **Status** (New/Continued/Mastered) as the objective lifecycle — note *Continued*
+  is the state an objective carries across plan versions, which is what Part 1
+  guessed at and this confirms.
+
+## 6. Curricular assessment results are narrative, not just scores
+
+For Vineland the `Results` cell is a written summary, with `Target Goals` holding
+a grouped list of goal codes and their wording. So **f62 needs a narrative
+Results field alongside the domain scores** — the numbers alone would lose the
+interpretation, which is the part that justifies the goals.
+
+## 7. The signature block carries credential and certificate number
+
+`BCBA / Clinician` is followed by name with post-nominals and a **Certificate No.**
+Any generated plan has to reproduce both, so they belong on the therapist record
+rather than being typed per plan.
+
+## Scale, for sizing the editor
+
+FBA runs to ~106 rows, Curricular Assessments ~98, Instructional Goals ~76,
+Integration/Generalization ~63. These are **long narrative documents**, not compact
+forms — so the plan editor is closer to a structured document editor than to a
+table, and the narrative sections need generous text areas with the same
+continuous-save behaviour as session notes.
