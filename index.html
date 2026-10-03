@@ -994,24 +994,18 @@
     </div>
     <div class="card">
       <div class="card-ttl">Session Notes</div>
-      <div class="notes-hint">Please write thorough, detailed notes. Use the template sections below as a guide (minimum 150 content words).</div>
-      <textarea class="form-ctrl" id="session-notes" rows="10"
-        placeholder="SESSION OVERVIEW: Describe overall session flow and client presentation
-
-SKILL ACQUISITION &amp; PROGRAMS: Report on goals targeted, prompting levels, and progress
-
-BEHAVIOR SUMMARY: Describe frequency and intensity of target behaviors
-
-INTERVENTIONS &amp; STRATEGIES USED: Detail specific ABA strategies applied
-
-ENGAGEMENT &amp; RESPONSE: Describe client's engagement level and responsiveness
-
-CAREGIVER INVOLVEMENT: Note any parent/caregiver participation or training
-
-SAFETY INCIDENTS: Report any safety concerns or incidents - write None if N/A
-
-FOCUS FOR NEXT SESSION: Outline priorities and goals for the next session"
-        oninput="updateWordCount()"></textarea>
+      <div class="notes-hint">Answer each section. Your typing is saved continuously &mdash; you can switch tabs or
+        leave the app and come back without losing anything (minimum 150 content words overall).</div>
+      <div id="notes-form"></div>
+      <div class="form-group" id="nf-extra-wrap" style="display:none">
+        <label class="form-lbl" for="nf-extra">Additional notes</label>
+        <textarea class="form-ctrl" id="nf-extra" rows="3"
+          oninput="onNotesInput('_extra', this.value)" onblur="flushNotesSave()"></textarea>
+      </div>
+      <!-- Hidden mirror: holds the composed single-string note. Kept so every
+           existing consumer (snapshot, pause capture, restore, payload, word
+           count) keeps reading exactly what it always read. -->
+      <textarea id="session-notes" style="display:none" aria-hidden="true"></textarea>
       <div class="word-count" id="notes-word-count">0 / 150 words</div>
     </div>
     <div class="card" id="parent-sig-card">
@@ -1310,6 +1304,8 @@ let S = {
   timeIn: null,       // display time for session start
   timeInDate: null,   // Date object
   timeOut: null, durationMin: 0, notes: '',
+  notesSections: {},   // f55: sectionId -> text. S.notes stays the canonical string.
+  notesExtra:    '',   // f55: anything that is not under a known header (lossless)
   supervisionOccurred: false,
   behaviors: {},
   tantrum: { count:0, totalSec:0, curSec:0, running:false, interval:null, startTs:null },
@@ -1774,6 +1770,8 @@ function buildSessionSnapshot(status) {
     lateStartReason: S.lateStartReason || '',
     supervisionOccurred: !!S.supervisionOccurred,
     notes:    notes,
+    notesSections: JSON.parse(JSON.stringify(S.notesSections || {})),
+    notesExtra:    S.notesExtra || '',
     behaviors: JSON.parse(JSON.stringify(S.behaviors || {})),
     trials:    JSON.parse(JSON.stringify(S.trials || {})),
     promptLevels: JSON.parse(JSON.stringify(S.promptLevels || {})),
@@ -1955,6 +1953,7 @@ function applySessionSnapshot(snap) {
     S.lateStartReason = snap.lateStartReason || '';
     S.supervisionOccurred = !!snap.supervisionOccurred;
     S.notes     = snap.notes || '';
+    hydrateNotesSections(snap);
     S.behaviors = snap.behaviors || {};
     var restoredTrials = snap.trials || {};
     var restoredLevels = snap.promptLevels || {};
@@ -2011,7 +2010,8 @@ function applySessionSnapshot(snap) {
     restorePromptLevelSelects();
 
     var notesEl = document.getElementById('session-notes');
-    if (notesEl) { notesEl.value = S.notes; updateWordCount(); }
+    if (notesEl) { notesEl.value = S.notes; }
+    renderNotesForm();
 
     renderABCList();
     switchTab('behaviors');
@@ -2665,7 +2665,7 @@ function buildEndScreen() {
   // Sync word count display with whatever is already in the textarea.
   // DO NOT clear notes here — if the RBT navigates Back→End again their notes must survive.
   // Notes are only cleared in newSession() after a successful submit.
-  updateWordCount();
+  renderNotesForm();   // also syncs the mirror and the word count
   initSignaturePad();
 
   EventBus.emit('session:end', { durationMin: S.durationMin, timeOut: S.timeOut });
@@ -2876,6 +2876,139 @@ function toggleSupervision(btn) {
 
 // ─── WORD COUNT ───────────────────────────────────────────────────────
 const NOTES_MIN_WORDS = 150;
+
+// f55 — Session notes as a structured questionnaire.
+// The headers and hints below are the SAME prompts the old single textarea used
+// as its placeholder, so nothing the RBTs were taught changes. The canonical
+// value is still ONE STRING (S.notes), composed in the identical template
+// format, so the sheet column, the 150-word gate, BigQuery and every historical
+// row are untouched. NOTES_SECTIONS[].header must stay in step with
+// NOTES_TEMPLATE_HEADERS, which countWords() strips before counting.
+const NOTES_SECTIONS = [
+  { id:'ov',        header:'SESSION OVERVIEW:',               hint:'Overall session flow and client presentation' },
+  { id:'skill',     header:'SKILL ACQUISITION & PROGRAMS:',   hint:'Goals targeted, prompting levels, and progress' },
+  { id:'behav',     header:'BEHAVIOR SUMMARY:',               hint:'Frequency and intensity of target behaviors' },
+  { id:'interv',    header:'INTERVENTIONS & STRATEGIES USED:',hint:'Specific ABA strategies applied' },
+  { id:'engage',    header:'ENGAGEMENT & RESPONSE:',          hint:"Client's engagement level and responsiveness" },
+  { id:'caregiver', header:'CAREGIVER INVOLVEMENT:',          hint:'Any parent/caregiver participation or training' },
+  { id:'safety',    header:'SAFETY INCIDENTS:',               hint:'Any safety concerns or incidents — write None if N/A' },
+  { id:'focus',     header:'FOCUS FOR NEXT SESSION:',         hint:'Priorities and goals for the next session' }
+];
+
+function buildNotesForm() {
+  var wrap = document.getElementById('notes-form');
+  if (!wrap) return;
+  var html = '';
+  for (var i = 0; i < NOTES_SECTIONS.length; i++) {
+    var sec = NOTES_SECTIONS[i];
+    html +=
+      '<div class="form-group" style="margin-bottom:11px">' +
+        '<label class="form-lbl" for="nf-' + sec.id + '">' +
+          escHtml(sec.header.replace(/:$/, '')) + '</label>' +
+        '<textarea class="form-ctrl" id="nf-' + sec.id + '" rows="3" ' +
+          'placeholder="' + escAttr(sec.hint) + '" ' +
+          'oninput="onNotesInput(\'' + sec.id + '\', this.value)" ' +
+          'onblur="flushNotesSave()"></textarea>' +
+      '</div>';
+  }
+  wrap.innerHTML = html;
+}
+
+// Compose the canonical single string. Every header is emitted even when empty,
+// so the output shape matches notes a template-following RBT would have typed —
+// and countWords() strips headers, so empty sections contribute nothing.
+function composeNotes() {
+  var parts = [];
+  for (var i = 0; i < NOTES_SECTIONS.length; i++) {
+    var sec = NOTES_SECTIONS[i];
+    var v = String((S.notesSections || {})[sec.id] || '').trim();
+    parts.push(sec.header + (v ? ' ' + v : ''));
+  }
+  var out = parts.join('\n\n');
+  var extra = String(S.notesExtra || '').trim();
+  if (extra) out += '\n\n' + extra;
+  return out;
+}
+
+// Split an existing single-string note back into sections. LOSSLESS: anything
+// that does not sit under a known header (free-form notes written before the
+// template, or headers in an unexpected order) lands in notesExtra rather than
+// being dropped.
+function parseNotesToSections(str) {
+  var text = String(str || '');
+  var result = { sections: {}, extra: '' };
+  if (!text.trim()) return result;
+  var found = [];
+  for (var i = 0; i < NOTES_SECTIONS.length; i++) {
+    var idx = text.indexOf(NOTES_SECTIONS[i].header);
+    if (idx >= 0) found.push({ sec: NOTES_SECTIONS[i], idx: idx });
+  }
+  if (!found.length) { result.extra = text.trim(); return result; }
+  found.sort(function(a, b) { return a.idx - b.idx; });
+  if (found[0].idx > 0) result.extra = text.substring(0, found[0].idx).trim();
+  for (var j = 0; j < found.length; j++) {
+    var start = found[j].idx + found[j].sec.header.length;
+    var end   = (j + 1 < found.length) ? found[j + 1].idx : text.length;
+    result.sections[found[j].sec.id] = text.substring(start, end).trim();
+  }
+  return result;
+}
+
+// Push state into the form fields. Call after ANY restore.
+function renderNotesForm() {
+  if (!document.getElementById('nf-' + NOTES_SECTIONS[0].id)) buildNotesForm();
+  for (var i = 0; i < NOTES_SECTIONS.length; i++) {
+    var el = document.getElementById('nf-' + NOTES_SECTIONS[i].id);
+    if (el) el.value = (S.notesSections || {})[NOTES_SECTIONS[i].id] || '';
+  }
+  var ex = document.getElementById('nf-extra');
+  if (ex) ex.value = S.notesExtra || '';
+  var wrap = document.getElementById('nf-extra-wrap');
+  if (wrap) wrap.style.display = String(S.notesExtra || '').trim() ? '' : 'none';
+  syncNotesMirror();
+  updateWordCount();
+}
+
+// Keep S.notes and the hidden mirror authoritative and in step.
+function syncNotesMirror() {
+  S.notes = composeNotes();
+  var mirror = document.getElementById('session-notes');
+  if (mirror) mirror.value = S.notes;
+}
+
+// Derive sections from S.notes when a snapshot predates the structured form.
+function hydrateNotesSections(snap) {
+  if (snap && snap.notesSections) {
+    S.notesSections = snap.notesSections;
+    S.notesExtra    = snap.notesExtra || '';
+    return;
+  }
+  var parsed = parseNotesToSections(S.notes || '');
+  S.notesSections = parsed.sections;
+  S.notesExtra    = parsed.extra;
+}
+
+// Continuous save: debounced on input, immediate on blur, and immediate when the
+// app is backgrounded — which is the case the RBTs actually hit (leaving to
+// check something in another window and coming back).
+var _notesSaveTimer = null;
+function onNotesInput(id, value) {
+  if (!S.notesSections) S.notesSections = {};
+  if (id === '_extra') S.notesExtra = value;
+  else S.notesSections[id] = value;
+  syncNotesMirror();
+  updateWordCount();
+  if (_notesSaveTimer) clearTimeout(_notesSaveTimer);
+  _notesSaveTimer = setTimeout(flushNotesSave, 800);
+}
+function flushNotesSave() {
+  if (_notesSaveTimer) { clearTimeout(_notesSaveTimer); _notesSaveTimer = null; }
+  if (!S.client || S.submitted) return;
+  try { saveLocalBackup(buildSessionSnapshot('active'), true); } catch (e) { /* storage full — non-fatal */ }
+}
+document.addEventListener('visibilitychange', function() {
+  if (document.visibilityState === 'hidden') flushNotesSave();
+});
 
 // Template header keywords to strip before counting words
 const NOTES_TEMPLATE_HEADERS = [
@@ -3134,6 +3267,8 @@ function newSession() {
   var wcEl    = document.getElementById('notes-word-count');
   var subBtn  = document.getElementById('submit-btn');
   if (notesEl) { notesEl.value = ''; }
+  S.notesSections = {}; S.notesExtra = '';
+  renderNotesForm();
   if (wcEl)    { wcEl.textContent = '0 / ' + NOTES_MIN_WORDS + ' words'; wcEl.classList.remove('met'); }
   if (subBtn)  { subBtn.disabled = true; }
   buildTherapistScreen();
@@ -3145,6 +3280,7 @@ function resetState() {
   S.sessType = null; S.location = null;
   S.dateStr = null; S.timeIn = null; S.timeInDate = null;
   S.timeOut = null; S.durationMin = 0; S.notes = '';
+  S.notesSections = {}; S.notesExtra = '';
   S.supervisionOccurred = false;
   S.behaviors = {};
   CFG.BEHAVIORS.forEach(b => { S.behaviors[b.key] = 0; });
@@ -4249,6 +4385,8 @@ function saveSessionForReauth() {
         count: S.tantrum.count, totalSec: S.tantrum.totalSec, curSec: S.tantrum.curSec
       })),
       notes:               S.notes || '',
+      notesSections:       JSON.parse(JSON.stringify(S.notesSections || {})),
+      notesExtra:          S.notesExtra || '',
       sessType:            S.sessType || '',
       location:            S.location || '',
       dateStr:             S.dateStr || '',
@@ -4560,6 +4698,7 @@ function restoreSessionAfterReauth() {
     var restoredProbes = snap.isProbe      || {};
     S.abc         = snap.abc       || [];
     S.notes       = snap.notes     || '';
+    hydrateNotesSections(snap);
     S.sessType    = snap.sessType  || null;
     S.location    = snap.location  || null;
     S.dateStr     = snap.dateStr   || null;
@@ -4631,9 +4770,10 @@ function restoreSessionAfterReauth() {
       calcPct(gcode);
     }
 
-    // Restore notes textarea content
+    // Restore notes: mirror first, then the structured form (f55).
     var notesEl = document.getElementById('session-notes');
-    if (notesEl) { notesEl.value = S.notes; updateWordCount(); }
+    if (notesEl) { notesEl.value = S.notes; }
+    renderNotesForm();
 
     renderABCList();
     switchTab('behaviors');
