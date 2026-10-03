@@ -292,11 +292,11 @@ Verify after deploying:
 curl -sL '<GAS_URL>'   # expect {"build":"<APP_BUILD>", "buildsMatch":true}
 ```
 
-**App version**: v4 (status string `RT ABA Tracker v4 - online`). URL (unchanged across redeploys): `https://script.google.com/macros/s/AKfycbz8AJ-6WIoNdBNh-z3iuT9BXNnw3r95gTqONo78wpTJDXQ9QPGaIp_fmR6gjZlB2yQf/exec`
+**App version**: v5 (status string `RT ABA Tracker v5 - online`). URL (unchanged across redeploys): `https://script.google.com/macros/s/AKfycbz8AJ-6WIoNdBNh-z3iuT9BXNnw3r95gTqONo78wpTJDXQ9QPGaIp_fmR6gjZlB2yQf/exec`
 
 ---
 
-## Version 4 (current)
+## Version 4 (superseded — see Version 5 below)
 
 ### Client sheet auto-provisioning
 - Admin console → Clients → **Auto-create Google Sheet** creates an app-owned
@@ -395,7 +395,9 @@ When Sheets latency becomes noticeable:
 
 ---
 
-## October 2026 — f54 alerts, f30 prompt hierarchy, session discard
+## Version 5 (current) — October 2026
+
+f54 parent alerts, f30 prompt hierarchy + probe flag, session discard.
 
 ### Parent behavior alerts (f54)
 - Fires in `processSession` AFTER the data is written, wrapped in try/catch — a

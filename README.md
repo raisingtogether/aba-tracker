@@ -1,8 +1,8 @@
-# Raising Together ABA Tracker v4
+# Raising Together ABA Tracker v5
 
 Mobile-first PWA for ABA therapy data collection with HIPAA compliance layer.
 
-## What's new since v4 (October 2026)
+## What's new in v5 (October 2026)
 
 - **Prompt hierarchy per goal (f30a)** — each goal card carries a **prompt level
   dropdown**: `I → VT → G → V → M → PP → FP` (Independent, Visual/Textual,

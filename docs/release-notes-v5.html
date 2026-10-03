@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>RT ABA Tracker v5 — Release Notes</title>
+<style>
+  @page { size: Letter; margin: 0.5in; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; color: #1f2d3d; font-size: 11.5px; line-height: 1.45; }
+  .head { background: linear-gradient(100deg, #00A7C7, #0787a0); color: #fff; border-radius: 14px; padding: 16px 20px; margin-bottom: 13px; }
+  .head h1 { font-size: 21px; font-weight: 800; }
+  .head p { font-size: 12px; opacity: .95; margin-top: 3px; }
+  .tag { display:inline-block; background: rgba(255,255,255,.2); border:1px solid rgba(255,255,255,.5); border-radius: 999px; padding: 3px 10px; font-size: 10px; font-weight:700; margin-top:9px; }
+  h2 { font-size: 13.5px; color: #067a92; margin: 15px 0 6px; border-bottom: 2px solid #e3f2f6; padding-bottom: 3px; }
+  h3 { font-size: 11.5px; color: #0d3b45; margin: 10px 0 3px; }
+  p { margin-bottom: 7px; }
+  ul { margin: 3px 0 8px 17px; }
+  li { margin-bottom: 4px; }
+  table { width: 100%; border-collapse: collapse; margin: 5px 0 9px; }
+  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid #e3e8ee; vertical-align: top; }
+  th { background: #f0f9fb; color: #067a92; font-size: 10.5px; text-transform: uppercase; letter-spacing: .3px; }
+  .abbr { display:inline-block; min-width: 24px; text-align:center; background:#00A7C7; color:#fff; border-radius:5px; padding:1px 5px; font-weight:800; font-size:10.5px; }
+  .warn { background:#fff8e6; border:1px solid #f2e0ac; border-left:4px solid #D97706; border-radius:10px; padding:11px 15px; margin:10px 0; page-break-inside:avoid; }
+  .warn h3 { color:#9a6a00; margin-top:0; }
+  .todo { background:#eef6fb; border:1px solid #b9d9ec; border-left:4px solid #0787a0; border-radius:10px; padding:11px 15px; margin:10px 0; page-break-inside:avoid; }
+  .todo h3 { color:#0a6a85; margin-top:0; }
+  .ok { background:#eefaf3; border:1px solid #bfe5d1; border-left:4px solid #16a34a; border-radius:10px; padding:11px 15px; margin:10px 0; page-break-inside:avoid; }
+  .ok h3 { color:#15803d; margin-top:0; }
+  strong { color:#0d3b45; }
+  .note { font-size:10.5px; color:#6b7a86; font-style:italic; }
+  .foot { margin-top:14px; text-align:center; color:#7a8794; font-size:10px; border-top:1px solid #e3e8ee; padding-top:7px; }
+  .chk { font-weight:800; color:#16a34a; }
+  code { background:#eef3f6; border-radius:4px; padding:1px 4px; font-size:10.5px; }
+</style>
+</head>
+<body>
+  <div class="head">
+    <h1>ABA Tracker v5 — Release Notes</h1>
+    <p>What changed, what you need to do, and what to tell the RBTs.</p>
+    <span class="tag">Released October 2, 2026 &nbsp;·&nbsp; prepared for Tatiana (BCBA)</span>
+  </div>
+
+  <h2>1. Prompt hierarchy — a level on every goal</h2>
+  <p>Each goal card now has a <strong>dropdown</strong> next to it. The RBT picks the prompt level
+  <strong>once per goal, per session</strong> — not once per trial. The &#10003;/&#10007; marks work exactly as before.</p>
+  <table>
+    <tr><th>Code</th><th>Level</th><th>Code</th><th>Level</th></tr>
+    <tr><td><span class="abbr">I</span></td><td>Independent</td><td><span class="abbr">M</span></td><td>Model</td></tr>
+    <tr><td><span class="abbr">VT</span></td><td>Visual / Textual</td><td><span class="abbr">PP</span></td><td>Partial Physical</td></tr>
+    <tr><td><span class="abbr">G</span></td><td>Gestural</td><td><span class="abbr">FP</span></td><td>Full Physical</td></tr>
+    <tr><td><span class="abbr">V</span></td><td>Verbal</td><td></td><td></td></tr>
+  </table>
+  <p>The level records <strong>the level the goal is programmed to run at</strong> for that session — not a summary of
+  what happened on each trial. That is what makes &ldquo;one level per goal&rdquo; accurate rather than an approximation.</p>
+  <ul>
+    <li><strong>It is required</strong> for any goal the RBT actually runs. Submit is blocked until it is set, and the
+      app names the goal that is missing one.</li>
+    <li><strong>Left blank means &ldquo;not run today&rdquo;</strong> — deliberately different from &ldquo;needed no prompt&rdquo;.</li>
+    <li>The order can be changed later with no loss of existing data, so if <strong>VT</strong> belongs elsewhere in your
+      hierarchy, say so and it is a one-line change.</li>
+  </ul>
+
+  <h2>2. Probe checkbox</h2>
+  <p>Beside the level there is a <strong>Probe</strong> checkbox. Ticking it sets the level to <strong>Independent</strong>
+  and locks the dropdown — a probe is unprompted by definition, so the level is implied rather than being a second
+  decision for the RBT. Unticking it clears the level, so an accidental tick cannot quietly record a goal as independent.</p>
+  <p>This separates <strong>clean measurement</strong> (a probe) from <strong>intervention</strong> (teaching trials).
+  Teaching-trial accuracy is influenced by the prompt, by practice within the session, and by the therapist; a probe is
+  the closest thing to a clean read of what the learner can do alone.</p>
+  <p class="note">There is no separate &ldquo;probe session&rdquo; mode. Probes are identified only by this checkbox, so the
+  RBTs need to be told to use it.</p>
+
+  <div class="warn">
+    <h3>&#9888;&#65039; 3. Goal mastery has changed — expect a pause</h3>
+    <p style="margin-bottom:5px">Goal mastery is now <strong>80% for 5 consecutive sessions, at the Independent level</strong>.
+    Sessions where the goal was <em>not run</em> are <strong>skipped</strong>, not counted as a break:</p>
+    <p style="margin-bottom:5px"><code>Independent &rarr; Independent &rarr; (not run) &rarr; Independent &rarr; Independent &rarr; Independent = MASTERED</code></p>
+    <p style="margin-bottom:5px">A level that <em>is</em> recorded but is not Independent <strong>does</strong> break the streak.</p>
+    <p style="margin-bottom:0"><strong>What to expect:</strong> sessions recorded before this release carry no prompt level,
+    so <strong>no new goal mastery will appear until five Independent sessions have accumulated for that goal</strong> —
+    roughly five sessions from now. <strong>Nothing already marked mastered is affected.</strong> This is working as
+    designed, but it will look like mastery has stopped if the team is not expecting it.</p>
+  </div>
+
+  <h2>4. Automatic timestamps (nothing changes for the RBT)</h2>
+  <p>The app now records <strong>the time each trial was scored</strong>, by itself, with nothing new on screen. This is
+  what will later let trial data be lined up against session video, movement analysis and wearable signals. Without it,
+  the finest possible match would be the whole two-hour session.</p>
+
+  <h2>5. Parent behavior alerts</h2>
+  <p>You can now have an email sent to a client&rsquo;s parents when a behavior reaches a threshold you set. Found in the
+  admin panel under <strong>Alerts</strong> (4th tab).</p>
+  <ul>
+    <li><strong>Per behavior</strong> you choose: alert on/off, the count that triggers it, and whether it
+      <strong>sends automatically</strong> or <strong>waits for your approval</strong>.</li>
+    <li><strong>Both parents</strong> can be listed. Each receives their <strong>own separate email</strong> — one parent
+      never sees the other&rsquo;s address, since custody and contact arrangements vary.</li>
+    <li><strong>Nothing sends without consent on file.</strong> The client needs a recorded consent and a valid address,
+      and consent is re-checked at the moment you approve — so a withdrawal between the session and your review is honored.</li>
+    <li><strong>The email is deliberately brief:</strong> first name, date, behavior, count, and a request to contact you.
+      No session notes, no ABC detail, no diagnosis. Ordinary email is not fully secure, so detail is kept to a minimum.</li>
+    <li>Available in <strong>English or Spanish</strong> per family.</li>
+    <li><strong>Every send is written to the audit log</strong> as a disclosure, naming the recipient.</li>
+  </ul>
+
+  <h2>6. Discarding a practice session</h2>
+  <p>A session opened just to try something out can now be removed without recording any data:</p>
+  <ul>
+    <li>On the <strong>Select Client</strong> screen, each paused session has a red <strong>&#10005;</strong>.</li>
+    <li>During a session: <strong>Pause &rarr; Discard session</strong>.</li>
+  </ul>
+  <p>Nothing is written to the client&rsquo;s sheet, and the session cannot resurface later or send itself in. The
+  discard is recorded in the audit log.</p>
+
+  <div class="todo">
+    <h3>What we need from you</h3>
+    <ol style="margin:4px 0 0 17px">
+      <li><strong>Confirm the BAA covers Gmail.</strong> Alert emails go out through the practice&rsquo;s Google Workspace.
+        Until this is confirmed, <strong>test with your own email address only</strong> &mdash; not a real family.</li>
+      <li><strong>Choose the sending address</strong> (for example <code>alerts@raising2gether.org</code>) so alerts do not
+        arrive from a personal account.</li>
+      <li><strong>Tell the RBTs about the two new controls</strong> &mdash; the prompt level dropdown and the probe checkbox.
+        Their current written guide predates both.</li>
+      <li><strong>Warn the team about the mastery pause</strong> described in section 3.</li>
+      <li><strong>Confirm where Visual/Textual belongs</strong> in your hierarchy. It is currently placed between
+        Independent and Gestural.</li>
+      <li><strong>Decide whether probes should be <em>required</em> for mastery.</strong> Today five Independent sessions
+        count whether they were probes or teaching sessions run unprompted. Requiring probes is arguably stronger
+        clinically, and is cheap to change now.</li>
+    </ol>
+  </div>
+
+  <div class="ok">
+    <h3>Worth testing before relying on it</h3>
+    <ul style="margin:4px 0 0 17px">
+      <li><span class="chk">&#10003;</span> Score a trial, leave the dropdown untouched, try to submit &mdash; it should refuse and name the goal.</li>
+      <li><span class="chk">&#10003;</span> Pause a session and resume it &mdash; the prompt level should still be there.</li>
+      <li><span class="chk">&#10003;</span> Tick Probe &mdash; the level should snap to Independent and lock.</li>
+      <li><span class="chk">&#10003;</span> Put two of your own addresses on one client, set one behavior to &ldquo;wait for approval&rdquo;,
+        submit a test session, approve it &mdash; you should get <strong>two separate emails</strong>.</li>
+    </ul>
+  </div>
+
+  <h2>Not included in this release</h2>
+  <p>Prompt level is <strong>not</strong> recorded per individual trial, and is <strong>not</strong> shown on the
+  parent/caregiver view &mdash; both per your decisions. Backdated sessions entered by an admin do not capture a prompt
+  level, so they are skipped when counting toward mastery.</p>
+
+  <div class="foot">Raising Together &bull; ABA Tracker v5 &bull; Released October 2, 2026 &nbsp;|&nbsp; Questions? Ask Rodrigo.</div>
+</body>
+</html>
