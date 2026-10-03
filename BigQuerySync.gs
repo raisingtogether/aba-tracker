@@ -18,7 +18,7 @@
  * every release. doGet reports this value, so one unauthenticated call proves
  * whether THIS file was pasted too (the two are pasted separately).
  */
-var BQ_SYNC_BUILD = '2026-10-02-f30c';
+var BQ_SYNC_BUILD = '2026-10-03-f33';
 function bqSyncBuild() { return BQ_SYNC_BUILD; }
 
 var BQ_PROJECT     = 'rt-aba-tracker';
@@ -117,17 +117,42 @@ function syncAllToBigQuery() {
   var abcBuf         = [];
   var masteryBuf     = [];
 
+  // f33 — "missing clients" in Looker. bqBuildClientRows syncs EVERY client to the
+  // clients dimension, but this loop used to skip any client that was inactive or
+  // had no sheetId. The result was a client visible as a dimension row with zero
+  // rows in every fact table, which reads as missing.
+  //
+  // Two changes:
+  //  1. INACTIVE CLIENTS ARE NOW SYNCED. 'inactive' means "do not offer for new
+  //     sessions", not "erase from reporting" — a discharged client's history has
+  //     to stay available for billing reconciliation, audits and outcome reports.
+  //     Looker can filter on clients.status when it wants only current clients.
+  //  2. Skips are recorded and reported instead of vanishing. A blank sheetId used
+  //     to `continue` with no log, no error and no count.
+  var skipped = [];
+  var syncedClients = 0;
+
   for (var ci = 0; ci < clients.length; ci++) {
     var client = clients[ci];
-    if ((client.status || 'active') === 'inactive' || !client.sheetId) continue;
+    var cLabel = String(client.name || client.id || '(unnamed row ' + (ci + 2) + ')');
+    var cInactive = (String(client.status || 'active').trim().toLowerCase() === 'inactive');
+
+    if (!String(client.sheetId || '').trim()) {
+      skipped.push(cLabel + ' — no sheetId');
+      continue;
+    }
 
     var clientSS;
     try {
       clientSS = SpreadsheetApp.openById(client.sheetId);
     } catch (e) {
-      errors.push('Open sheet ' + client.name + ': ' + e.message);
+      // An inactive client whose sheet has been archived or unshared is expected,
+      // so record it as a skip rather than an error that emails every hour.
+      if (cInactive) skipped.push(cLabel + ' — inactive, sheet unreachable');
+      else errors.push('Open sheet ' + cLabel + ': ' + e.message);
       continue;
     }
+    syncedClients++;
 
     var readers = [
       { buf: sessionsBuf,  fn: bqReadSessionRows,  name: 'sessions'  },
@@ -170,9 +195,18 @@ function syncAllToBigQuery() {
 
   // ── AUDIT LOG ENTRY ─────────────────────────────────────────────────
   var elapsed = Math.round((new Date() - startTime) / 1000);
+  // f33: client coverage is part of the sync record, so a client silently missing
+  // from the fact tables is visible without anyone reading BigQuery.
+  counts.clients_total  = clients.length;
+  counts.clients_synced = syncedClients;
   var details = 'Sync complete in ' + elapsed + 's | rows: ' + JSON.stringify(counts);
-  if (errors.length) details += ' | errors: ' + errors.join('; ');
+  if (skipped.length) details += ' | SKIPPED CLIENTS: ' + skipped.join('; ');
+  if (errors.length)  details += ' | errors: ' + errors.join('; ');
   bqAuditLog('bigquery_sync', details);
+  if (skipped.length) {
+    Logger.log('WARNING: ' + skipped.length + ' client(s) contributed no data this sync: ' +
+               skipped.join('; '));
+  }
 
   // MEDIUM-7: Log prominent warning if any data table failed (cross-table inconsistency risk)
   var dataTableNames = ['sessions', 'behavior_records', 'trial_records', 'abc_incidents', 'mastery_log'];
@@ -191,7 +225,13 @@ function syncAllToBigQuery() {
         BQ_ADMIN_EMAIL,
         'RT ABA Tracker \u2014 BigQuery Sync Error',
         'The following errors occurred during the hourly BigQuery sync:\n\n' +
-          errors.join('\n') + '\n\nSync ran for ' + elapsed + 's.'
+          errors.join('\n') +
+          (skipped.length
+            ? '\n\nClients that contributed no data (reports will look empty for them):\n' +
+              skipped.join('\n')
+            : '') +
+          '\n\nClients synced: ' + syncedClients + ' of ' + clients.length +
+          '\nSync ran for ' + elapsed + 's.'
       );
     } catch (mailErr) {
       Logger.log('Failed to send sync error email: ' + mailErr.message);
@@ -1291,4 +1331,76 @@ function manualSync() {
   Logger.log('Starting manual BigQuery sync...');
   syncAllToBigQuery();
   Logger.log('Manual sync complete.');
+}
+
+
+// ── f33 DIAGNOSTIC — client coverage ─────────────────────────────────
+/**
+ * READ-ONLY. Answers "why is this client missing from my Looker report?" without
+ * running a sync or touching BigQuery. Run from the Apps Script editor and read
+ * the Execution log.
+ *
+ * Every client appears in the `clients` dimension, but a client only appears in
+ * the FACT tables (sessions, behavior_records, trial_records, abc_incidents,
+ * mastery_log) if its sheet is reachable and has the relevant tabs with rows. A
+ * client present as a dimension row with zero facts is what reads as "missing".
+ */
+function checkBigQueryClientCoverage() {
+  var TABS = ['Time In Time Out', 'Behavior Data', 'Trial Data', 'ABC Data', 'Mastery Log'];
+  var adminSS = SpreadsheetApp.openById(BQ_ADMIN_SHEET);
+  var clients = bqSheetToObjects(adminSS, 'Clients');
+
+  Logger.log('=== BigQuery client coverage ' + new Date().toISOString() + ' ===');
+  Logger.log('Clients in the Clients tab: ' + clients.length);
+  Logger.log('');
+
+  var willSync = 0, willSkip = 0, noData = [];
+
+  for (var i = 0; i < clients.length; i++) {
+    var c      = clients[i];
+    var label  = String(c.name || c.id || '(unnamed row ' + (i + 2) + ')');
+    var status = String(c.status || 'active').trim().toLowerCase();
+    var sid    = String(c.sheetId || '').trim();
+
+    if (!sid) {
+      Logger.log('[' + label + '] status=' + status + '  SKIPPED — no sheetId');
+      Logger.log('    -> fix: add the Sheet ID in Admin > Clients, or use Auto-create Google Sheet');
+      willSkip++; continue;
+    }
+
+    var ss;
+    try {
+      ss = SpreadsheetApp.openById(sid);
+    } catch (e) {
+      Logger.log('[' + label + '] status=' + status + '  SKIPPED — sheet unreachable: ' + e.message);
+      Logger.log('    -> fix: share the sheet with the script account, or correct the Sheet ID');
+      willSkip++; continue;
+    }
+
+    var parts = [];
+    var total = 0;
+    for (var t = 0; t < TABS.length; t++) {
+      var sh = ss.getSheetByName(TABS[t]);
+      if (!sh) { parts.push(TABS[t] + '=no tab'); continue; }
+      var rows = Math.max(0, sh.getLastRow() - 1);   // minus header
+      total += rows;
+      parts.push(TABS[t] + '=' + rows);
+    }
+    willSync++;
+    Logger.log('[' + label + '] status=' + status + '  SYNCED  ' + parts.join('  '));
+    if (total === 0) {
+      noData.push(label);
+      Logger.log('    NOTE: reachable but has no data rows yet — tabs are created on first submitted session');
+    }
+  }
+
+  Logger.log('');
+  Logger.log('--- will contribute data: ' + willSync + '   skipped entirely: ' + willSkip +
+             '   reachable but empty: ' + noData.length);
+  Logger.log('Inactive clients ARE synced as of build ' + BQ_SYNC_BUILD +
+             ' — filter on clients.status in Looker if a report should show current clients only.');
+  if (willSkip) Logger.log('The skipped clients above are the ones that will look MISSING in reports.');
+  Logger.log('=== end coverage check ===');
+
+  return { total: clients.length, willSync: willSync, skipped: willSkip, emptyButReachable: noData };
 }
