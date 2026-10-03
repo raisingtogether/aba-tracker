@@ -1289,6 +1289,12 @@ let CFG = {
   CLIENTS: [],
   BEHAVIORS: [],       // all active behaviors (used in admin display)
   BILLING_MATRIX: {},  // { 'RBT|1:1 with client': '97153', ... }
+  // f58: profile is HALF the billing key, so a new profile with no Billing rows
+  // would submit sessions with no billing code at all — breaking the weekly
+  // billing report and authorization consumed-hours. An RBT - Student Analyst
+  // bills identically to an RBT (confirmed by Tatiana), so alias the lookup
+  // rather than duplicating every Billing row and keeping two sets in step.
+  BILLING_PROFILE_ALIAS: { 'RBT - Student Analyst': 'RBT' },
   PLUGINS: [],
   ABC_BEHAVIORS: ['Aggression','Whining','Tantrum','Elopement','Task Refusal','SIB','Ingesting Inedibles','Other'],
   ABC_SETTINGS:  ['Home','School','Community','Clinic','Other'],
@@ -1397,6 +1403,17 @@ async function init() {
   } else {
     goTo('login');
   }
+}
+
+// Resolve a billing code for a profile + session type, following the profile
+// alias when the profile has no rows of its own.
+function billingCodeFor(profile, sessionType) {
+  var key = profile + '|' + sessionType;
+  var code = CFG.BILLING_MATRIX[key];
+  if (code) return code;
+  var alias = (CFG.BILLING_PROFILE_ALIAS || {})[profile];
+  if (alias) return CFG.BILLING_MATRIX[alias + '|' + sessionType] || '';
+  return '';
 }
 
 function applyConfig(raw, opts = {}) {
@@ -2619,8 +2636,7 @@ function buildEndScreen() {
 
   // Billing: derived from therapist profile + session type
   const profile    = S.therapist.profile || 'RBT';
-  const billingKey = `${profile}|${S.sessType}`;
-  const billing    = CFG.BILLING_MATRIX[billingKey] || '\u2014';
+  const billing    = billingCodeFor(profile, S.sessType) || '\u2014';
 
   document.getElementById('end-hdr-sub').textContent  = `${S.client.name} \u2022 ${S.therapist.name}`;
   document.getElementById('end-time-in').textContent  = S.actualStartTime || S.timeIn;
@@ -3219,8 +3235,7 @@ function buildPayload() {
 
   // Billing: therapist profile + session type
   const profile    = S.therapist.profile || 'RBT';
-  const billingKey = `${profile}|${S.sessType}`;
-  const billingCode = CFG.BILLING_MATRIX[billingKey] || '';
+  const billingCode = billingCodeFor(profile, S.sessType);
 
   const trialData = S.client.goals.map(g => {
     const t = S.trials[g.code] || [];
@@ -3612,7 +3627,7 @@ function buildEditForm(type, item) {
     </div>`;
 
   if (type === 'therapists') {
-    const profileOpts = ['RBT','BCBA'].map(p =>
+    const profileOpts = ['RBT','RBT - Student Analyst','BCBA'].map(p =>
       `<option value="${p}" ${(item.profile||'RBT')===p?'selected':''}>${p}</option>`).join('');
     const raw2 = RAW_CONFIG || DEFAULT_CONFIG;
     const assignedIds2  = (item.clientIds || '').split(',').map(s => s.trim()).filter(Boolean);

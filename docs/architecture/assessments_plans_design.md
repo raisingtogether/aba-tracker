@@ -451,3 +451,39 @@ Consequences worth stating:
   is **deactivated**, never deleted.
 - Writing goals is a config write, so it goes through the same lock as every
   other `saveConfig`, and must preserve `goalId` on existing rows.
+
+## Billing resolved — and goals must remain addable outside the plan
+
+> *"RBT and RBT-STUDENT ANALYST IS THE SAME from the billing perspective"*
+
+So the new profile does not need its own Billing rows. Rather than duplicating
+every RBT row and then keeping two sets in step forever, the lookup follows an
+explicit alias:
+
+```js
+BILLING_PROFILE_ALIAS: { 'RBT - Student Analyst': 'RBT' }
+```
+
+`billingCodeFor(profile, sessionType)` tries the exact key, then the alias. One
+resolver, used by both the End-screen display and the submit payload, so the two
+can no longer disagree. Verified against six cases including the ones that
+*should* return nothing (`RBT | Supervision` has no row and still must not
+silently borrow a BCBA code).
+
+> *"even after the behavioral plan send automatically the goals to the tracker
+> for that patient we still want to be able to add more in the tracker that are
+> not in the behavioral plan"*
+
+Confirmed as a requirement, and it constrains f40 more than it first appears.
+**The plan contributes goals; it does not own the goal list.**
+
+- A goal may exist with **no plan behind it** — created directly in admin, as all
+  243 current goals were. That stays true forever.
+- So every goal needs **provenance**: `sourcePlanId` and `sourceStoId` are set for
+  plan-created goals and empty for ad-hoc ones.
+- **A plan may only ever touch goals it created.** Re-approving, amending or
+  un-approving a plan must never deactivate or rewrite a goal with no
+  `sourcePlanId` — otherwise a BCBA's ad-hoc goal would vanish when an unrelated
+  plan is revised. This is the single most dangerous edge in f40.
+- The reverse also holds: an ad-hoc goal that later belongs in the plan gets
+  **adopted** (its `sourceStoId` filled in), never duplicated.
