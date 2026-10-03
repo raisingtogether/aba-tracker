@@ -30,3 +30,13 @@ ml/**/mapping*.json
 ml/**/*.jsonl
 *.safetensors
 models/
+
+# ── PHI — REAL PATIENT DATA. NEVER COMMIT. ──────────────────────────
+# Reference material (assessments, behavioral plans) lives here for building
+# importers and schemas against the real structure. It must never reach a git
+# remote: history is effectively permanent and this is protected health
+# information. Keep working copies here, commit nothing from it.
+Assessments for BP/
+Assessments for BPs/
+reference/phi/
+*-PHI.*
