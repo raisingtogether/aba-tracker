@@ -17,7 +17,7 @@
  * Keep BQ_SYNC_BUILD in BigQuerySync.gs set to the same value: the two files are
  * pasted separately, so a stale BigQuerySync is otherwise invisible.
  */
-var APP_BUILD = '2026-10-03-f43b';
+var APP_BUILD = '2026-10-03-f36';
 
 var ADMIN_SHEET_ID = '1VPBADMXvhOww_52O1n2CieTsQB6XCotLt6XdAQsq0ik';
 var AUDIT_SHEET_ID = '1tf98iS18vV08mQtPV9Vq6hQVkEp6Qg-ebUwHkeRlwaQ';
@@ -119,6 +119,21 @@ function doPost(e) {
     } else if (data.action === 'cleanupSuspendedSessions') {
       var cleanupResult = cleanupStaleSuspendedSessions(data.maxAgeDays);
       result = { success: true, removed: cleanupResult.removed };
+
+    } else if (data.action === 'getInstruments') {
+      result = getInstruments(data.approverRole);
+
+    } else if (data.action === 'listAssessments') {
+      result = listAssessments(data.clientId, data.approverRole);
+
+    } else if (data.action === 'getAssessment') {
+      result = getAssessment(data.assessmentId, data.approverRole);
+
+    } else if (data.action === 'saveAssessmentDraft') {
+      result = saveAssessmentDraft(data);
+
+    } else if (data.action === 'completeAssessment') {
+      result = completeAssessment(data);
 
     } else if (data.action === 'listParentAlerts') {
       result = listParentAlerts(data.status, data.approverRole);
@@ -4485,4 +4500,395 @@ function listGoalsBackups() {
   Logger.log(names.length ? 'Goals backups (newest first):\n  ' + names.join('\n  ')
                           : 'No Goals_backup_* tabs found.');
   return names;
+}
+
+
+// ── ASSESSMENT FRAMEWORK (f36) ────────────────────────────────────────
+/**
+ * An assessment INSTRUMENT is data, not code. ABLLS-R is 500+ items and VB-MAPP
+ * ~170; hand-building either as a screen would mean writing the same thing twice
+ * and maintaining two monoliths. So one renderer reads a definition, and each
+ * instrument is rows in a sheet.
+ *
+ * LICENSING (resolved Oct 2026): ABLLS-R and VB-MAPP are copyrighted commercial
+ * instruments. The practice owns the materials but not redistribution rights, so
+ * we store ITEM CODES AND SCORES ONLY. The `label` column holds the practice's
+ * own short descriptor, never the publisher's item text — the BCBA reads wording
+ * from her licensed copy.
+ *
+ * THREE TABS, and the split is deliberate:
+ *   Instruments       definition — the item bank. Same for every client, versioned.
+ *   Assessments       one administration: client + instrument + date + status.
+ *                     Carries scoresJson, so an autosave is ONE cell write.
+ *   Assessment Items  normalized one-row-per-item, written only when an
+ *                     administration is COMPLETED.
+ *
+ * Why scoresJson during draft: a 500-item assessment is not one sitting, so it
+ * autosaves constantly. Writing 500 rows per autosave would be unusably slow in
+ * Sheets. Drafts are not analysis-ready anyway — f37 syncs complete/signed only —
+ * so the normalized rows are produced once, at completion. Same reasoning as the
+ * Prompt Levels JSON column on Trial Data.
+ */
+
+var INSTRUMENTS_TAB = 'Instruments';
+var ASSESSMENTS_TAB = 'Assessments';
+var ASSESS_ITEMS_TAB = 'Assessment Items';
+
+var INSTRUMENT_HEADERS = [
+  'instrumentId', 'version', 'domain', 'subdomain', 'itemCode', 'label',
+  'scoreMin', 'scoreMax', 'criterion', 'sortOrder', 'status'
+];
+var ASSESSMENT_HEADERS = [
+  'assessmentId', 'clientId', 'clientName', 'instrumentId', 'instrumentVersion',
+  'administeredDate', 'assessorEmail', 'assessorName', 'status', 'isBaseline',
+  'startedAt', 'updatedAt', 'completedAt', 'itemCount', 'scoredCount', 'notes', 'scoresJson'
+];
+var ASSESS_ITEM_HEADERS = [
+  'assessmentId', 'clientId', 'instrumentId', 'itemCode', 'domain', 'subdomain',
+  'score', 'criterion', 'belowCriterion', 'administeredDate', 'dateISO'
+];
+
+function _assessRoleOk(role) {
+  return role === 'Admin' || role === 'BCBA';
+}
+
+function _adminTab(name, headers) {
+  var ss = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var sheet = getOrCreateSheet(ss, name, headers);
+  ensureSheetColumns(sheet, headers);
+  return sheet;
+}
+
+/** Instrument definitions, grouped for the renderer. */
+function getInstruments(approverRole) {
+  if (!_assessRoleOk(approverRole)) {
+    return { success: false, error: 'Unauthorized: BCBA or Admin role required' };
+  }
+  _adminTab(INSTRUMENTS_TAB, INSTRUMENT_HEADERS);
+  var ss   = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var rows = sheetToObjects(ss, INSTRUMENTS_TAB);
+
+  var byId = {};
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    var id = String(r.instrumentId || '').trim();
+    var code = String(r.itemCode || '').trim();
+    if (!id || !code) continue;
+    if (String(r.status || 'active').trim().toLowerCase() === 'inactive') continue;
+    if (!byId[id]) {
+      byId[id] = { instrumentId: id, version: String(r.version || '1'), items: [] };
+    }
+    byId[id].items.push({
+      domain:    String(r.domain || ''),
+      subdomain: String(r.subdomain || ''),
+      itemCode:  code,
+      label:     String(r.label || ''),
+      scoreMin:  (r.scoreMin === '' || r.scoreMin === null) ? 0 : Number(r.scoreMin),
+      scoreMax:  (r.scoreMax === '' || r.scoreMax === null) ? 4 : Number(r.scoreMax),
+      criterion: (r.criterion === '' || r.criterion === null) ? null : Number(r.criterion),
+      sortOrder: (r.sortOrder === '' || r.sortOrder === null) ? 0 : Number(r.sortOrder)
+    });
+  }
+
+  var out = [];
+  var ids = Object.keys(byId);
+  for (var k = 0; k < ids.length; k++) {
+    var inst = byId[ids[k]];
+    inst.items.sort(function (a, b) {
+      if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+      return a.itemCode < b.itemCode ? -1 : 1;
+    });
+    inst.itemCount = inst.items.length;
+    out.push(inst);
+  }
+  return { success: true, instruments: out };
+}
+
+/** Administration headers for one client, newest first. scoresJson is omitted. */
+function listAssessments(clientId, approverRole) {
+  if (!_assessRoleOk(approverRole)) {
+    return { success: false, error: 'Unauthorized: BCBA or Admin role required' };
+  }
+  _adminTab(ASSESSMENTS_TAB, ASSESSMENT_HEADERS);
+  var ss   = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var rows = sheetToObjects(ss, ASSESSMENTS_TAB);
+  var want = String(clientId || '').trim();
+  var out  = [];
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    if (!String(r.assessmentId || '').trim()) continue;
+    if (want && String(r.clientId || '').trim() !== want) continue;
+    out.push({
+      assessmentId:     String(r.assessmentId),
+      clientId:         String(r.clientId || ''),
+      clientName:       String(r.clientName || ''),
+      instrumentId:     String(r.instrumentId || ''),
+      instrumentVersion:String(r.instrumentVersion || ''),
+      administeredDate: String(r.administeredDate || ''),
+      assessorName:     String(r.assessorName || ''),
+      status:           String(r.status || 'draft'),
+      isBaseline:       String(r.isBaseline || '') === 'yes',
+      itemCount:        Number(r.itemCount || 0),
+      scoredCount:      Number(r.scoredCount || 0),
+      updatedAt:        String(r.updatedAt || '')
+    });
+  }
+  out.reverse();
+  return { success: true, assessments: out };
+}
+
+/** One administration including its scores. */
+function getAssessment(assessmentId, approverRole) {
+  if (!_assessRoleOk(approverRole)) {
+    return { success: false, error: 'Unauthorized: BCBA or Admin role required' };
+  }
+  var sheet  = _adminTab(ASSESSMENTS_TAB, ASSESSMENT_HEADERS);
+  var values = sheet.getDataRange().getValues();
+  var cm     = _alertColMap(values[0]);
+  var want   = String(assessmentId || '').trim();
+  for (var r = 1; r < values.length; r++) {
+    if (String(values[r][cm['assessmentId']] || '').trim() !== want) continue;
+    var scores = {};
+    var raw = String(values[r][cm['scoresJson']] || '');
+    if (raw) { try { scores = JSON.parse(raw) || {}; } catch (e) { scores = {}; } }
+    return { success: true, assessment: {
+      assessmentId:      want,
+      clientId:          String(values[r][cm['clientId']] || ''),
+      clientName:        String(values[r][cm['clientName']] || ''),
+      instrumentId:      String(values[r][cm['instrumentId']] || ''),
+      instrumentVersion: String(values[r][cm['instrumentVersion']] || ''),
+      administeredDate:  String(values[r][cm['administeredDate']] || ''),
+      status:            String(values[r][cm['status']] || 'draft'),
+      isBaseline:        String(values[r][cm['isBaseline']] || '') === 'yes',
+      notes:             String(values[r][cm['notes']] || ''),
+      scores:            scores
+    }};
+  }
+  return { success: false, error: 'Assessment not found' };
+}
+
+/**
+ * Create or update a DRAFT administration. This is the autosave path, so it must
+ * stay a single-row write. Refuses to touch a completed assessment: a
+ * re-assessment is a NEW administration, never an edit of an old one, which is
+ * what makes comparison meaningful and what an insurer expects.
+ */
+function saveAssessmentDraft(d) {
+  if (!_assessRoleOk(d.approverRole)) {
+    return { success: false, error: 'Unauthorized: BCBA or Admin role required' };
+  }
+  var id = String(d.assessmentId || '').trim();
+  if (!id) return { success: false, error: 'Missing assessmentId' };
+  if (!String(d.clientId || '').trim())     return { success: false, error: 'Missing clientId' };
+  if (!String(d.instrumentId || '').trim()) return { success: false, error: 'Missing instrumentId' };
+
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(15000); } catch (e) { return { success: false, error: 'Busy, please retry' }; }
+  try {
+    var sheet  = _adminTab(ASSESSMENTS_TAB, ASSESSMENT_HEADERS);
+    var values = sheet.getDataRange().getValues();
+    var cm     = _alertColMap(values[0]);
+    var nowISO = new Date().toISOString();
+
+    var scores = d.scores || {};
+    var scored = 0;
+    for (var key in scores) {
+      if (!scores.hasOwnProperty(key)) continue;
+      if (scores[key] !== '' && scores[key] !== null && scores[key] !== undefined) scored++;
+    }
+
+    var found = -1;
+    for (var r = 1; r < values.length; r++) {
+      if (String(values[r][cm['assessmentId']] || '').trim() === id) { found = r; break; }
+    }
+
+    if (found >= 0) {
+      var existingStatus = String(values[found][cm['status']] || 'draft').toLowerCase();
+      if (existingStatus === 'complete' || existingStatus === 'signed') {
+        return { success: false, error: 'This assessment is ' + existingStatus +
+                 ' and cannot be edited. Start a re-assessment instead.' };
+      }
+      _setAlertCells(sheet, found + 1, cm, {
+        scoresJson:  JSON.stringify(scores),
+        scoredCount: scored,
+        itemCount:   Number(d.itemCount || 0),
+        notes:       String(d.notes || ''),
+        updatedAt:   nowISO,
+        administeredDate: String(d.administeredDate || values[found][cm['administeredDate']] || '')
+      });
+      return { success: true, assessmentId: id, created: false, scoredCount: scored };
+    }
+
+    var rec = {
+      assessmentId:      id,
+      clientId:          String(d.clientId),
+      clientName:        String(d.clientName || ''),
+      instrumentId:      String(d.instrumentId),
+      instrumentVersion: String(d.instrumentVersion || '1'),
+      administeredDate:  String(d.administeredDate || nowISO.substring(0, 10)),
+      assessorEmail:     String(d.assessorEmail || ''),
+      assessorName:      String(d.assessorName || ''),
+      status:            'draft',
+      isBaseline:        d.isBaseline ? 'yes' : '',
+      startedAt:         nowISO,
+      updatedAt:         nowISO,
+      completedAt:       '',
+      itemCount:         Number(d.itemCount || 0),
+      scoredCount:       scored,
+      notes:             String(d.notes || ''),
+      scoresJson:        JSON.stringify(scores)
+    };
+    var headerRow = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+    var hm  = _alertColMap(headerRow);
+    var row = [];
+    for (var c = 0; c < headerRow.length; c++) row.push('');
+    for (var f in rec) {
+      if (rec.hasOwnProperty(f) && hm[f] !== undefined) row[hm[f]] = rec[f];
+    }
+    sheet.appendRow(row);
+    writeAuditLog(nowISO, d.assessorEmail || '', 'assessment_started', d.clientName || '',
+      'instrument=' + d.instrumentId + ' assessmentId=' + id);
+    return { success: true, assessmentId: id, created: true, scoredCount: scored };
+  } finally { lock.releaseLock(); }
+}
+
+/**
+ * Mark an administration complete and explode its scores into normalized item
+ * rows. Completion is one-way: the header is frozen and the item rows become the
+ * analysis record (f37 syncs complete/signed only).
+ */
+function completeAssessment(d) {
+  if (!_assessRoleOk(d.approverRole)) {
+    return { success: false, error: 'Unauthorized: BCBA or Admin role required' };
+  }
+  var id = String(d.assessmentId || '').trim();
+  if (!id) return { success: false, error: 'Missing assessmentId' };
+
+  var got = getAssessment(id, d.approverRole);
+  if (!got.success) return got;
+  var a = got.assessment;
+  if (a.status === 'complete' || a.status === 'signed') {
+    return { success: false, error: 'Already ' + a.status };
+  }
+
+  var instRes = getInstruments(d.approverRole);
+  if (!instRes.success) return instRes;
+  var inst = null;
+  for (var i = 0; i < instRes.instruments.length; i++) {
+    if (instRes.instruments[i].instrumentId === a.instrumentId) { inst = instRes.instruments[i]; break; }
+  }
+  if (!inst) return { success: false, error: 'Instrument definition not found: ' + a.instrumentId };
+
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(20000); } catch (e) { return { success: false, error: 'Busy, please retry' }; }
+  try {
+    var itemSheet = _adminTab(ASSESS_ITEMS_TAB, ASSESS_ITEM_HEADERS);
+    var itemHdr   = itemSheet.getRange(1, 1, 1, itemSheet.getLastColumn()).getValues()[0];
+    var im        = _alertColMap(itemHdr);
+    var nowISO    = new Date().toISOString();
+    var rows      = [];
+    var scoredN   = 0;
+    var belowN    = 0;
+
+    for (var k = 0; k < inst.items.length; k++) {
+      var it  = inst.items[k];
+      var raw = a.scores[it.itemCode];
+      if (raw === '' || raw === null || raw === undefined) continue;   // unscored items are not rows
+      var num = Number(raw);
+      if (isNaN(num)) continue;
+      scoredN++;
+      var below = (it.criterion !== null && num < it.criterion);
+      if (below) belowN++;
+
+      var rec = {
+        assessmentId:     id,
+        clientId:         a.clientId,
+        instrumentId:     a.instrumentId,
+        itemCode:         it.itemCode,
+        domain:           it.domain,
+        subdomain:        it.subdomain,
+        score:            num,
+        criterion:        it.criterion === null ? '' : it.criterion,
+        belowCriterion:   below,
+        administeredDate: a.administeredDate,
+        dateISO:          a.administeredDate
+      };
+      var row = [];
+      for (var c = 0; c < itemHdr.length; c++) row.push('');
+      for (var f in rec) {
+        if (rec.hasOwnProperty(f) && im[f] !== undefined) row[im[f]] = rec[f];
+      }
+      rows.push(row);
+    }
+
+    if (rows.length) {
+      itemSheet.getRange(itemSheet.getLastRow() + 1, 1, rows.length, itemHdr.length).setValues(rows);
+    }
+
+    var hSheet = _adminTab(ASSESSMENTS_TAB, ASSESSMENT_HEADERS);
+    var hVals  = hSheet.getDataRange().getValues();
+    var hm     = _alertColMap(hVals[0]);
+    for (var r = 1; r < hVals.length; r++) {
+      if (String(hVals[r][hm['assessmentId']] || '').trim() !== id) continue;
+      _setAlertCells(hSheet, r + 1, hm, {
+        status: 'complete', completedAt: nowISO, updatedAt: nowISO, scoredCount: scoredN
+      });
+      break;
+    }
+
+    writeAuditLog(nowISO, d.approverEmail || '', 'assessment_completed', a.clientName || '',
+      'assessmentId=' + id + ' instrument=' + a.instrumentId + ' scored=' + scoredN +
+      ' belowCriterion=' + belowN);
+    return { success: true, assessmentId: id, scored: scoredN, belowCriterion: belowN, itemRows: rows.length };
+  } finally { lock.releaseLock(); }
+}
+
+/**
+ * Editor-runnable: seed a small practice-authored instrument so the framework is
+ * testable without touching a licensed item bank. Idempotent — skips if the
+ * instrument already has rows.
+ */
+function seedRTCoreProbe() {
+  var sheet = _adminTab(INSTRUMENTS_TAB, INSTRUMENT_HEADERS);
+  var ss    = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var rows  = sheetToObjects(ss, INSTRUMENTS_TAB);
+  for (var i = 0; i < rows.length; i++) {
+    if (String(rows[i].instrumentId || '').trim() === 'RT-CORE') {
+      Logger.log('RT-CORE already seeded (' + rows.length + ' instrument rows total) — nothing to do.');
+      return { seeded: 0 };
+    }
+  }
+  // Practice-authored descriptors only. No publisher item text anywhere.
+  var DEF = [
+    ['Requesting',   'Mands',        'RTC-M1',  'Requests a preferred item with words/sign/device'],
+    ['Requesting',   'Mands',        'RTC-M2',  'Requests help when a task is difficult'],
+    ['Requesting',   'Mands',        'RTC-M3',  'Requests a break appropriately'],
+    ['Labelling',    'Tacts',        'RTC-T1',  'Labels common objects on sight'],
+    ['Labelling',    'Tacts',        'RTC-T2',  'Labels actions in pictures'],
+    ['Listening',    'Receptive',    'RTC-R1',  'Follows a one-step instruction'],
+    ['Listening',    'Receptive',    'RTC-R2',  'Selects a named item from an array of three'],
+    ['Imitation',    'Motor',        'RTC-I1',  'Imitates a gross motor action'],
+    ['Imitation',    'Motor',        'RTC-I2',  'Imitates a fine motor action'],
+    ['Social',       'Peer',         'RTC-S1',  'Responds to a peer greeting'],
+    ['Social',       'Peer',         'RTC-S2',  'Takes a turn in a structured game'],
+    ['Independence', 'Daily living', 'RTC-D1',  'Completes handwashing with no prompts']
+  ];
+  var hdr = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  var hm  = _alertColMap(hdr);
+  var out = [];
+  for (var j = 0; j < DEF.length; j++) {
+    var rec = {
+      instrumentId: 'RT-CORE', version: '1',
+      domain: DEF[j][0], subdomain: DEF[j][1], itemCode: DEF[j][2], label: DEF[j][3],
+      scoreMin: 0, scoreMax: 4, criterion: 3, sortOrder: (j + 1) * 10, status: 'active'
+    };
+    var row = [];
+    for (var c = 0; c < hdr.length; c++) row.push('');
+    for (var f in rec) { if (rec.hasOwnProperty(f) && hm[f] !== undefined) row[hm[f]] = rec[f]; }
+    out.push(row);
+  }
+  sheet.getRange(sheet.getLastRow() + 1, 1, out.length, hdr.length).setValues(out);
+  Logger.log('Seeded RT-CORE with ' + out.length + ' items (0-4 scale, criterion 3).');
+  Logger.log('Edit the Instruments tab freely — the renderer reads whatever is there.');
+  return { seeded: out.length };
 }

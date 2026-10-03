@@ -147,6 +147,60 @@
   .stat .v { font-size: 27px; font-weight: 900; color: var(--g800); line-height: 1.15; margin-top: 4px; font-variant-numeric: tabular-nums; }
   .stat .s { font-size: 12.5px; color: var(--g600); }
 
+  /* ── assessment renderer (f36) ── */
+  .arow { display: flex; align-items: center; gap: 14px; padding: 9px 0; border-bottom: 1px solid var(--g100); }
+  .arow:last-child { border-bottom: none; }
+  .arow .code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; font-weight: 600; color: var(--g600); width: 86px; flex: none; }
+  .arow .lbl { flex: 1; font-size: 14.5px; min-width: 0; }
+  .arow .sub { font-size: 12px; color: var(--g400); }
+  .scores { display: flex; gap: 4px; flex: none; }
+  .sbtn {
+    width: 34px; height: 32px; border-radius: 7px; border: 1.5px solid var(--g200);
+    background: var(--white); color: var(--g600); font-weight: 800; font-size: 13.5px;
+    font-variant-numeric: tabular-nums;
+  }
+  .sbtn:hover { border-color: var(--primary); color: var(--primary); }
+  .sbtn[aria-pressed="true"] { background: var(--primary); border-color: var(--primary); color: #fff; }
+  .sbtn.below[aria-pressed="true"] { background: var(--secondary); border-color: var(--secondary); }
+  .arow .clr { border: none; background: transparent; color: var(--g400); font-size: 17px; width: 24px; flex: none; }
+  .arow .clr:hover { color: var(--danger); }
+
+  .dom { margin-bottom: 16px; }
+  .dom-h {
+    display: flex; align-items: center; gap: 10px; padding: 11px 0 7px;
+    border-bottom: 2px solid var(--g200); margin-bottom: 4px;
+  }
+  .dom-h .n { font-size: 15px; font-weight: 900; color: var(--g800); }
+  .dom-h .c { font-size: 11.5px; font-weight: 800; color: var(--g400); margin-left: auto; font-variant-numeric: tabular-nums; }
+
+  .abar {
+    position: sticky; top: 61px; z-index: 4; background: var(--white);
+    border: 1px solid var(--g200); border-radius: var(--r); padding: 14px 18px;
+    margin-bottom: 16px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    box-shadow: var(--shadow);
+  }
+  .abar .prog { flex: 1; min-width: 160px; }
+  .abar .ptrack { height: 6px; background: var(--g100); border-radius: 99px; overflow: hidden; }
+  .abar .pfill { height: 100%; background: var(--primary); width: 0; transition: width .25s; }
+  .abar .ptxt { font-size: 12px; color: var(--g600); margin-top: 5px; font-variant-numeric: tabular-nums; }
+  .abar .saved { font-size: 12px; color: var(--success); font-weight: 700; min-width: 74px; }
+
+  .alist-row {
+    display: flex; align-items: center; gap: 14px; padding: 13px 0;
+    border-bottom: 1px solid var(--g100); font-size: 14.5px;
+  }
+  .alist-row:last-child { border-bottom: none; }
+  .badge {
+    font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
+    border-radius: 99px; padding: 3px 9px; white-space: nowrap;
+  }
+  .badge.draft    { background: #FEF3C7; color: #92400E; }
+  .badge.complete { background: #DCFCE7; color: #166534; }
+  .badge.signed   { background: #DBEAFE; color: #1E40AF; }
+  .badge.base     { background: var(--g100); color: var(--g600); }
+  .link-btn { background: none; border: none; color: var(--primary); font-weight: 800; font-size: 14px; padding: 0; }
+  .link-btn:hover { text-decoration: underline; }
+
   .empty { text-align: center; padding: 46px 20px; color: var(--g400); }
   .empty .big { font-size: 17px; font-weight: 800; color: var(--g600); margin-bottom: 6px; }
 
@@ -435,7 +489,9 @@ function renderClients() {
                   '<span>' + esc(c.name) + '</span>' +
                   (inactive ? '<span class="st">Discharged</span>' : '');
     b.addEventListener('click', function () {
+      if (_asmtDirty) saveAssessmentNow();
       CLIENT = c;
+      ASMT = null; ASMT_INST = null; ASMT_LIST = null;
       renderClients();
       render();
       logAudit('clinical_client_selected', c.name || '', 'console');
@@ -478,7 +534,8 @@ function render() {
       '</div></div>';
     return;
   }
-  if (VIEW === 'overview') { renderOverview(); return; }
+  if (VIEW === 'overview')    { renderOverview(); return; }
+  if (VIEW === 'assessments') { renderAssessments(); return; }
   renderStub(v.title);
 }
 
@@ -570,6 +627,357 @@ function renderStub(title) {
       '<ul class="plain">' + detail.lines.map(function (l) { return '<li>' + l + '</li>'; }).join('') + '</ul>' +
     '</div>';
 }
+
+
+// ─── ASSESSMENTS (f36) ───────────────────────────────────────────────
+// The instrument is DATA. This renderer knows nothing about ABLLS-R or VB-MAPP —
+// it reads whatever the Instruments tab defines, which is what stops f34 and f35
+// from becoming two hand-built screens.
+var INSTRUMENTS = null;   // cached definitions
+var ASMT_LIST   = null;   // administrations for the selected client
+var ASMT        = null;   // the one being edited, or null for the list view
+var ASMT_INST   = null;   // its instrument definition
+var _asmtSaveTimer = null;
+var _asmtDirty  = false;
+
+function rolePayload() {
+  return AUTH.role === 'admin' ? 'Admin' : 'BCBA';
+}
+
+function newAssessmentId() {
+  var r = '';
+  for (var i = 0; i < 10; i++) r += Math.floor(Math.random() * 36).toString(36);
+  return 'as_' + r;
+}
+
+async function renderAssessments() {
+  if (ASMT) { renderAssessmentEditor(); return; }
+  $('view-body').innerHTML = '<div class="panel"><div class="empty">Loading…</div></div>';
+
+  if (!INSTRUMENTS) {
+    var ir = await post({ action: 'getInstruments', approverRole: rolePayload() });
+    if (!ir || !ir.success) {
+      $('view-body').innerHTML = '<div class="panel"><div class="empty">' +
+        '<div class="big">Could not load instruments</div><div>' +
+        esc((ir && ir.error) || 'Unknown error') + '</div></div></div>';
+      return;
+    }
+    INSTRUMENTS = ir.instruments || [];
+  }
+
+  var ar = await post({ action: 'listAssessments', clientId: CLIENT.id, approverRole: rolePayload() });
+  ASMT_LIST = (ar && ar.success) ? (ar.assessments || []) : [];
+
+  if (!INSTRUMENTS.length) {
+    $('view-body').innerHTML =
+      '<div class="panel"><div class="empty">' +
+        '<div class="big">No instruments defined yet</div>' +
+        '<div>Assessments are driven by the <strong>Instruments</strong> tab in RT Admin &mdash; one row ' +
+        'per item. Run <code>seedRTCoreProbe()</code> in the Apps Script editor for a small ' +
+        'practice-authored instrument to try this with.</div>' +
+      '</div></div>';
+    return;
+  }
+
+  var opts = INSTRUMENTS.map(function (i) {
+    return '<option value="' + esc(i.instrumentId) + '">' + esc(i.instrumentId) +
+           ' — ' + i.itemCount + ' items</option>';
+  }).join('');
+
+  var rows = ASMT_LIST.length ? ASMT_LIST.map(function (a) {
+    var st = String(a.status || 'draft').toLowerCase();
+    return '<div class="alist-row">' +
+      '<span style="font-weight:700;min-width:96px">' + esc(a.administeredDate) + '</span>' +
+      '<span style="min-width:90px">' + esc(a.instrumentId) + '</span>' +
+      '<span class="badge ' + esc(st) + '">' + esc(st) + '</span>' +
+      (a.isBaseline ? '<span class="badge base">baseline</span>' : '') +
+      '<span style="color:var(--g600);font-size:13px">' + a.scoredCount + ' / ' + a.itemCount + ' scored</span>' +
+      '<span style="margin-left:auto"><button class="link-btn" data-open="' + esc(a.assessmentId) + '">' +
+        (st === 'draft' ? 'Continue' : 'View') + '</button></span>' +
+    '</div>';
+  }).join('') : '<div class="empty">No assessments recorded for ' + esc(CLIENT.name) + ' yet.</div>';
+
+  var lastComplete = null;
+  for (var i = 0; i < ASMT_LIST.length; i++) {
+    var st2 = String(ASMT_LIST[i].status || '').toLowerCase();
+    if (st2 === 'complete' || st2 === 'signed') { lastComplete = ASMT_LIST[i]; break; }
+  }
+
+  $('view-body').innerHTML =
+    '<div class="panel">' +
+      '<h2>Start an administration</h2>' +
+      '<p>Scores save as you go, so this does not have to be finished in one sitting.</p>' +
+      '<div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-top:14px">' +
+        '<label style="display:flex;flex-direction:column;gap:5px">' +
+          '<span style="font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--g400)">Instrument</span>' +
+          '<select id="new-inst" style="padding:9px 11px;border:1.5px solid var(--g200);border-radius:var(--r-sm);font-family:inherit;font-size:14.5px;background:var(--white);color:var(--g800)">' + opts + '</select>' +
+        '</label>' +
+        '<label style="display:flex;flex-direction:column;gap:5px">' +
+          '<span style="font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--g400)">Date</span>' +
+          '<input type="date" id="new-date" value="' + new Date().toISOString().slice(0, 10) + '" style="padding:9px 11px;border:1.5px solid var(--g200);border-radius:var(--r-sm);font-family:inherit;font-size:14.5px;background:var(--white);color:var(--g800)">' +
+        '</label>' +
+        '<button class="btn sm" id="btn-new-asmt" style="padding:11px 18px">New administration</button>' +
+        (lastComplete
+          ? '<button class="btn ghost sm" id="btn-reassess" style="padding:11px 18px">' +
+            'Re-assess from ' + esc(lastComplete.administeredDate) + '</button>'
+          : '') +
+      '</div>' +
+      (lastComplete
+        ? '<p style="margin-top:12px;font-size:13px">A re-assessment copies the previous scores forward as a ' +
+          'starting point and records a <strong>new</strong> administration &mdash; the earlier one is never ' +
+          'edited, which is what makes the two comparable.</p>'
+        : '') +
+    '</div>' +
+    '<div class="panel"><h2>History</h2>' + rows + '</div>';
+
+  var nb = $('btn-new-asmt');
+  if (nb) nb.addEventListener('click', function () { createAssessment(null); });
+  var rb = $('btn-reassess');
+  if (rb) rb.addEventListener('click', function () { createAssessment(lastComplete.assessmentId); });
+  Array.prototype.forEach.call(document.querySelectorAll('[data-open]'), function (b) {
+    b.addEventListener('click', function () { openAssessment(b.dataset.open); });
+  });
+}
+
+async function createAssessment(carryFromId) {
+  var instId = $('new-inst').value;
+  var date   = $('new-date').value || new Date().toISOString().slice(0, 10);
+  var inst   = null;
+  for (var i = 0; i < INSTRUMENTS.length; i++) {
+    if (INSTRUMENTS[i].instrumentId === instId) { inst = INSTRUMENTS[i]; break; }
+  }
+  if (!inst) return;
+
+  var scores = {};
+  if (carryFromId) {
+    busy(true);
+    var prev = await post({ action: 'getAssessment', assessmentId: carryFromId, approverRole: rolePayload() });
+    busy(false);
+    if (prev && prev.success) scores = prev.assessment.scores || {};
+  }
+
+  // isBaseline is an explicit flag, not min(date): a client can transfer in with
+  // an existing assessment, and a first attempt can be abandoned incomplete.
+  var anyComplete = ASMT_LIST.some(function (a) {
+    var st = String(a.status || '').toLowerCase();
+    return (st === 'complete' || st === 'signed') && a.instrumentId === instId;
+  });
+
+  ASMT = {
+    assessmentId: newAssessmentId(), clientId: CLIENT.id, clientName: CLIENT.name,
+    instrumentId: instId, instrumentVersion: inst.version,
+    administeredDate: date, status: 'draft', isBaseline: !anyComplete,
+    notes: '', scores: scores, _new: true
+  };
+  ASMT_INST = inst;
+  _asmtDirty = true;
+  renderAssessmentEditor();
+  saveAssessmentNow();
+}
+
+async function openAssessment(id) {
+  busy(true);
+  var r = await post({ action: 'getAssessment', assessmentId: id, approverRole: rolePayload() });
+  busy(false);
+  if (!r || !r.success) { alert((r && r.error) || 'Could not open assessment'); return; }
+  ASMT = r.assessment;
+  ASMT_INST = null;
+  for (var i = 0; i < INSTRUMENTS.length; i++) {
+    if (INSTRUMENTS[i].instrumentId === ASMT.instrumentId) { ASMT_INST = INSTRUMENTS[i]; break; }
+  }
+  if (!ASMT_INST) { alert('Instrument definition "' + ASMT.instrumentId + '" is missing.'); ASMT = null; return; }
+  renderAssessmentEditor();
+}
+
+function asmtScoredCount() {
+  var n = 0;
+  for (var k in ASMT.scores) {
+    if (!ASMT.scores.hasOwnProperty(k)) continue;
+    var v = ASMT.scores[k];
+    if (v !== '' && v !== null && v !== undefined) n++;
+  }
+  return n;
+}
+
+function renderAssessmentEditor() {
+  var locked = (ASMT.status === 'complete' || ASMT.status === 'signed');
+  var total  = ASMT_INST.items.length;
+
+  // group by domain, preserving the definition's sort order
+  var doms = [], byDom = {};
+  ASMT_INST.items.forEach(function (it) {
+    if (!byDom[it.domain]) { byDom[it.domain] = []; doms.push(it.domain); }
+    byDom[it.domain].push(it);
+  });
+
+  var html =
+    '<div class="abar">' +
+      '<button class="btn ghost sm" id="btn-back">&larr; All assessments</button>' +
+      '<div class="prog"><div class="ptrack"><div class="pfill" id="pfill"></div></div>' +
+        '<div class="ptxt" id="ptxt"></div></div>' +
+      '<span class="saved" id="saved"></span>' +
+      (locked
+        ? '<span class="badge ' + esc(ASMT.status) + '">' + esc(ASMT.status) + '</span>'
+        : '<button class="btn sm" id="btn-complete" style="padding:10px 16px">Mark complete</button>') +
+    '</div>' +
+    '<div class="panel" style="padding-top:18px">' +
+      '<h2>' + esc(ASMT.instrumentId) + ' &middot; ' + esc(ASMT.administeredDate) + '</h2>' +
+      '<p>' + esc(CLIENT.name) + (ASMT.isBaseline ? ' &middot; <strong>baseline</strong>' : '') +
+        ' &middot; scale 0&ndash;' + ASMT_INST.items[0].scoreMax +
+        (ASMT_INST.items[0].criterion !== null
+          ? ' &middot; criterion ' + ASMT_INST.items[0].criterion + ' (below it counts as a gap)'
+          : '') + '</p>' +
+      (locked
+        ? '<p style="color:var(--secondary);font-weight:700">This administration is ' + esc(ASMT.status) +
+          ' and cannot be edited. Start a re-assessment to record new scores.</p>'
+        : '') +
+    '</div>';
+
+  doms.forEach(function (d) {
+    var items = byDom[d];
+    html += '<div class="panel dom">' +
+      '<div class="dom-h"><span class="n">' + esc(d) + '</span>' +
+        '<span class="c" data-domcount="' + esc(d) + '"></span></div>';
+    items.forEach(function (it) {
+      var cur = ASMT.scores[it.itemCode];
+      var btns = '';
+      for (var v = it.scoreMin; v <= it.scoreMax; v++) {
+        var on = (cur !== undefined && cur !== '' && Number(cur) === v);
+        var below = (it.criterion !== null && v < it.criterion);
+        btns += '<button class="sbtn' + (below ? ' below' : '') + '" aria-pressed="' + (on ? 'true' : 'false') +
+                '" data-code="' + esc(it.itemCode) + '" data-val="' + v + '"' +
+                (locked ? ' disabled' : '') + '>' + v + '</button>';
+      }
+      html += '<div class="arow" data-row="' + esc(it.itemCode) + '">' +
+        '<span class="code">' + esc(it.itemCode) + '</span>' +
+        '<span class="lbl">' + esc(it.label) +
+          (it.subdomain ? '<div class="sub">' + esc(it.subdomain) + '</div>' : '') + '</span>' +
+        '<span class="scores">' + btns + '</span>' +
+        (locked ? '' : '<button class="clr" data-clear="' + esc(it.itemCode) + '" title="Clear">&times;</button>') +
+      '</div>';
+    });
+    html += '</div>';
+  });
+
+  $('view-body').innerHTML = html;
+
+  $('btn-back').addEventListener('click', function () {
+    if (_asmtDirty) saveAssessmentNow();
+    ASMT = null; ASMT_INST = null; ASMT_LIST = null;
+    renderAssessments();
+  });
+  var cb = $('btn-complete');
+  if (cb) cb.addEventListener('click', doCompleteAssessment);
+
+  if (!locked) {
+    Array.prototype.forEach.call(document.querySelectorAll('.sbtn'), function (b) {
+      b.addEventListener('click', function () { setScore(b.dataset.code, Number(b.dataset.val)); });
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-clear]'), function (b) {
+      b.addEventListener('click', function () { setScore(b.dataset.clear, ''); });
+    });
+  }
+  paintAsmtProgress();
+}
+
+function setScore(code, val) {
+  if (val === '') delete ASMT.scores[code];
+  else ASMT.scores[code] = val;
+
+  var row = document.querySelector('[data-row="' + code + '"]');
+  if (row) {
+    Array.prototype.forEach.call(row.querySelectorAll('.sbtn'), function (b) {
+      b.setAttribute('aria-pressed', (val !== '' && Number(b.dataset.val) === val) ? 'true' : 'false');
+    });
+  }
+  _asmtDirty = true;
+  $('saved').textContent = 'Saving…';
+  $('saved').style.color = 'var(--g400)';
+  paintAsmtProgress();
+  if (_asmtSaveTimer) clearTimeout(_asmtSaveTimer);
+  _asmtSaveTimer = setTimeout(saveAssessmentNow, 900);
+}
+
+function paintAsmtProgress() {
+  var total  = ASMT_INST.items.length;
+  var scored = asmtScoredCount();
+  var pf = $('pfill'), pt = $('ptxt');
+  if (pf) pf.style.width = (total ? (scored / total * 100) : 0) + '%';
+  if (pt) pt.textContent = scored + ' of ' + total + ' items scored';
+
+  var byDom = {};
+  ASMT_INST.items.forEach(function (it) {
+    if (!byDom[it.domain]) byDom[it.domain] = { n: 0, t: 0 };
+    byDom[it.domain].t++;
+    var v = ASMT.scores[it.itemCode];
+    if (v !== undefined && v !== '') byDom[it.domain].n++;
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('[data-domcount]'), function (el) {
+    var d = byDom[el.dataset.domcount];
+    if (d) el.textContent = d.n + ' / ' + d.t;
+  });
+}
+
+async function saveAssessmentNow() {
+  if (_asmtSaveTimer) { clearTimeout(_asmtSaveTimer); _asmtSaveTimer = null; }
+  if (!ASMT || ASMT.status === 'complete' || ASMT.status === 'signed') return;
+  var payload = {
+    action: 'saveAssessmentDraft',
+    assessmentId: ASMT.assessmentId, clientId: ASMT.clientId, clientName: ASMT.clientName,
+    instrumentId: ASMT.instrumentId, instrumentVersion: ASMT.instrumentVersion,
+    administeredDate: ASMT.administeredDate, isBaseline: ASMT.isBaseline,
+    notes: ASMT.notes || '', scores: ASMT.scores,
+    itemCount: ASMT_INST ? ASMT_INST.items.length : 0,
+    assessorEmail: AUTH.user.email, assessorName: AUTH.user.name,
+    approverRole: rolePayload()
+  };
+  try {
+    var r = await post(payload);
+    var el = $('saved');
+    if (r && r.success) {
+      _asmtDirty = false;
+      ASMT._new = false;
+      if (el) { el.textContent = 'Saved'; el.style.color = 'var(--success)'; }
+    } else if (el) {
+      el.textContent = 'Not saved'; el.style.color = 'var(--danger)';
+    }
+  } catch (e) {
+    var el2 = $('saved');
+    if (el2) { el2.textContent = 'Offline'; el2.style.color = 'var(--danger)'; }
+  }
+}
+
+async function doCompleteAssessment() {
+  var total  = ASMT_INST.items.length;
+  var scored = asmtScoredCount();
+  var msg = 'Mark this administration complete?\n\n' + scored + ' of ' + total + ' items scored.' +
+    (scored < total ? '\n\nUnscored items are simply not recorded.' : '') +
+    '\n\nCompleting is one-way: it cannot be edited afterwards. A re-assessment is recorded as a new administration.';
+  if (!confirm(msg)) return;
+
+  if (_asmtDirty) await saveAssessmentNow();
+  busy(true);
+  var r = await post({
+    action: 'completeAssessment', assessmentId: ASMT.assessmentId,
+    approverEmail: AUTH.user.email, approverRole: rolePayload()
+  });
+  busy(false);
+  if (!r || !r.success) { alert((r && r.error) || 'Could not complete'); return; }
+  logAudit('assessment_completed', ASMT.clientName, 'assessmentId=' + ASMT.assessmentId +
+           ' scored=' + r.scored + ' belowCriterion=' + r.belowCriterion);
+  alert('Completed. ' + r.scored + ' items recorded, ' + r.belowCriterion +
+        ' below criterion.\n\nThose gaps are what the plan generator (f38/f39) will draw on.');
+  ASMT = null; ASMT_INST = null; ASMT_LIST = null;
+  renderAssessments();
+}
+
+// Partial scoring must survive leaving the page, same rule as session notes.
+document.addEventListener('visibilitychange', function () {
+  if (document.visibilityState === 'hidden' && _asmtDirty) saveAssessmentNow();
+});
+window.addEventListener('beforeunload', function (e) {
+  if (_asmtDirty) { saveAssessmentNow(); e.preventDefault(); e.returnValue = ''; }
+});
 
 // ── wiring ──
 $('btn-signin').addEventListener('click', startSignIn);
