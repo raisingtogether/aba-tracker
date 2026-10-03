@@ -17,7 +17,7 @@
  * Keep BQ_SYNC_BUILD in BigQuerySync.gs set to the same value: the two files are
  * pasted separately, so a stale BigQuerySync is otherwise invisible.
  */
-var APP_BUILD = '2026-10-02-f30c';
+var APP_BUILD = '2026-10-03-goalid';
 
 var ADMIN_SHEET_ID = '1VPBADMXvhOww_52O1n2CieTsQB6XCotLt6XdAQsq0ik';
 var AUDIT_SHEET_ID = '1tf98iS18vV08mQtPV9Vq6hQVkEp6Qg-ebUwHkeRlwaQ';
@@ -587,8 +587,11 @@ function saveConfig(cfg) {
         if (seenCodes[dupKey]) throw new Error('Duplicate goal code: ' + cfg.goals[gi].code + ' for client ' + cid);
         seenCodes[dupKey] = true;
       }
+      // goalId is the IMMUTABLE join key (f43b); code stays the editable label.
+      // Listed here so a config save preserves it — objectsToSheet rewrites the
+      // tab from this list, so omitting a column drops it.
       objectsToSheet(ss, 'Goals',
-        ['clientId', 'clientIds', 'code', 'description', 'numTrials', 'status'],
+        ['goalId', 'clientId', 'clientIds', 'code', 'description', 'numTrials', 'status'],
         cfg.goals);
     }
 
@@ -4239,4 +4242,197 @@ function dismissParentAlert(alertId, approverEmail, approverRole, reason) {
     String(values[rowIdx][cm['behaviorLabel']] || '') + ' alertId=' + id +
     (note ? ' reason=' + note : ''));
   return { success: true, dismissed: true };
+}
+
+
+// ── GOAL ID MIGRATION (f43b) ──────────────────────────────────────────
+/**
+ * Goals have never had a stable identifier. Everything downstream references a
+ * goal by its USER-EDITABLE `code`: the Trial Data goal columns, Trial Summary
+ * 'Goal Code', trial_records.goal_code and mastery_log (type+code). Renaming a
+ * code therefore orphans every historical trial row and mastery entry — a
+ * latent integrity bug today, and a hard blocker for behavioral-plan lineage,
+ * where a plan would break too.
+ *
+ * This adds an immutable `goalId`. `code` stays the human-facing label.
+ *
+ * DESIGN FOR ROLLBACK — read before running:
+ *   1. ADDITIVE ONLY. Nothing is renamed, moved or deleted. A goalId column is
+ *      appended and populated; every other cell is left exactly as it was.
+ *   2. The id is DETERMINISTIC — derived from clientId|CODE — so re-running
+ *      after a rollback regenerates the SAME ids. Replay is safe.
+ *   3. IDEMPOTENT. Only blank goalId cells are filled. Running twice is a no-op.
+ *   4. Run order: backupGoalsTab() -> previewGoalIdMigration() -> migrateGoalIds(false)
+ *      -> verifyGoalIds().
+ *   5. To roll back: rollbackGoalsFromBackup('<tab name printed by the backup>').
+ *
+ *   CAUTION: reverting Code.gs to a build whose saveConfig header list lacks
+ *   'goalId' will DROP the column on the next config save, because objectsToSheet
+ *   rewrites the tab from its header list. So a code rollback must be paired with
+ *   the sheet backup — that is what rollbackGoalsFromBackup is for.
+ */
+
+/** Timestamped duplicate of the Goals tab. Run this FIRST. Returns the tab name. */
+function backupGoalsTab() {
+  var ss    = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var sheet = ss.getSheetByName('Goals');
+  if (!sheet) throw new Error('Goals tab not found');
+  var stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyyMMdd-HHmmss');
+  var name  = 'Goals_backup_' + stamp;
+  var copy  = sheet.copyTo(ss);
+  copy.setName(name);
+  Logger.log('Backup created: "' + name + '" (' + sheet.getLastRow() + ' rows incl. header)');
+  Logger.log('To roll back:  rollbackGoalsFromBackup("' + name + '")');
+  writeAuditLog(new Date().toISOString(), 'system', 'goals_backup_created', '',
+    'Goals tab backed up to ' + name + ' before goalId migration');
+  return name;
+}
+
+/** Deterministic id from clientId|code — so a replay after rollback is identical. */
+function _goalIdFor(clientId, code) {
+  var input = String(clientId || '').trim().toLowerCase() + '|' +
+              String(code     || '').trim().toUpperCase();
+  var bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, input);
+  var hex = '';
+  for (var i = 0; i < 6; i++) {   // 12 hex chars — ample for hundreds of goals
+    var b = (bytes[i] + 256) & 0xFF;
+    hex += (b < 16 ? '0' : '') + b.toString(16);
+  }
+  return 'gl_' + hex;
+}
+
+/** Shared scan used by preview, migrate and verify so they cannot disagree. */
+function _scanGoalIds() {
+  var ss    = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var sheet = ss.getSheetByName('Goals');
+  if (!sheet) throw new Error('Goals tab not found');
+  var values = sheet.getDataRange().getValues();
+  if (values.length < 2) return { sheet: sheet, rows: [], colMap: {}, headers: [] };
+
+  var headers = values[0];
+  var colMap  = {};
+  for (var h = 0; h < headers.length; h++) colMap[String(headers[h]).trim()] = h;
+
+  var rows = [];
+  for (var r = 1; r < values.length; r++) {
+    var row = values[r];
+    var code = String(colMap['code'] !== undefined ? row[colMap['code']] : '').trim();
+    if (!code) continue;                        // blank spacer row
+    var clientId = String(colMap['clientId'] !== undefined ? row[colMap['clientId']] : '').trim();
+    var existing = String(colMap['goalId']   !== undefined ? row[colMap['goalId']]   : '').trim();
+    rows.push({
+      sheetRow: r + 1, clientId: clientId, code: code,
+      existing: existing, proposed: _goalIdFor(clientId, code)
+    });
+  }
+  return { sheet: sheet, rows: rows, colMap: colMap, headers: headers };
+}
+
+/** DRY RUN — writes nothing. Read the Execution log. */
+function previewGoalIdMigration() {
+  var scan = _scanGoalIds();
+  var toFill = 0, already = 0, collisions = 0;
+  var seen = {};
+  Logger.log('=== goalId migration PREVIEW (no writes) ===');
+  Logger.log('goalId column present: ' + (scan.colMap['goalId'] !== undefined));
+  for (var i = 0; i < scan.rows.length; i++) {
+    var g = scan.rows[i];
+    if (g.existing) { already++; continue; }
+    if (seen[g.proposed]) {
+      collisions++;
+      Logger.log('  COLLISION row ' + g.sheetRow + ' (' + g.clientId + '|' + g.code + ') -> ' + g.proposed);
+    }
+    seen[g.proposed] = true;
+    toFill++;
+    Logger.log('  row ' + g.sheetRow + '  ' + (g.clientId || '(no client)') + ' | ' + g.code + '  ->  ' + g.proposed);
+  }
+  Logger.log('--- goals=' + scan.rows.length + '  would fill=' + toFill +
+             '  already have an id=' + already + '  collisions=' + collisions);
+  if (collisions) Logger.log('RESOLVE COLLISIONS BEFORE MIGRATING — duplicate clientId|code in the Goals tab.');
+  Logger.log('=== end preview ===');
+  return { goals: scan.rows.length, toFill: toFill, already: already, collisions: collisions };
+}
+
+/**
+ * Populate blank goalId cells. dryRun defaults to TRUE — call
+ * migrateGoalIds(false) to actually write.
+ */
+function migrateGoalIds(dryRun) {
+  if (dryRun === undefined) dryRun = true;
+  var pre = previewGoalIdMigration();
+  if (pre.collisions) throw new Error('Refusing to migrate: ' + pre.collisions + ' duplicate clientId|code rows.');
+  if (dryRun) { Logger.log('DRY RUN — nothing written. Call migrateGoalIds(false) to apply.'); return pre; }
+
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(20000); } catch (e) { throw new Error('Config busy, retry.'); }
+  try {
+    var scan = _scanGoalIds();
+    ensureSheetColumns(scan.sheet, ['goalId']);        // append only; never moves a column
+    scan = _scanGoalIds();                             // re-read after the column add
+    var idCol = scan.colMap['goalId'];
+    if (idCol === undefined) throw new Error('goalId column missing after ensureSheetColumns');
+
+    var filled = 0;
+    for (var i = 0; i < scan.rows.length; i++) {
+      var g = scan.rows[i];
+      if (g.existing) continue;                        // idempotent
+      scan.sheet.getRange(g.sheetRow, idCol + 1).setValue(g.proposed);
+      filled++;
+    }
+    writeAuditLog(new Date().toISOString(), 'system', 'goal_id_migration', '',
+      'Filled ' + filled + ' goalId values across ' + scan.rows.length + ' goals');
+    Logger.log('MIGRATED: filled ' + filled + ' goalId values. Now run verifyGoalIds().');
+    return { filled: filled, goals: scan.rows.length };
+  } finally { lock.releaseLock(); }
+}
+
+/** READ-ONLY integrity check. Run after migrating, and any time afterwards. */
+function verifyGoalIds() {
+  var scan = _scanGoalIds();
+  var seen = {}, missing = 0, dupes = 0, mismatched = 0;
+  Logger.log('=== goalId verification ===');
+  for (var i = 0; i < scan.rows.length; i++) {
+    var g = scan.rows[i];
+    if (!g.existing) { missing++; Logger.log('  MISSING id  row ' + g.sheetRow + '  ' + g.code); continue; }
+    if (seen[g.existing]) { dupes++; Logger.log('  DUPLICATE id row ' + g.sheetRow + '  ' + g.existing); }
+    seen[g.existing] = true;
+    if (g.existing !== g.proposed) mismatched++;       // fine: a renamed code keeps its original id
+  }
+  var ok = (missing === 0 && dupes === 0);
+  Logger.log('--- goals=' + scan.rows.length + '  missing=' + missing + '  duplicates=' + dupes +
+             '  id-not-derived-from-current-code=' + mismatched + ' (expected after a code rename)');
+  Logger.log(ok ? 'PASS — every goal has a unique id.' : 'FAIL — see rows above.');
+  Logger.log('=== end verification ===');
+  return { ok: ok, goals: scan.rows.length, missing: missing, duplicates: dupes, mismatched: mismatched };
+}
+
+/**
+ * ROLLBACK — restore the Goals tab from a backup made by backupGoalsTab().
+ * Replaces the live tab's contents with the backup's, including dropping the
+ * goalId column if the backup predates it. The backup tab is left in place.
+ */
+function rollbackGoalsFromBackup(backupTabName) {
+  var name = String(backupTabName || '').trim();
+  if (!name) throw new Error('Pass the backup tab name, e.g. rollbackGoalsFromBackup("Goals_backup_20261003-101500")');
+  var ss     = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var backup = ss.getSheetByName(name);
+  if (!backup) throw new Error('Backup tab "' + name + '" not found');
+  var live   = ss.getSheetByName('Goals');
+  if (!live) throw new Error('Goals tab not found');
+
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(20000); } catch (e) { throw new Error('Config busy, retry.'); }
+  try {
+    var data = backup.getDataRange().getValues();
+    live.clear();                                   // contents AND formatting, so the
+    live.getRange(1, 1, data.length, data[0].length).setValues(data);
+    var hdr = live.getRange(1, 1, 1, data[0].length);
+    hdr.setFontWeight('bold'); hdr.setBackground('#00A7C7'); hdr.setFontColor('#FFFFFF');
+    live.setFrozenRows(1);
+    writeAuditLog(new Date().toISOString(), 'system', 'goals_rollback', '',
+      'Goals tab restored from ' + name + ' (' + (data.length - 1) + ' goals)');
+    Logger.log('ROLLED BACK: Goals restored from "' + name + '" — ' + (data.length - 1) + ' goals.');
+    Logger.log('If you also reverted Code.gs, verify the Goals admin screen loads before saving any config.');
+    return { restored: data.length - 1, from: name };
+  } finally { lock.releaseLock(); }
 }

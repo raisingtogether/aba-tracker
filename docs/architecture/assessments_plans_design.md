@@ -203,3 +203,39 @@ comes with step 3.
    **insurer-facing export**? f41 implies both.
 4. Are plan objectives always 1:1 with collectible goals, or can an objective be
    narrative-only with no trial data behind it?
+
+---
+
+## 8. goalId migration — runbook
+
+Built additive and reversible. Run these **in order**, from the Apps Script editor,
+reading the Execution log after each.
+
+| # | Call | Writes? | What |
+|---|---|---|---|
+| 1 | `backupGoalsTab()` | yes (new tab) | Timestamped duplicate of Goals. Prints the rollback command. **Do not skip.** |
+| 2 | `previewGoalIdMigration()` | no | Lists every id it would assign; refuses nothing, but reports duplicate `clientId\|code` rows as collisions. |
+| 3 | `migrateGoalIds(false)` | yes | Fills blank `goalId` cells only. Throws if collisions exist. |
+| 4 | `verifyGoalIds()` | no | PASS/FAIL: every goal has a unique, non-empty id. |
+
+**Rollback:** `rollbackGoalsFromBackup("Goals_backup_YYYYMMDD-HHMMSS")` — the name is
+printed by step 1 and written to the Audit Log.
+
+**Why it is safe:**
+- **Additive only.** A column is appended; no cell outside it is touched.
+  `ensureSheetColumns` never moves an existing column.
+- **Deterministic ids** (`SHA-256` of `clientId|CODE`, first 12 hex) so a rollback
+  followed by a re-run produces *identical* ids. Replay cannot drift.
+- **Idempotent.** Only blank cells are filled; a second run is a no-op.
+- **Lock-protected**, like every other config write.
+- **Audited** at backup, migration and rollback.
+
+**The one sharp edge.** `objectsToSheet` rewrites the Goals tab from the header list in
+`saveConfig`. Reverting `Code.gs` to a build without `'goalId'` in that list will
+**drop the column** on the next config save. So a code rollback must be paired with
+`rollbackGoalsFromBackup`, and the backup tab should be kept until the migration has
+survived a few days of normal use.
+
+**Nothing reads `goalId` yet.** It is written and preserved but not joined on, so this
+migration changes no behaviour — by design. Downstream references move from `code` to
+`goalId` as a separate, later step, once the column is populated and verified.

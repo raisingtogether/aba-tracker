@@ -3561,12 +3561,21 @@ function typeLabel(t) {
   return {therapists:'Therapist', clients:'Client', behaviors:'Behavior', goals:'Goal'}[t] || t;
 }
 
+// f43b: immutable join key for a goal. `code` stays the editable human label, so
+// renaming a code must never orphan the trial rows and mastery entries that
+// reference it. 12 hex chars, matching the backend migration's format.
+function newGoalId() {
+  var rand = '';
+  for (var i = 0; i < 12; i++) rand += Math.floor(Math.random() * 16).toString(16);
+  return 'gl_' + rand;
+}
+
 function newItemTemplate(type) {
   const id = type[0].toUpperCase() + Date.now();
   if (type === 'therapists') return { id, name:'', initials:'', color:'#00A7C7', profile:'RBT', status:'active' };
   if (type === 'clients')    return { id, name:'', initials:'', sheetId:'', status:'active' };
   if (type === 'behaviors')  return { key:'', label:'', color:'#00A7C7', clientIds:'', status:'active' };
-  if (type === 'goals')      return { clientId:'', code:'', description:'', numTrials:'5', status:'active' };
+  if (type === 'goals')      return { goalId: newGoalId(), clientId:'', code:'', description:'', numTrials:'5', status:'active' };
   return {};
 }
 
@@ -3876,6 +3885,8 @@ function saveEntity() {
     document.getElementById('ef-code').style.boxShadow   = '';
     updated = Object.assign({}, editModalItem || {}, { clientId, clientIds, code, description, numTrials,
       status: editModalItem ? (editModalItem.status||'active') : 'active' });
+    // Keep the id stable across edits; backfill if this row predates the migration.
+    if (!updated.goalId) updated.goalId = newGoalId();
   }
 
   const list = raw[type] || [];
