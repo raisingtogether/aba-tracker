@@ -71,7 +71,8 @@
   #screen-app.active { display: grid; grid-template-columns: var(--sidebar) 1fr; min-height: 100vh; }
   aside {
     background: var(--white); border-right: 1px solid var(--g200);
-    display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh;
+    display: flex; flex-direction: column; position: sticky; top: 0;
+    height: 100vh; overflow-y: auto;   /* without this the nav clips out of view */
   }
   .side-head { padding: 20px 20px 16px; border-bottom: 1px solid var(--g100); }
   .side-head .brand { margin-bottom: 4px; }
@@ -84,7 +85,7 @@
 
   .side-sec { padding: 16px 14px 6px; }
   .side-lbl { font-size: 10.5px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; color: var(--g400); padding: 0 6px 8px; }
-  .client-list { display: flex; flex-direction: column; gap: 3px; overflow-y: auto; }
+  .client-list { display: flex; flex-direction: column; gap: 3px; overflow-y: auto; max-height: 36vh; }
   .client-btn {
     display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
     background: transparent; border: none; border-radius: var(--r-sm);
@@ -101,7 +102,8 @@
   .client-btn .st { font-size: 10.5px; font-weight: 800; color: var(--g400); margin-left: auto; text-transform: uppercase; letter-spacing: .06em; }
   .client-btn[aria-current="true"] .st { color: rgba(255,255,255,.8); }
 
-  nav { display: flex; flex-direction: column; gap: 2px; padding: 6px 14px 14px; }
+  nav { display: flex; flex-direction: column; gap: 2px; padding: 6px 14px 14px; flex: none; }
+  .side-lbl.hot { color: var(--primary); }
   .nav-btn {
     display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
     background: transparent; border: none; border-radius: var(--r-sm);
@@ -251,7 +253,7 @@
     </div>
 
     <nav id="nav" aria-label="Sections">
-      <div class="side-lbl" style="padding-top:10px">Sections</div>
+      <div class="side-lbl hot" style="padding-top:10px">Sections</div>
       <button class="nav-btn" data-view="overview" aria-current="true"><span class="dot"></span>Overview</button>
       <button class="nav-btn" data-view="assessments"><span class="dot"></span>Assessments<span class="soon">f34</span></button>
       <button class="nav-btn" data-view="plans"><span class="dot"></span>Behavioral plans<span class="soon">f38</span></button>
@@ -551,7 +553,22 @@ function renderOverview() {
     : [];
   var withId = goals.filter(function (g) { return String(g.goalId || '').trim(); }).length;
 
+  var cta = CLIENT
+    ? '<div class="panel" style="border-left:4px solid var(--primary)">' +
+        '<h2>Start here</h2>' +
+        '<p>Score an assessment for <strong>' + esc(CLIENT.name) + '</strong>. Progress saves as you go, ' +
+        'so it does not have to be finished in one sitting.</p>' +
+        '<button class="btn sm" id="cta-asmt" style="padding:12px 20px;margin-top:4px">' +
+          'Open assessments for ' + esc(CLIENT.name) + ' &rarr;</button>' +
+      '</div>'
+    : '<div class="panel" style="border-left:4px solid var(--secondary)">' +
+        '<h2>Pick a client to begin</h2>' +
+        '<p>Assessments and plans are recorded per client. Choose one from the <strong>Client</strong> ' +
+        'list in the sidebar, then open <strong>Assessments</strong>.</p>' +
+      '</div>';
+
   $('view-body').innerHTML =
+    cta +
     '<div class="stats">' +
       stat('Clients', current.length, clients.length - current.length ? (clients.length - current.length) + ' discharged' : 'all current') +
       stat('Goals configured', goals.length, CLIENT ? myGoals.length + ' for ' + esc(CLIENT.name) : 'across all clients') +
@@ -583,6 +600,18 @@ function renderOverview() {
       'rule-based goal suggestion &mdash; items below criterion become ranked candidates that the BCBA ' +
       'edits before anything is committed.</p>' +
     '</div>';
+
+  var ctaBtn = $('cta-asmt');
+  if (ctaBtn) ctaBtn.addEventListener('click', function () { goView('assessments'); });
+}
+
+// Switch view programmatically and keep the nav highlight in step.
+function goView(name) {
+  VIEW = name;
+  Array.prototype.forEach.call(document.querySelectorAll('.nav-btn'), function (b) {
+    b.setAttribute('aria-current', b.dataset.view === name ? 'true' : 'false');
+  });
+  render();
 }
 
 function stat(k, v, s) {
