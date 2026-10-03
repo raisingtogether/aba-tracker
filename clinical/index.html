@@ -157,7 +157,7 @@
   .arow .sub { font-size: 12px; color: var(--g400); }
   .scores { display: flex; gap: 4px; flex: none; }
   .sbtn {
-    width: 34px; height: 32px; border-radius: 7px; border: 1.5px solid var(--g200);
+    min-width: 34px; padding: 0 7px; height: 32px; border-radius: 7px; border: 1.5px solid var(--g200);
     background: var(--white); color: var(--g600); font-weight: 800; font-size: 13.5px;
     font-variant-numeric: tabular-nums;
   }
@@ -828,6 +828,16 @@ function asmtScoredCount() {
   return n;
 }
 
+// An instrument may declare its allowed scores explicitly — VB-MAPP is 0/0.5/1,
+// and integer stepping would quietly drop the half point. Fall back to integers
+// between min and max when no list is given.
+function scoreOptionsFor(item) {
+  if (item.scoreOptions && item.scoreOptions.length) return item.scoreOptions;
+  var out = [];
+  for (var v = item.scoreMin; v <= item.scoreMax; v++) out.push(v);
+  return out.length ? out : [0, 1];
+}
+
 function renderAssessmentEditor() {
   var locked = (ASMT.status === 'complete' || ASMT.status === 'signed');
   var total  = ASMT_INST.items.length;
@@ -852,7 +862,7 @@ function renderAssessmentEditor() {
     '<div class="panel" style="padding-top:18px">' +
       '<h2>' + esc(ASMT.instrumentId) + ' &middot; ' + esc(ASMT.administeredDate) + '</h2>' +
       '<p>' + esc(CLIENT.name) + (ASMT.isBaseline ? ' &middot; <strong>baseline</strong>' : '') +
-        ' &middot; scale 0&ndash;' + ASMT_INST.items[0].scoreMax +
+        ' &middot; scale ' + scoreOptionsFor(ASMT_INST.items[0]).join(' / ') +
         (ASMT_INST.items[0].criterion !== null
           ? ' &middot; criterion ' + ASMT_INST.items[0].criterion + ' (below it counts as a gap)'
           : '') + '</p>' +
@@ -869,8 +879,10 @@ function renderAssessmentEditor() {
         '<span class="c" data-domcount="' + esc(d) + '"></span></div>';
     items.forEach(function (it) {
       var cur = ASMT.scores[it.itemCode];
+      var opts = scoreOptionsFor(it);
       var btns = '';
-      for (var v = it.scoreMin; v <= it.scoreMax; v++) {
+      for (var oi = 0; oi < opts.length; oi++) {
+        var v = opts[oi];
         var on = (cur !== undefined && cur !== '' && Number(cur) === v);
         var below = (it.criterion !== null && v < it.criterion);
         btns += '<button class="sbtn' + (below ? ' below' : '') + '" aria-pressed="' + (on ? 'true' : 'false') +

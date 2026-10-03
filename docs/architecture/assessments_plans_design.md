@@ -578,3 +578,49 @@ Integration/Generalization ~63. These are **long narrative documents**, not comp
 forms — so the plan editor is closer to a structured document editor than to a
 table, and the narrative sections need generous text areas with the same
 continuous-save behaviour as session notes.
+
+---
+
+# PART 5 — f35 built as an importer (Oct 3 2026)
+
+**Not a hardcoded VB-MAPP definition.** `_importInstrument(cfg)` is a generic
+engine that reads one of the practice's own workbooks and writes `Instruments`
+rows; `importVBMAPP()` is a no-arg wrapper carrying nothing but a column map.
+Publisher item text therefore moves from her workbook into her admin sheet and
+never touches this repository — the licensing line from Q6, enforced by
+construction rather than by discipline.
+
+Source layout (her "Milestones" tab, header on row 5):
+`A Level · B Domain · C # · D Milestone · E Method · F Materials · G/H/I 1st/2nd/3rd test`
+
+Mapping: **domain = `Level N`** (matching her Milestones Grid, which lays levels
+across the top), **subdomain = the verbal operant** (Mand, Tact, Listener…), item
+code `L{level}-{domain}-{n}`. Idempotent — skips when rows already exist — and
+`reimportVBMAPP()` replaces.
+
+**Set `VBMAPP_SOURCE_SHEET_ID`** to the workbook's id in the practice Drive, or
+call `importVBMAPPFrom(id)`.
+
+## The gap the first real instrument exposed
+
+VB-MAPP is scored **0 / 0.5 / 1**. The f36 renderer stepped integers from
+`scoreMin` to `scoreMax`, so it would have offered **only 0 and 1** — silently
+dropping the half point, which in VB-MAPP means "emerging". A scoring surface that
+cannot express an instrument's scale is worse than no scoring surface.
+
+`Instruments` gained **`scoreOptions`**, an explicit allowed-score list, which also
+covers the ABLLS-R case where each item carries its own maximum (2.0, 4.0 …).
+`scoreOptionsFor()` uses the list when present and falls back to integers
+otherwise, so RT-CORE and anything already defined keep working.
+
+This is the argument for building the framework before the instruments, made
+concrete: one instrument revealed a modelling error that would have been baked
+into two more.
+
+## Still needed before the loop closes
+
+- **Assessment session billing** — 97151/97152 are absent from the Billing matrix,
+  so an assessment session cannot be billed (blocks f58).
+- **f59** the dashboard: domain rollups, period deltas, gap list.
+- **f58** assignment + the mobile assessment route, with scores pending approval.
+- **f38/f40** the plan, and the automatic goal transfer on approval.

@@ -17,7 +17,7 @@
  * Keep BQ_SYNC_BUILD in BigQuerySync.gs set to the same value: the two files are
  * pasted separately, so a stale BigQuerySync is otherwise invisible.
  */
-var APP_BUILD = '2026-10-03-f36';
+var APP_BUILD = '2026-10-03-f35';
 
 var ADMIN_SHEET_ID = '1VPBADMXvhOww_52O1n2CieTsQB6XCotLt6XdAQsq0ik';
 var AUDIT_SHEET_ID = '1tf98iS18vV08mQtPV9Vq6hQVkEp6Qg-ebUwHkeRlwaQ';
@@ -4536,7 +4536,11 @@ var ASSESS_ITEMS_TAB = 'Assessment Items';
 
 var INSTRUMENT_HEADERS = [
   'instrumentId', 'version', 'domain', 'subdomain', 'itemCode', 'label',
-  'scoreMin', 'scoreMax', 'criterion', 'sortOrder', 'status'
+  'scoreMin', 'scoreMax', 'criterion', 'sortOrder', 'status',
+  // f35: an explicit list of allowed scores. VB-MAPP is scored 0 / 0.5 / 1 — the
+  // HALF POINT is why min/max alone is not enough, and ABLLS-R items vary their
+  // own maximum. scoreOptions wins when present; otherwise integers min..max.
+  'scoreOptions'
 ];
 var ASSESSMENT_HEADERS = [
   'assessmentId', 'clientId', 'clientName', 'instrumentId', 'instrumentVersion',
@@ -4547,6 +4551,19 @@ var ASSESS_ITEM_HEADERS = [
   'assessmentId', 'clientId', 'instrumentId', 'itemCode', 'domain', 'subdomain',
   'score', 'criterion', 'belowCriterion', 'administeredDate', 'dateISO'
 ];
+
+/** "0,0.5,1" -> [0,0.5,1]; empty -> null, meaning derive integers from min..max. */
+function _parseScoreOptions(raw) {
+  var str = String(raw === null || raw === undefined ? '' : raw).trim();
+  if (!str) return null;
+  var parts = str.split(',');
+  var out = [];
+  for (var i = 0; i < parts.length; i++) {
+    var n = Number(String(parts[i]).trim());
+    if (!isNaN(n)) out.push(n);
+  }
+  return out.length ? out : null;
+}
 
 function _assessRoleOk(role) {
   return role === 'Admin' || role === 'BCBA';
@@ -4586,7 +4603,8 @@ function getInstruments(approverRole) {
       scoreMin:  (r.scoreMin === '' || r.scoreMin === null) ? 0 : Number(r.scoreMin),
       scoreMax:  (r.scoreMax === '' || r.scoreMax === null) ? 4 : Number(r.scoreMax),
       criterion: (r.criterion === '' || r.criterion === null) ? null : Number(r.criterion),
-      sortOrder: (r.sortOrder === '' || r.sortOrder === null) ? 0 : Number(r.sortOrder)
+      sortOrder: (r.sortOrder === '' || r.sortOrder === null) ? 0 : Number(r.sortOrder),
+      scoreOptions: _parseScoreOptions(r.scoreOptions)
     });
   }
 
@@ -4880,7 +4898,8 @@ function seedRTCoreProbe() {
     var rec = {
       instrumentId: 'RT-CORE', version: '1',
       domain: DEF[j][0], subdomain: DEF[j][1], itemCode: DEF[j][2], label: DEF[j][3],
-      scoreMin: 0, scoreMax: 4, criterion: 3, sortOrder: (j + 1) * 10, status: 'active'
+      scoreMin: 0, scoreMax: 4, criterion: 3, scoreOptions: '0,1,2,3,4',
+      sortOrder: (j + 1) * 10, status: 'active'
     };
     var row = [];
     for (var c = 0; c < hdr.length; c++) row.push('');
@@ -4891,4 +4910,248 @@ function seedRTCoreProbe() {
   Logger.log('Seeded RT-CORE with ' + out.length + ' items (0-4 scale, criterion 3).');
   Logger.log('Edit the Instruments tab freely — the renderer reads whatever is there.');
   return { seeded: out.length };
+}
+
+
+// ── INSTRUMENT IMPORT (f35 / f60) ─────────────────────────────────────
+/**
+ * Import an instrument definition from one of the practice's own assessment
+ * workbooks into the Instruments tab.
+ *
+ * WHY AN IMPORTER AND NOT A HARDCODED DEFINITION: ABLLS-R, VB-MAPP and AFLS item
+ * text is the publishers' copyrighted content. The practice is licensed for it;
+ * this repository is not. So the item text is read from HER workbook into HER
+ * admin sheet and never committed here. Nothing instrument-specific lives in this
+ * file except a column map.
+ *
+ * The engine is generic; each instrument gets a small no-arg wrapper (the Apps
+ * Script Run dropdown cannot pass arguments).
+ */
+
+function _colLetterToIndex(letter) {
+  var n = 0;
+  var s = String(letter || '').toUpperCase();
+  for (var i = 0; i < s.length; i++) n = n * 26 + (s.charCodeAt(i) - 64);
+  return n - 1;   // 0-based
+}
+
+/**
+ * cfg: {
+ *   instrumentId, version, sourceSheetId, sourceTab, headerRow, firstDataRow,
+ *   cols: { domain, subdomain, number, label, extra }   // column letters
+ *   domainLabel: function(row) -> string                // optional override
+ *   codeFor:     function(row) -> string                // item code builder
+ *   scoreOptions, criterion, scoreMin, scoreMax
+ *   replace: true to clear this instrument's existing rows first
+ * }
+ */
+function _importInstrument(cfg) {
+  var sheet = _adminTab(INSTRUMENTS_TAB, INSTRUMENT_HEADERS);
+  var ss    = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+
+  var existing = sheetToObjects(ss, INSTRUMENTS_TAB);
+  var already  = 0;
+  for (var e = 0; e < existing.length; e++) {
+    if (String(existing[e].instrumentId || '').trim() === cfg.instrumentId) already++;
+  }
+  if (already && !cfg.replace) {
+    Logger.log(cfg.instrumentId + ' already has ' + already + ' rows. ' +
+               'Nothing imported. Pass replace:true to re-import.');
+    return { imported: 0, skipped: already };
+  }
+
+  var src;
+  try {
+    src = SpreadsheetApp.openById(cfg.sourceSheetId).getSheetByName(cfg.sourceTab);
+  } catch (err) {
+    throw new Error('Cannot open source workbook: ' + err.message);
+  }
+  if (!src) throw new Error('Source tab "' + cfg.sourceTab + '" not found');
+
+  var values = src.getDataRange().getValues();
+  var ci     = {};
+  for (var k in cfg.cols) {
+    if (cfg.cols.hasOwnProperty(k)) ci[k] = _colLetterToIndex(cfg.cols[k]);
+  }
+
+  var rows = [];
+  var seen = {};
+  var skippedBlank = 0;
+  for (var r = cfg.firstDataRow - 1; r < values.length; r++) {
+    var row = values[r];
+    var label = String(ci.label !== undefined ? row[ci.label] : '').trim();
+    if (!label) { skippedBlank++; continue; }
+
+    var code = cfg.codeFor(row, ci);
+    if (!code) { skippedBlank++; continue; }
+    if (seen[code]) {
+      Logger.log('  DUPLICATE item code at source row ' + (r + 1) + ': ' + code + ' — skipped');
+      continue;
+    }
+    seen[code] = true;
+
+    var domain = cfg.domainLabel
+      ? cfg.domainLabel(row, ci)
+      : String(ci.domain !== undefined ? row[ci.domain] : '').trim();
+    var sub = String(ci.subdomain !== undefined ? row[ci.subdomain] : '').trim();
+
+    rows.push({
+      instrumentId: cfg.instrumentId,
+      version:      cfg.version,
+      domain:       domain,
+      subdomain:    sub,
+      itemCode:     code,
+      label:        label,
+      scoreMin:     cfg.scoreMin,
+      scoreMax:     cfg.scoreMax,
+      scoreOptions: cfg.scoreOptions || '',
+      criterion:    cfg.criterion,
+      sortOrder:    rows.length * 10 + 10,
+      status:       'active'
+    });
+  }
+
+  if (!rows.length) throw new Error('No items found — check headerRow/firstDataRow and the column map.');
+
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(20000); } catch (e) { throw new Error('Config busy, retry.'); }
+  try {
+    if (cfg.replace && already) {
+      // Delete bottom-up so row indices stay valid.
+      var all = sheet.getDataRange().getValues();
+      var cm  = _alertColMap(all[0]);
+      for (var d = all.length - 1; d >= 1; d--) {
+        if (String(all[d][cm['instrumentId']] || '').trim() === cfg.instrumentId) sheet.deleteRow(d + 1);
+      }
+      Logger.log('Replaced: removed ' + already + ' existing ' + cfg.instrumentId + ' rows.');
+    }
+
+    var hdr = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+    var hm  = _alertColMap(hdr);
+    var out = [];
+    for (var i = 0; i < rows.length; i++) {
+      var line = [];
+      for (var c = 0; c < hdr.length; c++) line.push('');
+      for (var f in rows[i]) {
+        if (rows[i].hasOwnProperty(f) && hm[f] !== undefined) line[hm[f]] = rows[i][f];
+      }
+      out.push(line);
+    }
+    sheet.getRange(sheet.getLastRow() + 1, 1, out.length, hdr.length).setValues(out);
+
+    writeAuditLog(new Date().toISOString(), 'system', 'instrument_imported', '',
+      cfg.instrumentId + ' v' + cfg.version + ': ' + out.length + ' items from "' +
+      cfg.sourceTab + '"');
+    Logger.log('IMPORTED ' + out.length + ' items as ' + cfg.instrumentId + ' v' + cfg.version +
+               ' (skipped ' + skippedBlank + ' blank/unusable source rows).');
+    Logger.log('Scale: ' + (cfg.scoreOptions || (cfg.scoreMin + '..' + cfg.scoreMax)) +
+               ' · criterion ' + cfg.criterion);
+    Logger.log('Item text now lives in YOUR admin sheet only — it is never committed to the repo.');
+    return { imported: out.length, skippedBlank: skippedBlank };
+  } finally { lock.releaseLock(); }
+}
+
+/**
+ * VB-MAPP Milestones — 170 items. Chosen by Tatiana as the first instrument
+ * because it is far shorter than ABLLS-R and so proves the whole loop sooner.
+ *
+ * Source layout (her workbook, "Milestones" tab, header on row 5):
+ *   A Level · B Domain · C # · D Milestone · E Method · F Materials
+ *   G/H/I 1st/2nd/3rd test
+ *
+ * Scored 0 / 0.5 / 1 — note the HALF POINT, which is why Instruments carries
+ * scoreOptions rather than only a min and max. Criterion is 1: anything below a
+ * full point is an unmet milestone, i.e. a gap.
+ *
+ * Grouped by Level to match her Milestones Grid, which lays the levels out across
+ * the top; the verbal operant (Mand, Tact, Listener…) becomes the subdomain.
+ *
+ * SET THE SHEET ID FIRST: copy her VB-MAPP workbook into the practice Drive and
+ * paste its id below, or pass one through importVBMAPPFrom().
+ */
+var VBMAPP_SOURCE_SHEET_ID = '';   // <-- paste the workbook id here
+
+function importVBMAPP() {
+  return importVBMAPPFrom(VBMAPP_SOURCE_SHEET_ID);
+}
+
+function importVBMAPPFrom(sheetId) {
+  var id = String(sheetId || '').trim();
+  if (!id) {
+    throw new Error('No source workbook id. Set VBMAPP_SOURCE_SHEET_ID at the top of this ' +
+                    'section to the id of the VB-MAPP workbook in the practice Drive.');
+  }
+  return _importInstrument({
+    instrumentId:  'VB-MAPP',
+    version:       '1',
+    sourceSheetId: id,
+    sourceTab:     'Milestones',
+    headerRow:     5,
+    firstDataRow:  6,
+    cols:          { domain: 'A', subdomain: 'B', number: 'C', label: 'D' },
+    domainLabel:   function (row, ci) {
+                     var lvl = String(row[ci.domain] || '').trim().replace(/\.0$/, '');
+                     return lvl ? ('Level ' + lvl) : 'Unassigned';
+                   },
+    codeFor:       function (row, ci) {
+                     var lvl = String(row[ci.domain]    || '').trim().replace(/\.0$/, '');
+                     var dom = String(row[ci.subdomain] || '').trim().replace(/\s+/g, '');
+                     var num = String(row[ci.number]    || '').trim().replace(/\.0$/, '');
+                     if (!lvl || !dom || !num) return '';
+                     return 'L' + lvl + '-' + dom + '-' + num;
+                   },
+    scoreOptions:  '0,0.5,1',
+    scoreMin:      0,
+    scoreMax:      1,
+    criterion:     1,
+    replace:       false
+  });
+}
+
+/** Re-import VB-MAPP, replacing any existing rows. */
+function reimportVBMAPP() {
+  var id = String(VBMAPP_SOURCE_SHEET_ID || '').trim();
+  if (!id) throw new Error('Set VBMAPP_SOURCE_SHEET_ID first.');
+  return _importInstrument({
+    instrumentId: 'VB-MAPP', version: '1', sourceSheetId: id, sourceTab: 'Milestones',
+    headerRow: 5, firstDataRow: 6,
+    cols: { domain: 'A', subdomain: 'B', number: 'C', label: 'D' },
+    domainLabel: function (row, ci) {
+      var lvl = String(row[ci.domain] || '').trim().replace(/\.0$/, '');
+      return lvl ? ('Level ' + lvl) : 'Unassigned';
+    },
+    codeFor: function (row, ci) {
+      var lvl = String(row[ci.domain] || '').trim().replace(/\.0$/, '');
+      var dom = String(row[ci.subdomain] || '').trim().replace(/\s+/g, '');
+      var num = String(row[ci.number] || '').trim().replace(/\.0$/, '');
+      if (!lvl || !dom || !num) return '';
+      return 'L' + lvl + '-' + dom + '-' + num;
+    },
+    scoreOptions: '0,0.5,1', scoreMin: 0, scoreMax: 1, criterion: 1, replace: true
+  });
+}
+
+/** Read-only: what is in the Instruments tab right now. */
+function listInstruments() {
+  var ss   = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var rows = sheetToObjects(ss, INSTRUMENTS_TAB);
+  var by = {};
+  for (var i = 0; i < rows.length; i++) {
+    var id = String(rows[i].instrumentId || '').trim();
+    if (!id) continue;
+    if (!by[id]) by[id] = { n: 0, domains: {}, scale: '' };
+    by[id].n++;
+    by[id].domains[String(rows[i].domain || '')] = true;
+    by[id].scale = String(rows[i].scoreOptions || '') ||
+                   (rows[i].scoreMin + '..' + rows[i].scoreMax);
+  }
+  Logger.log('=== Instruments tab ===');
+  var ids = Object.keys(by);
+  if (!ids.length) Logger.log('(empty — run seedRTCoreProbe() or importVBMAPP())');
+  for (var k = 0; k < ids.length; k++) {
+    var d = by[ids[k]];
+    Logger.log('  %s: %s items, %s domains, scale %s',
+      ids[k], d.n, Object.keys(d.domains).length, d.scale);
+  }
+  return by;
 }
