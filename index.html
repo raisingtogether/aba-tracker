@@ -1315,6 +1315,7 @@ let S = {
   tantrum: { count:0, totalSec:0, curSec:0, running:false, interval:null, startTs:null },
   trials: {},
   promptLevels: {},   // f30a: goalCode -> level code, one per goal per session
+  isProbe:      {},   // f30c: goalCode -> true when this goal was PROBED (unprompted)
   trialTimes:   {},   // f30a: goalCode -> [ISO per trial], captured automatically
   abc: [],
   clockInterval: null, sessInterval: null, sessStartTs: null,
@@ -1776,6 +1777,7 @@ function buildSessionSnapshot(status) {
     behaviors: JSON.parse(JSON.stringify(S.behaviors || {})),
     trials:    JSON.parse(JSON.stringify(S.trials || {})),
     promptLevels: JSON.parse(JSON.stringify(S.promptLevels || {})),
+    isProbe:      JSON.parse(JSON.stringify(S.isProbe      || {})),
     trialTimes:   JSON.parse(JSON.stringify(S.trialTimes   || {})),
     abc:       JSON.parse(JSON.stringify(S.abc || [])),
     tantrum:   { count: S.tantrum.count || 0, totalSec: S.tantrum.totalSec || 0, curSec: 0 },
@@ -1957,6 +1959,7 @@ function applySessionSnapshot(snap) {
     var restoredTrials = snap.trials || {};
     var restoredLevels = snap.promptLevels || {};
     var restoredTimes  = snap.trialTimes   || {};
+    var restoredProbes = snap.isProbe      || {};
     S.abc       = snap.abc || [];
     abcIdSeq    = snap.abcIdSeq || 0;
     S.tantrum   = { count: snap.tantrum ? (snap.tantrum.count||0) : 0,
@@ -1994,6 +1997,7 @@ function applySessionSnapshot(snap) {
     S.trials = restoredTrials;
     S.promptLevels = restoredLevels;
     S.trialTimes   = restoredTimes;
+    S.isProbe      = restoredProbes;
     Object.keys(restoredTrials).forEach(function(gcode){
       var arr = restoredTrials[gcode]; if (!arr) return;
       for (var i = 0; i < arr.length; i++) {
@@ -2405,6 +2409,7 @@ function buildTrials() {
     S.trials[g.code] = Array(n).fill(null);
     S.promptLevels[g.code] = '';
     S.trialTimes[g.code]   = Array(n).fill('');
+    S.isProbe[g.code]      = false;
     const card = document.createElement('div');
     card.className = 'goal-card';
     var slots = '';
@@ -2425,7 +2430,16 @@ function buildTrials() {
         '</span>' +
         '<span class="goal-pct" id="pct-' + g.code + '">\u2014</span>' +
       '</div>' +
-      '<div style="display:flex;align-items:center;gap:8px;margin:2px 0 9px">' +
+      '<div style="display:flex;align-items:center;gap:8px;margin:2px 0 9px;flex-wrap:wrap">' +
+        // f30c: a probe is unprompted BY DEFINITION, so ticking it sets the level
+        // to Independent and locks the dropdown. One interaction, not two — the
+        // level is implied rather than being a second decision.
+        '<label style="display:flex;align-items:center;gap:5px;font-size:10.5px;font-weight:800;' +
+          'color:var(--muted);text-transform:uppercase;letter-spacing:.3px;white-space:nowrap;cursor:pointer" ' +
+          'title="Probe / cold probe — run with no prompting">' +
+          '<input type="checkbox" id="pb-' + escAttr(g.code) + '" ' +
+            'onchange="setProbe(\'' + esc(g.code) + '\',this.checked)"> Probe' +
+        '</label>' +
         '<label for="pl-' + escAttr(g.code) + '" style="font-size:10.5px;font-weight:800;' +
           'color:var(--muted);text-transform:uppercase;letter-spacing:.3px;white-space:nowrap">Prompt level</label>' +
         '<select class="form-ctrl" id="pl-' + escAttr(g.code) + '" ' +
@@ -2445,6 +2459,14 @@ function restorePromptLevelSelects() {
     var el = document.getElementById('pl-' + gcode);
     if (el) el.value = S.promptLevels[gcode] || '';
   });
+  // f30c: re-tick probes and re-lock their selects.
+  Object.keys(S.isProbe || {}).forEach(function(gcode) {
+    if (!S.isProbe[gcode]) return;
+    var cb = document.getElementById('pb-' + gcode);
+    if (cb) cb.checked = true;
+    var sel = document.getElementById('pl-' + gcode);
+    if (sel) sel.disabled = true;
+  });
 }
 
 function promptLevelOptions(selected) {
@@ -2459,6 +2481,22 @@ function promptLevelOptions(selected) {
 function setPromptLevel(code, value) {
   S.promptLevels[code] = value || '';
   EventBus.emit('trial:promptLevel', { goalCode: code, level: value || '' });
+}
+
+// Ticking Probe implies Independent and locks the level. Unticking CLEARS it,
+// so an accidental tick cannot leave a goal silently recorded as Independent —
+// the submit validation then forces a deliberate choice.
+function setProbe(code, checked) {
+  S.isProbe[code] = !!checked;
+  var sel = document.getElementById('pl-' + code);
+  if (checked) {
+    S.promptLevels[code] = 'I';
+    if (sel) { sel.value = 'I'; sel.disabled = true; }
+  } else {
+    S.promptLevels[code] = '';
+    if (sel) { sel.disabled = false; sel.value = ''; }
+  }
+  EventBus.emit('trial:probe', { goalCode: code, isProbe: !!checked });
 }
 
 function setTrial(code, i, value) {
@@ -2998,6 +3036,7 @@ function buildPayload() {
       trials: t.map(v=>v===true?'\u2713':v===false?'\u2717':''),
       percentage: pct,
       promptLevel:  S.promptLevels[g.code] || '',
+      isProbe:      !!S.isProbe[g.code],
       trialTimes:   times,
       firstScoredAt: stamped.length ? stamped[0] : '',
       lastScoredAt:  stamped.length ? stamped[stamped.length - 1] : ''
@@ -3110,7 +3149,8 @@ function resetState() {
   S.behaviors = {};
   CFG.BEHAVIORS.forEach(b => { S.behaviors[b.key] = 0; });
   S.tantrum = { count:0, totalSec:0, curSec:0, running:false, interval:null, startTs:null };
-  S.trials = {}; S.promptLevels = {}; S.trialTimes = {}; S.abc = []; abcIdSeq = 0;
+  S.trials = {}; S.promptLevels = {}; S.trialTimes = {}; S.isProbe = {};
+  S.abc = []; abcIdSeq = 0;
   S.appStartTime = null; S.actualStartTime = null; S.lateStartReason = '';
   S.adjustedEndTime = null; S.adjustedEndTimeDate = null; S.endTimeAdjustmentReason = '';
   S.parentSignerName = ''; S.parentSignedAt = ''; S.parentSignature = ''; S.signatureSkipReason = '';
@@ -4517,6 +4557,7 @@ function restoreSessionAfterReauth() {
     var restoredTrials = snap.trials || {};
     var restoredLevels = snap.promptLevels || {};
     var restoredTimes  = snap.trialTimes   || {};
+    var restoredProbes = snap.isProbe      || {};
     S.abc         = snap.abc       || [];
     S.notes       = snap.notes     || '';
     S.sessType    = snap.sessType  || null;
@@ -4571,6 +4612,7 @@ function restoreSessionAfterReauth() {
     S.trials = restoredTrials;
     S.promptLevels = restoredLevels;
     S.trialTimes   = restoredTimes;
+    S.isProbe      = restoredProbes;
     restorePromptLevelSelects();
 
     // Restore trial ✓/✗ marks and recalculate percentages

@@ -18,7 +18,7 @@
  * every release. doGet reports this value, so one unauthenticated call proves
  * whether THIS file was pasted too (the two are pasted separately).
  */
-var BQ_SYNC_BUILD = '2026-10-02-f30b2';
+var BQ_SYNC_BUILD = '2026-10-02-f30c';
 function bqSyncBuild() { return BQ_SYNC_BUILD; }
 
 var BQ_PROJECT     = 'rt-aba-tracker';
@@ -36,7 +36,7 @@ var BQ_BEHAV_ANALYTICS = [
 var BQ_TRIAL_ANALYTICS = [
   'submissionId', 'clientName', 'clientId', 'therapistEmail',
   'sessionType', 'billingCode', 'isDraft', 'payloadHash', 'submittedAt', 'dateISO', 'Percent Correct',
-  'Prompt Levels', 'Trial Times'
+  'Prompt Levels', 'Trial Times', 'Probe Flags'
 ];
 
 
@@ -415,6 +415,13 @@ function bqReadBehaviorRows(clientSS, client, goalDescMap, labelToKeyMap) {
       if (timeJSONStr) { try { timeMap = JSON.parse(timeJSONStr) || {}; } catch (e) {} }
     }
 
+    var probeMap = {};
+    var probeJSONIdx = cm['Probe Flags'];
+    if (probeJSONIdx !== undefined && probeJSONIdx < row.length) {
+      var probeJSONStr = String(row[probeJSONIdx] || '');
+      if (probeJSONStr) { try { probeMap = JSON.parse(probeJSONStr) || {}; } catch (e) {} }
+    }
+
     var submissionId   = bqStr(cm, row, 'submissionId');
     var dateISO        = bqStr(cm, row, 'dateISO');
     var dateDisplay    = bqDateCell(cm, row, 'Date');
@@ -667,7 +674,8 @@ function bqReadTrialRows(clientSS, client, goalDescMap) {
         prompt_level:       String(lvlMap[g.code] || ''),
         prompt_level_rank:  bqPromptLevelRank(lvlMap[g.code]),
         first_scored_at:    bqFirstStamp(timeMap[g.code]),
-        last_scored_at:     bqLastStamp(timeMap[g.code])
+        last_scored_at:     bqLastStamp(timeMap[g.code]),
+        is_probe:           probeMap[g.code] ? true : false
       });
     }
   }
@@ -972,6 +980,10 @@ function bqCreateTableSchema(tableId) {
       { name: 'prompt_level_rank',  type: 'INTEGER', mode: 'NULLABLE' },
       { name: 'first_scored_at',    type: 'STRING',  mode: 'NULLABLE' },
       { name: 'last_scored_at',     type: 'STRING',  mode: 'NULLABLE' },
+      // f30c — true only when the goal was run as an unprompted probe. The
+      // table is rebuilt WRITE_TRUNCATE each sync, so rows from sheets without
+      // the column simply come back false.
+      { name: 'is_probe',           type: 'BOOLEAN', mode: 'NULLABLE' },
       { name: 'is_draft',           type: 'BOOLEAN', mode: 'NULLABLE' },
       { name: 'submitted_at',       type: 'STRING',  mode: 'NULLABLE' }
     ]};

@@ -17,7 +17,7 @@
  * Keep BQ_SYNC_BUILD in BigQuerySync.gs set to the same value: the two files are
  * pasted separately, so a stale BigQuerySync is otherwise invisible.
  */
-var APP_BUILD = '2026-10-02-f30b2';
+var APP_BUILD = '2026-10-02-f30c';
 
 var ADMIN_SHEET_ID = '1VPBADMXvhOww_52O1n2CieTsQB6XCotLt6XdAQsq0ik';
 var AUDIT_SHEET_ID = '1tf98iS18vV08mQtPV9Vq6hQVkEp6Qg-ebUwHkeRlwaQ';
@@ -1316,10 +1316,12 @@ function writeTrialData(ss, d) {
     'submissionId', 'clientName', 'clientId', 'therapistEmail',
     'sessionType', 'billingCode', 'isDraft', 'payloadHash',
     'submittedAt', 'dateISO', 'Percent Correct',
-    // f30a — ONE column each, whatever the goal count. Mirrors the
+    // f30a/f30c — ONE column each, whatever the goal count. Mirrors the
     // 'Percent Correct' pattern deliberately: a per-goal column pair would
     // multiply the dynamic columns this tab has already been repaired for.
-    'Prompt Levels', 'Trial Times'
+    // APPEND ONLY: ensureSheetColumns never moves an existing column, so older
+    // sheets simply gain blanks and every prior reader keeps working.
+    'Prompt Levels', 'Trial Times', 'Probe Flags'
   ];
 
   // Per-goal trial count map (goal code upper → numTrials)
@@ -1437,18 +1439,25 @@ function writeTrialData(ss, d) {
   // goal was PROGRAMMED to run at) and the automatic per-trial timestamps.
   var promptLevelMap = {};
   var trialTimeMap   = {};
+  var probeMap       = {};
   for (var pli = 0; pli < d.trialData.length; pli++) {
     var pg     = d.trialData[pli];
     var pgCode = String(pg.goalCode || '');
     if (!pgCode) continue;
     if (pg.promptLevel) promptLevelMap[pgCode] = String(pg.promptLevel);
     if (pg.trialTimes && pg.trialTimes.length) trialTimeMap[pgCode] = pg.trialTimes;
+    // f30c: only record TRUE, so the map stays small and an absent key reads as
+    // "not a probe" — the same convention as a missing prompt level.
+    if (pg.isProbe) probeMap[pgCode] = true;
   }
   if (colMap['Prompt Levels'] !== undefined) {
     row[colMap['Prompt Levels']] = JSON.stringify(promptLevelMap);
   }
   if (colMap['Trial Times'] !== undefined) {
     row[colMap['Trial Times']] = JSON.stringify(trialTimeMap);
+  }
+  if (colMap['Probe Flags'] !== undefined) {
+    row[colMap['Probe Flags']] = JSON.stringify(probeMap);
   }
 
     validateRowAlignment('Trial Data', actualHeaders, row);
@@ -1875,9 +1884,10 @@ function _appendTrialSummaryRows(ss, d, goalDescMap, tz) {
       'Percentage', 'Source', 'Session ID',
       // f30a — this tab's grain is already one row per goal per session, which
       // is exactly the grain of the prompt level. No new dynamic columns.
-      'Prompt Level', 'Prompt Level Label', 'First Scored At', 'Last Scored At'
+      'Prompt Level', 'Prompt Level Label', 'First Scored At', 'Last Scored At',
+      'Is Probe'
     ];
-    var TS_COLS = TS_HEADERS.length; // 17
+    var TS_COLS = TS_HEADERS.length; // 18
 
     var sumSheet;
     var existing = ss.getSheetByName('Trial Summary');
@@ -1949,7 +1959,8 @@ function _appendTrialSummaryRows(ss, d, goalDescMap, tz) {
         String(g.promptLevel || ''),
         _promptLevelLabel(g.promptLevel),
         String(g.firstScoredAt || ''),
-        String(g.lastScoredAt  || '')
+        String(g.lastScoredAt  || ''),
+        g.isProbe ? true : false
       ]);
     }
 
