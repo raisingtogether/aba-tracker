@@ -21,3 +21,12 @@ bq-readonly-sa.json
 analyst/*.json
 .mcp.local.json
 .rt-aba/
+
+# Phase 1.5 — training data and re-identification mapping NEVER leave the machine
+ml/data/
+ml/exports/
+ml/deid/
+ml/**/mapping*.json
+ml/**/*.jsonl
+*.safetensors
+models/
