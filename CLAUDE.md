@@ -14,7 +14,12 @@ Deployed on Firebase Hosting at `rt-aba-tracker`.
 | `manifest.json` | PWA manifest for Add to Home Screen |
 | `sw.js` | Service worker (offline support) |
 | `firebase.json` | Firebase Hosting config — site must be `rt-aba-tracker` |
-| `rt_feature_tracker.jsx` | Roadmap / feature tracker component |
+| `rt_feature_tracker.jsx` | Roadmap / feature tracker component (source; `tracker/index.html` is the deployed page) |
+| `clinical/index.html` | **Clinical console** (`/clinical`) — desktop BCBA surface for assessments + plans |
+| `docs/architecture/assessments_plans_design.md` | Assessment + plan schema, Tatiana's rulings, findings from her real workbooks |
+| `docs/architecture/api_bus_design.md` | f26a/f26b integration bus design |
+| `docs/architecture/phase1_5_plan.md` | m1–m4 ML scope (MLX not bitsandbytes; Qwen not Llama) |
+| `Assessments for BP/` | **PHI — gitignored.** Her real workbooks + a completed plan, used as schema reference |
 
 ## Critical Code.gs constraint
 **ES5 only.** No `??`, no `?.`, no template literals, no arrow functions, no spread `...`,
@@ -46,6 +51,10 @@ ES5 for consistency and safety.
 | Admins | email, name, status |
 | Suspended Sessions | suspendId, therapistEmail, clientId, clientName, sheetId, dateISO, updatedAt, status, stateJson **(v4 pause/resume; transient — NOT synced to BigQuery)** |
 | Parent Alerts | alertId, createdAt, submissionId, dateISO, clientId, clientName, behaviorKey, behaviorLabel, count, threshold, mode, status, recipient, sentAt, sentBy, note **(f54; status = blocked\|pending\|sent\|dismissed\|failed)** |
+| Instruments | instrumentId, version, domain, subdomain, itemCode, label, scoreMin, scoreMax, criterion, sortOrder, status **(f36 — the instrument is DATA, not code)** |
+| Assessments | assessmentId, clientId, clientName, instrumentId, instrumentVersion, administeredDate, assessorEmail, assessorName, status, isBaseline, startedAt, updatedAt, completedAt, itemCount, scoredCount, notes, scoresJson **(f36)** |
+| Assessment Items | assessmentId, clientId, instrumentId, itemCode, domain, subdomain, score, criterion, belowCriterion, administeredDate, dateISO **(f36 — written only at completion)** |
+| Goals | **gained `goalId` (f43b)** — immutable join key, 243 rows migrated Oct 2026 |
 
 **`parentEmail` is a comma-separated list.** `_parseRecipients` validates and
 de-duplicates it, and each recipient is sent a **separate** message — never a
@@ -397,7 +406,19 @@ When Sheets latency becomes noticeable:
 
 ## Version 5 (current) — October 2026
 
-f54 parent alerts, f30 prompt hierarchy + probe flag, session discard.
+Shipped this release: **f54** parent alerts · **f55/f55b** structured session notes ·
+**f30a/b/c** prompt hierarchy, probe flag, timestamps, mastery-at-Independent ·
+**f43b** immutable `goalId` · **f33** BigQuery client coverage · **f36** assessment
+framework · **f57** clinical console · session discard · billing profile alias.
+
+**Behavioural changes to warn the team about:**
+- **No new goal mastery confirms for ~5 sessions per goal** (f30b) — historical
+  sessions carry no prompt level, so the Independent streak starts from zero.
+  Nothing already confirmed is revoked.
+- **Session notes now require every section answered**, not just 150 words total
+  (f55b). Anyone who wrote a long overview and skipped the rest will be stopped.
+
+Full detail and the decision history: `docs/architecture/assessments_plans_design.md`.
 
 ### Parent behavior alerts (f54)
 - Fires in `processSession` AFTER the data is written, wrapped in try/catch — a
@@ -450,6 +471,52 @@ one device and resuming on another is a supported flow.
 `sw.js` is **network-first**, so online clients pick up new code without a cache
 bump; the stale window is only a device that stayed offline across a release.
 Bump `CACHE` anyway on each deploy (currently `rt-aba-v6`).
+
+## Clinical console (`/clinical`, f57)
+
+A **second page, not a second system**: own HTML file, same GAS backend, same
+Google OAuth (shares the `googleAuthCache` key, so a token from either page works
+in the other), same RT Admin config, design tokens copied from `index.html`.
+
+- Role-gated to **admin or bcba** using the same admins-then-therapists precedence
+  as the tracker.
+- `REDIRECT_PATH = '/clinical/'` is pinned so only **one** authorized redirect URI
+  needs registering on the OAuth client. Without it: `redirect_uri_mismatch`.
+- **Admin config editing is NOT duplicated here** — it links out to the app's admin
+  panel. `objectsToSheet` rewrites a config tab from a fixed header list, so two
+  editors of one tab means one silently erasing the other's fields.
+- See `clinical/README.md`.
+
+## Assessment framework (f36)
+
+`Instruments` / `Assessments` / `Assessment Items`, and the split is the point:
+
+- **Draft scores live as `scoresJson` on the header row** — one cell write per
+  autosave. A 500-item assessment cannot write 500 rows per keystroke.
+- **Normalized item rows are written once, at completion**, and are the analysis
+  record. Drafts are not analysis-ready anyway.
+- `saveAssessmentDraft` **refuses** to touch a complete/signed administration: a
+  re-assessment is a new record, never an edit.
+- `completeAssessment` computes `belowCriterion` per item — the gap list that feeds
+  plan creation.
+- `seedRTCoreProbe()` seeds a 12-item practice-authored instrument for testing with
+  zero licensing exposure.
+- **Licensing:** store item **codes and scores**; publisher item text may go into her
+  RT Admin sheet but **never the repo or a shipped config**.
+
+## Billing key hazard
+
+```js
+CFG.BILLING_MATRIX[`${b.profile}|${b.sessionType}`] = b.code
+```
+
+`profile` is **half the billing key**. A new profile value with no Billing rows
+means sessions submit with **no billing code**, breaking the weekly billing report
+and authorization consumed-hours. Use `billingCodeFor(profile, sessionType)` —
+exact key then `BILLING_PROFILE_ALIAS`. `RBT - Student Analyst` aliases to `RBT`.
+
+**Open:** assessment sessions bill under **97151/97152**, which the matrix does not
+contain — so an assessment session cannot currently be billed (blocks f58).
 
 ## Roadmap reference
 
