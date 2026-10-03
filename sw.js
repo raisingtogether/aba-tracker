@@ -1,7 +1,7 @@
 // Raising Together ABA Tracker — Service Worker
 // Bump CACHE on every deploy so clients pick up the new index.html and old
 // caches are purged on activate.
-const CACHE = 'rt-aba-v5';
+const CACHE = 'rt-aba-v6';
 const ASSETS = [
   './',
   './index.html',
