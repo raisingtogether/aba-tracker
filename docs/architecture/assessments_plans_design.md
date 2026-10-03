@@ -248,3 +248,116 @@ survived a few days of normal use.
 **Nothing reads `goalId` yet.** It is written and preserved but not joined on, so this
 migration changes no behaviour — by design. Downstream references move from `code` to
 `goalId` as a separate, later step, once the column is populated and verified.
+
+---
+
+# PART 2 — Reality check against Tatiana's actual workbooks (Oct 3 2026)
+
+Read from her real files. **This supersedes several assumptions in Part 1.** The
+lesson: designing the plan schema from first principles would have been wrong in
+at least two structural ways.
+
+## What she actually uses — six instruments, not two
+
+| Instrument | Shape |
+|---|---|
+| **ABLLS-R** | Baseline / 6-Month / 12-Month / 18-Month tabs + History & Compare + Recommended Goals + Summary Dashboard |
+| **VB-MAPP** | Milestones, Barriers, Milestones Grid, Goal Targets, Graphs |
+| **AFLS** ×3 | Basic Living Skills, Home Skills, Community Participation — each Dashboard/Assessment/Baseline/6/12/18-Month/History/Goals |
+| **QABF** | Per-target-behavior sheets (up to 10), informant-rated, X/0/1/… key |
+| **Family Intake Questionnaire** | 7 sections, her own instrument |
+
+**This vindicates building f36 before f34/f35 more strongly than argued.** Six
+instruments would have been six hand-built screens.
+
+## Finding 1 — administrations are FIXED PERIODS, not free dates
+
+Every instrument uses **Baseline / 6-Month / 12-Month / 18-Month**, and the
+History & Compare tab lays them out as aligned columns with **delta columns**
+(`Δ B→6`, `Δ 6→12`). Part 1 modelled `administeredDate` as a free date, which
+would not produce a comparison grid.
+
+**Change:** add `administrationType` = `baseline | 6-month | 12-month | 18-month |
+ad-hoc`. `isBaseline` becomes a special case of it. Deltas stay computed, never
+stored.
+
+## Finding 2 — the plan's goals are TWO-LEVEL
+
+Part 1 had a flat `plan_goal`. The real template is a hierarchy:
+
+```
+Long Term Objective        Domain | Description | Status
+  └─ Short Term Objective  Target Behavior | Short Term Objective | Measure |
+                           Status | Baseline | Initiation Date | Current Level
+```
+
+**Change:** `plan_lto` and `plan_sto`, with `plan_sto.goalId` linking to the goal
+registry. An LTO is narrative and has no trial data behind it — which answers the
+Part 1 open question "can an objective be narrative-only": yes, at the LTO level.
+
+## Finding 3 — she already does f39, by hand
+
+The **Recommended Goals** tab is `Task | Skill Name | Max | Score | Status |
+Mastery Criteria | IEP Goal | BCBA Notes`, with `IEP Goal` = *Pending* and a free
+BCBA note per item.
+
+So the gap→goal decision is **an annotation on the assessment item**, not a
+separate recommendation table. That is simpler than Part 1 proposed.
+
+**Change:** `Assessment Items` gains `iepGoalStatus` (`pending | selected |
+declined`) and `bcbaNote`. f39 becomes "compute status, let her annotate" rather
+than a new entity.
+
+## Finding 4 — the item model needs one more column
+
+ABLLS-R items are `Task | Skill Name | Max | Score | % Score | Status | Mastery
+Criteria | Notes | Domain`, and **`Max` varies per item** (2.0, 4.0 …) — already
+handled by per-item `scoreMin`/`scoreMax`. But each item also carries a **text
+mastery-criteria anchor** ("4 = takes within 3 sec, all the time; 2 = sometimes…")
+which is what makes scoring consistent between scorers.
+
+**Change:** `Instruments` gains `masteryCriteria` (text). Note this is publisher
+item text, so it falls under the licensing decision — see below.
+
+## Finding 5 — "Curricular assessments" IS the assessment→plan bridge
+
+A plan sheet already exists: `Assessment | Date | Results | Target Goals`. The
+link we were designing is one she already draws manually. Build it as that sheet.
+
+## Finding 6 — the Lists sheet is a controlled vocabulary we should adopt
+
+`Sex · Language · Diagnosis (ICD-10, e.g. F84.0) · FundingSource · ServiceType ·
+AssessmentTool (QABF/FAST/MAS/ABC Data/Structured Interview) ·
+HypothesizedFunction · BehaviorCategory · SupportLevel · measure dimensions
+(Rate, Latency)`.
+
+Two conflicts to resolve:
+1. **`SupportLevel` (Independent / Minimal / Moderate / Full) is NOT the f30a
+   prompt hierarchy (I/VT/G/V/M/PP/FP).** Two different support scales now exist
+   in the system. Either map them explicitly or pick one — silently keeping both
+   will produce two incompatible answers to "how much support does this child
+   need".
+2. `HypothesizedFunction` must match the ABC incident list already in the app (q15).
+
+## Finding 7 — fields the app does not have but the plan needs
+
+- `Behaviors`: **no topographical (operational) definition.** The plan requires
+  one per target behavior, and it is what makes two scorers agree.
+- `Clients`: no DOB, diagnosis, address, phone, funding source, service type, or
+  requested date range — all present on the plan's General Info sheet.
+- Behavior measurement: the app records frequency and duration; the plan allows
+  **Rate** and **Latency** dimensions.
+
+## Licensing, revisited now that the forms are visible
+
+Her workbooks contain the publishers' `Skill Name` and `Mastery Criteria` text.
+She is licensed for that. The open question is whether **our** system stores it:
+
+- Storing it in **her own RT Admin sheet** is arguably equivalent to her existing
+  workbook — same account, same practice, no redistribution.
+- Storing it in **our repo or a shipped config** would be redistribution, and
+  would become a real problem the moment the app is multi-tenant or sold.
+
+**Recommendation:** import item text into her RT Admin sheet (so scoring is
+usable), but never commit instrument text to the repo and never ship it in a
+default config. The repo keeps codes, maxima and structure only.
