@@ -4436,3 +4436,53 @@ function rollbackGoalsFromBackup(backupTabName) {
     return { restored: data.length - 1, from: name };
   } finally { lock.releaseLock(); }
 }
+
+
+// ── RUNNABLE WRAPPERS ─────────────────────────────────────────────────
+/**
+ * The Apps Script editor's Run dropdown cannot pass arguments, so a function
+ * that needs one is effectively un-runnable from the UI. These no-arg wrappers
+ * exist so the migration runbook can be executed by selecting a name and
+ * pressing Run.
+ */
+
+/** Step 3 — the real write. migrateGoalIds alone would only ever dry-run here. */
+function migrateGoalIdsNow() {
+  return migrateGoalIds(false);
+}
+
+/** Most recent Goals_backup_* tab, or null. */
+function _latestGoalsBackupName() {
+  var ss     = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var sheets = ss.getSheets();
+  var best   = null;
+  for (var i = 0; i < sheets.length; i++) {
+    var n = sheets[i].getName();
+    if (n.indexOf('Goals_backup_') !== 0) continue;
+    if (!best || n > best) best = n;   // names are timestamped, so string order = chronological
+  }
+  return best;
+}
+
+/** Rollback without having to type the backup name. Uses the newest backup. */
+function rollbackGoalsToLatestBackup() {
+  var name = _latestGoalsBackupName();
+  if (!name) throw new Error('No Goals_backup_* tab found — nothing to roll back to.');
+  Logger.log('Rolling back from the most recent backup: ' + name);
+  return rollbackGoalsFromBackup(name);
+}
+
+/** Read-only: list the backups that exist, newest first. */
+function listGoalsBackups() {
+  var ss     = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var sheets = ss.getSheets();
+  var names  = [];
+  for (var i = 0; i < sheets.length; i++) {
+    var n = sheets[i].getName();
+    if (n.indexOf('Goals_backup_') === 0) names.push(n);
+  }
+  names.sort().reverse();
+  Logger.log(names.length ? 'Goals backups (newest first):\n  ' + names.join('\n  ')
+                          : 'No Goals_backup_* tabs found.');
+  return names;
+}

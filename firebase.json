@@ -13,7 +13,14 @@
       "docs/**"
     ],
     "rewrites": [
-      { "source": "/tracker", "destination": "/tracker/index.html" }
+      {
+        "source": "/tracker",
+        "destination": "/tracker/index.html"
+      },
+      {
+        "source": "/clinical",
+        "destination": "/clinical/index.html"
+      }
     ]
   }
 }

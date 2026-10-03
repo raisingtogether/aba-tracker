@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RT Clinical Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+  /* Design tokens are COPIED from index.html deliberately — the console is the
+     same product on a larger screen, not a second visual language. Keep these in
+     step with the app's :root block. */
+  :root {
+    --primary:   #00A7C7;
+    --secondary: #FF9701;
+    --accent:    #F1196E;
+    --bg:        #F0F5F7;
+    --white:     #FFFFFF;
+    --g100: #EDF2F4;
+    --g200: #D8E2E6;
+    --g400: #96B0BA;
+    --g600: #5A7D8A;
+    --g800: #1E3540;
+    --success: #22C55E;
+    --danger:  #EF4444;
+    --shadow: 0 2px 12px rgba(0,80,100,0.08);
+    --shadow-lg: 0 8px 28px rgba(0,80,100,0.14);
+    --r: 16px; --r-sm: 10px;
+    --sidebar: 268px;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: 'Nunito', -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg); color: var(--g800); font-size: 15px; line-height: 1.55;
+  }
+  button { font-family: inherit; cursor: pointer; }
+  a { color: var(--primary); }
+  :focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+  /* ── screens ── */
+  .screen { display: none; }
+  .screen.active { display: block; }
+
+  /* ── sign-in ── */
+  #screen-signin.active { display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 24px; }
+  .signin-card {
+    background: var(--white); border-radius: var(--r); box-shadow: var(--shadow-lg);
+    padding: 40px; max-width: 420px; width: 100%; text-align: center;
+  }
+  .brand { font-size: 13px; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; color: var(--primary); margin-bottom: 10px; }
+  .signin-card h1 { font-size: 26px; font-weight: 900; color: var(--g800); margin-bottom: 8px; }
+  .signin-card p { color: var(--g600); font-size: 14.5px; margin-bottom: 26px; }
+  .btn {
+    border: none; border-radius: var(--r-sm); font-weight: 800; font-size: 15px;
+    padding: 14px 22px; background: var(--primary); color: #fff; width: 100%;
+  }
+  .btn:hover { filter: brightness(1.06); }
+  .btn.ghost { background: transparent; color: var(--g600); border: 2px solid var(--g200); }
+  .btn.sm { width: auto; padding: 8px 14px; font-size: 13px; }
+  .note { font-size: 12.5px; color: var(--g400); margin-top: 18px; }
+  .err {
+    background: #FEF2F2; border: 1px solid #FECACA; color: #991B1B;
+    border-radius: var(--r-sm); padding: 12px 14px; font-size: 13.5px;
+    margin-bottom: 18px; text-align: left; display: none;
+  }
+  .err[data-show="1"] { display: block; }
+
+  /* ── app frame ── */
+  #screen-app.active { display: grid; grid-template-columns: var(--sidebar) 1fr; min-height: 100vh; }
+  aside {
+    background: var(--white); border-right: 1px solid var(--g200);
+    display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh;
+  }
+  .side-head { padding: 20px 20px 16px; border-bottom: 1px solid var(--g100); }
+  .side-head .brand { margin-bottom: 4px; }
+  .side-head .who { font-size: 13px; color: var(--g600); word-break: break-word; }
+  .side-head .role {
+    display: inline-block; margin-top: 7px; font-size: 10.5px; font-weight: 800;
+    letter-spacing: .1em; text-transform: uppercase; color: var(--primary);
+    background: rgba(0,167,199,.12); border-radius: 99px; padding: 3px 9px;
+  }
+
+  .side-sec { padding: 16px 14px 6px; }
+  .side-lbl { font-size: 10.5px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; color: var(--g400); padding: 0 6px 8px; }
+  .client-list { display: flex; flex-direction: column; gap: 3px; overflow-y: auto; }
+  .client-btn {
+    display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+    background: transparent; border: none; border-radius: var(--r-sm);
+    padding: 9px 10px; color: var(--g800); font-size: 14.5px; font-weight: 700;
+  }
+  .client-btn:hover { background: var(--g100); }
+  .client-btn[aria-current="true"] { background: var(--primary); color: #fff; }
+  .av {
+    width: 30px; height: 30px; border-radius: 50%; flex: none;
+    background: var(--g200); color: var(--g800);
+    font-size: 12px; font-weight: 900; display: flex; align-items: center; justify-content: center;
+  }
+  .client-btn[aria-current="true"] .av { background: rgba(255,255,255,.26); color: #fff; }
+  .client-btn .st { font-size: 10.5px; font-weight: 800; color: var(--g400); margin-left: auto; text-transform: uppercase; letter-spacing: .06em; }
+  .client-btn[aria-current="true"] .st { color: rgba(255,255,255,.8); }
+
+  nav { display: flex; flex-direction: column; gap: 2px; padding: 6px 14px 14px; }
+  .nav-btn {
+    display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
+    background: transparent; border: none; border-radius: var(--r-sm);
+    padding: 10px 10px; color: var(--g600); font-size: 14.5px; font-weight: 700;
+  }
+  .nav-btn:hover { background: var(--g100); color: var(--g800); }
+  .nav-btn[aria-current="true"] { background: var(--g100); color: var(--g800); }
+  .nav-btn .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--g200); flex: none; }
+  .nav-btn[aria-current="true"] .dot { background: var(--primary); }
+  .nav-btn .soon { margin-left: auto; font-size: 9.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--secondary); }
+  .side-foot { margin-top: auto; padding: 14px; border-top: 1px solid var(--g100); }
+
+  /* ── main ── */
+  main { padding: 0 0 60px; min-width: 0; }
+  .topbar {
+    background: var(--white); border-bottom: 1px solid var(--g200);
+    padding: 18px 32px; display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+    position: sticky; top: 0; z-index: 5;
+  }
+  .topbar h1 { font-size: 22px; font-weight: 900; color: var(--g800); }
+  .topbar .ctx { font-size: 14px; color: var(--g600); }
+  .topbar .ctx b { color: var(--g800); }
+  .inner { padding: 28px 32px; max-width: 1080px; }
+
+  .panel { background: var(--white); border-radius: var(--r); box-shadow: var(--shadow); padding: 26px 28px; margin-bottom: 18px; }
+  .panel h2 { font-size: 17px; font-weight: 900; color: var(--g800); margin-bottom: 6px; }
+  .panel p { color: var(--g600); font-size: 14.5px; margin-bottom: 12px; max-width: 70ch; }
+  .panel p:last-child { margin-bottom: 0; }
+  .roadmap {
+    display: inline-block; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11.5px; font-weight: 600; background: var(--g100); color: var(--g600);
+    border-radius: 5px; padding: 2px 7px; margin-right: 6px;
+  }
+  ul.plain { margin: 8px 0 0 18px; color: var(--g600); font-size: 14.5px; }
+  ul.plain li { margin-bottom: 6px; }
+
+  .stats { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin-bottom: 18px; }
+  .stat { background: var(--white); border-radius: var(--r); box-shadow: var(--shadow); padding: 18px 20px; }
+  .stat .k { font-size: 10.5px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: var(--g400); }
+  .stat .v { font-size: 27px; font-weight: 900; color: var(--g800); line-height: 1.15; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .stat .s { font-size: 12.5px; color: var(--g600); }
+
+  .empty { text-align: center; padding: 46px 20px; color: var(--g400); }
+  .empty .big { font-size: 17px; font-weight: 800; color: var(--g600); margin-bottom: 6px; }
+
+  #loading { position: fixed; inset: 0; background: rgba(240,245,247,.94); display: none; align-items: center; justify-content: center; z-index: 50; }
+  #loading[data-show="1"] { display: flex; }
+  .spin { width: 34px; height: 34px; border: 3px solid var(--g200); border-top-color: var(--primary); border-radius: 50%; animation: sp .8s linear infinite; }
+  @keyframes sp { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+
+  @media (max-width: 860px) {
+    #screen-app.active { grid-template-columns: 1fr; }
+    aside { position: static; height: auto; border-right: none; border-bottom: 1px solid var(--g200); }
+    .topbar, .inner { padding-left: 18px; padding-right: 18px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="loading"><div class="spin" role="status" aria-label="Loading"></div></div>
+
+<!-- ─── SIGN IN ─────────────────────────────────────────────── -->
+<section class="screen active" id="screen-signin">
+  <div class="signin-card">
+    <div class="brand">Raising Together</div>
+    <h1>Clinical Console</h1>
+    <p>Assessments and behavioral plans. For BCBA and admin use on a computer &mdash;
+      session data collection stays in the tracker app.</p>
+    <div class="err" id="signin-err"></div>
+    <button class="btn" id="btn-signin">Sign in with Google</button>
+    <button class="btn ghost" id="btn-open-tracker" style="margin-top:10px">Open the tracker app instead</button>
+    <p class="note">Uses the same Google account as the tracker. If you are already signed in
+      there on this browser, this should sign you in automatically.</p>
+  </div>
+</section>
+
+<!-- ─── APP ─────────────────────────────────────────────────── -->
+<section class="screen" id="screen-app">
+  <aside>
+    <div class="side-head">
+      <div class="brand">Raising Together</div>
+      <div class="who" id="who">&mdash;</div>
+      <span class="role" id="role">&mdash;</span>
+    </div>
+
+    <div class="side-sec">
+      <div class="side-lbl">Client</div>
+      <div class="client-list" id="client-list"></div>
+    </div>
+
+    <nav id="nav" aria-label="Sections">
+      <div class="side-lbl" style="padding-top:10px">Sections</div>
+      <button class="nav-btn" data-view="overview" aria-current="true"><span class="dot"></span>Overview</button>
+      <button class="nav-btn" data-view="assessments"><span class="dot"></span>Assessments<span class="soon">f34</span></button>
+      <button class="nav-btn" data-view="plans"><span class="dot"></span>Behavioral plans<span class="soon">f38</span></button>
+      <button class="nav-btn" data-view="goals"><span class="dot"></span>Goals<span class="soon">f40</span></button>
+    </nav>
+
+    <div class="side-foot">
+      <button class="btn ghost sm" id="btn-signout" style="width:100%">Sign out</button>
+    </div>
+  </aside>
+
+  <main>
+    <div class="topbar">
+      <h1 id="view-title">Overview</h1>
+      <div class="ctx" id="view-ctx"></div>
+    </div>
+    <div class="inner" id="view-body"></div>
+  </main>
+</section>
+
+<script>
+// ─────────────────────────────────────────────────────────────
+// RT CLINICAL CONSOLE — shell (f36 scaffold)
+//
+// A SECOND PAGE, not a second system: same GAS backend, same Google OAuth, same
+// design tokens, same RT Admin config store. Only the layout and the audience
+// differ — this is desktop BCBA work, which does not belong in a mobile bundle
+// an RBT downloads to collect data one-handed.
+//
+// Nothing clinical is implemented yet, on purpose. Auth, config load, client
+// selection and navigation are the parts every later section depends on, so they
+// get built and verified first.
+// ─────────────────────────────────────────────────────────────
+
+var GAS_URL = 'https://script.google.com/macros/s/AKfycbz8AJ-6WIoNdBNh-z3iuT9BXNnw3r95gTqONo78wpTJDXQ9QPGaIp_fmR6gjZlB2yQf/exec';
+var GOOGLE_CLIENT_ID = '145308926221-3kvhum1t0goo9s97kbtrqo98nq4vn09s.apps.googleusercontent.com';
+
+// Shared with the tracker: same origin, so a token obtained in either page works
+// in the other, and signing out of one signs out of both.
+var TOKEN_KEY = 'googleAuthCache';
+
+// Google matches redirect_uri EXACTLY, and '/clinical' vs '/clinical/' are two
+// different strings. Pinning it to one canonical path means a single authorized
+// redirect URI to register instead of two to keep in step.
+var REDIRECT_PATH = '/clinical/';
+
+var AUTH   = { user: null, role: null };
+var CONFIG = null;
+var CLIENT = null;
+var VIEW   = 'overview';
+
+// ── helpers ──
+function $(id) { return document.getElementById(id); }
+function show(id) {
+  var list = document.querySelectorAll('.screen');
+  for (var i = 0; i < list.length; i++) list[i].classList.remove('active');
+  $(id).classList.add('active');
+}
+function busy(on) { $('loading').dataset.show = on ? '1' : ''; }
+function fail(msg) {
+  var el = $('signin-err');
+  el.textContent = msg;
+  el.dataset.show = '1';
+  show('screen-signin');
+  busy(false);
+}
+function esc(s) {
+  var d = document.createElement('div');
+  d.textContent = String(s === null || s === undefined ? '' : s);
+  return d.innerHTML;
+}
+function initialsOf(name) {
+  var parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return '?';
+  return (parts[0][0] + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
+}
+
+// ── token cache (same shape and key as the tracker) ──
+function readToken() {
+  try {
+    var raw = localStorage.getItem(TOKEN_KEY);
+    if (!raw) return null;
+    var o = JSON.parse(raw);
+    if (!o || !o.token || Date.now() > o.expiry) { localStorage.removeItem(TOKEN_KEY); return null; }
+    return o.token;
+  } catch (e) { return null; }
+}
+function writeToken(token) {
+  try {
+    localStorage.setItem(TOKEN_KEY, JSON.stringify({ token: token, expiry: Date.now() + 55 * 60 * 1000 }));
+  } catch (e) {}
+}
+function clearToken() { try { localStorage.removeItem(TOKEN_KEY); } catch (e) {} }
+
+// ── OAuth ──
+// redirect_uri is origin + pathname, so THIS PAGE'S PATH must be registered as an
+// authorized redirect URI on the Google OAuth client, or sign-in fails with
+// redirect_uri_mismatch. See clinical/README.md.
+function startSignIn() {
+  var redirect = window.location.origin + REDIRECT_PATH;
+  window.location.href = 'https://accounts.google.com/o/oauth2/v2/auth' +
+    '?client_id='    + encodeURIComponent(GOOGLE_CLIENT_ID) +
+    '&redirect_uri=' + encodeURIComponent(redirect) +
+    '&response_type=token' +
+    '&scope='        + encodeURIComponent('email profile') +
+    '&prompt=select_account';
+}
+
+function tokenFromHash() {
+  if (!window.location.hash) return null;
+  var p = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+  var t = p.get('access_token');
+  if (t) history.replaceState(null, '', window.location.pathname + window.location.search);
+  return t;
+}
+
+async function post(payload) {
+  var resp = await fetch(GAS_URL, {
+    method: 'POST', headers: { 'Content-Type': 'text/plain' }, redirect: 'follow',
+    body: JSON.stringify(payload)
+  });
+  return resp.json();
+}
+
+// ── boot ──
+async function boot() {
+  var token = tokenFromHash() || readToken();
+  if (!token) { show('screen-signin'); return; }
+
+  busy(true);
+  var info;
+  try {
+    var r = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (!r.ok) { clearToken(); fail('Your session expired. Please sign in again.'); return; }
+    info = await r.json();
+  } catch (e) { fail('Could not reach Google to verify sign-in. Check your connection.'); return; }
+
+  var email = String(info.email || '').toLowerCase();
+  if (!email) { clearToken(); fail('Google did not return an email address.'); return; }
+  writeToken(token);
+
+  var cfg;
+  try {
+    var res = await post({ action: 'getConfig' });
+    if (!res || !res.success) { fail('Could not load configuration: ' + ((res && res.error) || 'unknown error')); return; }
+    cfg = res.config || {};
+  } catch (e) { fail('Could not reach the backend. Check your connection.'); return; }
+
+  CONFIG = cfg;
+
+  // Role: admins list first, then the therapists table — the same precedence the
+  // tracker uses, so one person cannot be admin in one page and not the other.
+  var role = null, displayName = info.name || email;
+
+  var admins = (cfg.admins || []).filter(function (a) { return String(a.status || 'active') !== 'inactive'; });
+  for (var i = 0; i < admins.length; i++) {
+    if (String(admins[i].email || '').toLowerCase() === email) {
+      role = 'admin';
+      displayName = info.name || admins[i].name || email;
+      break;
+    }
+  }
+  if (!role) {
+    var ts = cfg.therapists || [];
+    for (var j = 0; j < ts.length; j++) {
+      if (String(ts[j].email || '').toLowerCase() === email &&
+          String(ts[j].status || 'active') !== 'inactive') {
+        role = String(ts[j].role || 'collector').toLowerCase();
+        displayName = info.name || ts[j].name || email;
+        break;
+      }
+    }
+  }
+
+  if (role !== 'admin' && role !== 'bcba') {
+    // Deliberately a dead end rather than a degraded view: there is nothing here
+    // for an RBT, and a half-usable clinical console would be worse than none.
+    clearToken();
+    fail(role
+      ? 'This console is for BCBA and admin accounts. Your account (' + email + ') signs in to the tracker app instead.'
+      : 'Account ' + email + ' was not found in RT Admin. Ask an administrator to add it.');
+    return;
+  }
+
+  AUTH = { user: { email: email, name: displayName }, role: role };
+  logAudit('clinical_console_login', '', 'role=' + role);
+
+  $('who').textContent  = displayName;
+  $('role').textContent = role;
+  renderClients();
+  render();
+  show('screen-app');
+  busy(false);
+}
+
+function logAudit(action, clientName, details) {
+  // Fire and forget — never block the UI on the audit write.
+  post({
+    action: 'logAudit',
+    userId: AUTH.user ? AUTH.user.email : '',
+    auditAction: action,
+    clientName: clientName || '',
+    details: details || ''
+  }).catch(function () {});
+}
+
+// ── client picker ──
+function activeClients() {
+  return (CONFIG && CONFIG.clients ? CONFIG.clients : []).filter(function (c) {
+    return String(c.name || '').trim();
+  });
+}
+
+function renderClients() {
+  var list = activeClients();
+  var wrap = $('client-list');
+  wrap.innerHTML = '';
+  if (!list.length) {
+    wrap.innerHTML = '<div style="padding:8px 10px;color:var(--g400);font-size:13.5px">No clients configured.</div>';
+    return;
+  }
+  list.forEach(function (c) {
+    var inactive = String(c.status || 'active').toLowerCase() === 'inactive';
+    var b = document.createElement('button');
+    b.className = 'client-btn';
+    b.setAttribute('aria-current', CLIENT && CLIENT.id === c.id ? 'true' : 'false');
+    b.innerHTML = '<span class="av">' + esc(c.initials || initialsOf(c.name)) + '</span>' +
+                  '<span>' + esc(c.name) + '</span>' +
+                  (inactive ? '<span class="st">Discharged</span>' : '');
+    b.addEventListener('click', function () {
+      CLIENT = c;
+      renderClients();
+      render();
+      logAudit('clinical_client_selected', c.name || '', 'console');
+    });
+    wrap.appendChild(b);
+  });
+}
+
+// ── views ──
+var VIEWS = {
+  overview:    { title: 'Overview',         needsClient: false },
+  assessments: { title: 'Assessments',      needsClient: true  },
+  plans:       { title: 'Behavioral plans', needsClient: true  },
+  goals:       { title: 'Goals',            needsClient: true  }
+};
+
+document.addEventListener('click', function (e) {
+  var btn = e.target.closest ? e.target.closest('.nav-btn') : null;
+  if (!btn) return;
+  VIEW = btn.dataset.view;
+  var all = document.querySelectorAll('.nav-btn');
+  for (var i = 0; i < all.length; i++) {
+    all[i].setAttribute('aria-current', all[i] === btn ? 'true' : 'false');
+  }
+  render();
+});
+
+function render() {
+  var v = VIEWS[VIEW] || VIEWS.overview;
+  $('view-title').textContent = v.title;
+  $('view-ctx').innerHTML = CLIENT
+    ? 'for <b>' + esc(CLIENT.name) + '</b>'
+    : (v.needsClient ? '<span style="color:var(--secondary)">select a client</span>' : '');
+
+  if (v.needsClient && !CLIENT) {
+    $('view-body').innerHTML =
+      '<div class="panel"><div class="empty">' +
+        '<div class="big">Choose a client first</div>' +
+        '<div>' + esc(v.title) + ' are recorded per client. Pick one from the list on the left.</div>' +
+      '</div></div>';
+    return;
+  }
+  if (VIEW === 'overview') { renderOverview(); return; }
+  renderStub(v.title);
+}
+
+function renderOverview() {
+  var clients = activeClients();
+  var current = clients.filter(function (c) { return String(c.status || 'active').toLowerCase() !== 'inactive'; });
+  var goals   = (CONFIG.goals || []);
+  var myGoals = CLIENT
+    ? goals.filter(function (g) {
+        var ids = String(g.clientIds || g.clientId || '');
+        return ids.indexOf(CLIENT.id) >= 0;
+      })
+    : [];
+  var withId = goals.filter(function (g) { return String(g.goalId || '').trim(); }).length;
+
+  $('view-body').innerHTML =
+    '<div class="stats">' +
+      stat('Clients', current.length, clients.length - current.length ? (clients.length - current.length) + ' discharged' : 'all current') +
+      stat('Goals configured', goals.length, CLIENT ? myGoals.length + ' for ' + esc(CLIENT.name) : 'across all clients') +
+      stat('Behaviors', (CONFIG.behaviors || []).length, 'tracked definitions') +
+      stat('Goals with a stable id', withId + ' / ' + goals.length, withId === goals.length ? 'migration complete' : 'migration pending') +
+    '</div>' +
+
+    '<div class="panel">' +
+      '<h2>What this console is for</h2>' +
+      '<p>Assessment scoring and behavioral-plan authoring &mdash; work that needs a keyboard, a large ' +
+      'screen and a long sitting. Session data collection stays in the tracker app on the phone, which ' +
+      'is where it belongs.</p>' +
+      '<p>It reads the same configuration and writes through the same backend, so there is one source ' +
+      'of truth. Nothing here duplicates the tracker.</p>' +
+    '</div>' +
+
+    '<div class="panel">' +
+      '<h2>Being built next</h2>' +
+      '<p><span class="roadmap">f36</span>The instrument framework &mdash; a renderer driven by a ' +
+      'definition sheet, so ABLLS-R and VB-MAPP are <em>data</em> rather than two hand-built screens.</p>' +
+      '<p><span class="roadmap">f34</span>ABLLS-R as a definition file. Item <strong>codes and scores ' +
+      'only</strong>; wording stays in the licensed materials the practice owns.</p>' +
+      '<p><span class="roadmap">f38</span><span class="roadmap">f39</span>Plan generator with ' +
+      'rule-based goal suggestion &mdash; items below criterion become ranked candidates that the BCBA ' +
+      'edits before anything is committed.</p>' +
+    '</div>';
+}
+
+function stat(k, v, s) {
+  return '<div class="stat"><div class="k">' + esc(k) + '</div>' +
+         '<div class="v">' + esc(v) + '</div><div class="s">' + s + '</div></div>';
+}
+
+function renderStub(title) {
+  var detail = {
+    'Assessments': {
+      ids: ['f36', 'f34', 'f37'],
+      lines: [
+        'Pick an instrument and start an administration, or carry forward the previous scores as a starting point for a re-assessment.',
+        'Partial entry is saved continuously &mdash; several hundred items is not one sitting.',
+        'Completed administrations are immutable. A re-assessment is a new record, never an edit of the old one, which is what makes comparison possible and what an insurer expects.'
+      ]
+    },
+    'Behavioral plans': {
+      ids: ['f38', 'f39', 'f41'],
+      lines: [
+        'Draft a plan from the most recent completed assessment: items below criterion become ranked candidate objectives.',
+        'Every suggestion is edited and approved by you before it becomes a goal. Suggestion, never automation.',
+        'Plans are versioned and never edited in place, so the version in force on any given date stays readable.'
+      ]
+    },
+    'Goals': {
+      ids: ['f40'],
+      lines: [
+        'See which goals came from which assessment item, and which plan version introduced them.',
+        'Goals stay the single source of truth for what the RBT collects. A plan references a goal and adds clinical context &mdash; baseline, target, review date &mdash; it never becomes a second definition.'
+      ]
+    }
+  }[title] || { ids: [], lines: [] };
+
+  $('view-body').innerHTML =
+    '<div class="panel">' +
+      '<h2>' + esc(title) + '</h2>' +
+      '<p>' + detail.ids.map(function (i) { return '<span class="roadmap">' + i + '</span>'; }).join('') +
+      'Not built yet. This is the shell &mdash; auth, client selection and navigation &mdash; so the ' +
+      'sections below have somewhere to live.</p>' +
+      '<p style="margin-top:14px"><strong>When it is built, here it will:</strong></p>' +
+      '<ul class="plain">' + detail.lines.map(function (l) { return '<li>' + l + '</li>'; }).join('') + '</ul>' +
+    '</div>';
+}
+
+// ── wiring ──
+$('btn-signin').addEventListener('click', startSignIn);
+$('btn-open-tracker').addEventListener('click', function () { window.location.href = '/'; });
+$('btn-signout').addEventListener('click', function () {
+  logAudit('clinical_console_logout', '', '');
+  clearToken();
+  AUTH = { user: null, role: null }; CONFIG = null; CLIENT = null;
+  window.location.href = REDIRECT_PATH;
+});
+
+boot();
+</script>
+</body>
+</html>
