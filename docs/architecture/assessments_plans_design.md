@@ -361,3 +361,93 @@ She is licensed for that. The open question is whether **our** system stores it:
 **Recommendation:** import item text into her RT Admin sheet (so scoring is
 usable), but never commit instrument text to the repo and never ship it in a
 default config. The repo keeps codes, maxima and structure only.
+
+---
+
+# PART 3 — Tatiana's answers (Oct 3 2026)
+
+Answered directly in the design-review page. All eight questions plus the five
+closing asks. **Q1, Q3, Q4, Q5, Q6, Q7 agreed as recommended.** The rest refine
+or change the plan.
+
+## Q2 — who may score, refined
+
+> *"They score, still needs Tatiana approval."*
+
+Not quite either option offered. Student analysts **score directly** — the score
+is recorded as entered — but it is **pending her approval** until she confirms it.
+So an assessment item carries an approval state, and this mirrors the behavior
+mastery workflow exactly: the system records, the BCBA confirms.
+
+**Implication:** `Assessment Items` needs `approvalStatus`
+(`pending | approved | amended`), `approvedBy`, `approvalDate` — the same four
+columns the Mastery Log gained in q17. An administration is not *complete* until
+its session-scored items are approved.
+
+## Q8 — next objective, refined and now very concrete
+
+> *"Give me the next 3-5 instrument sequence, I will pick one from there."*
+
+She does not want a single recommendation; she wants a **shortlist of 3 to 5 in
+instrument sequence** and will choose. That is **Tier 0 exactly**, and it removes
+any need for a model to pick a winner — the ranking only has to be good enough to
+put the right item in a shortlist of five.
+
+This makes f61 considerably easier and more honest than first scoped.
+
+## Instrument order — VB-MAPP first, not ABLLS-R
+
+> *"Lets use to prove the whole loop VBMAPP it is shorter than ablls"*
+
+**f35 moves ahead of f34.** VB-MAPP (~170 milestones) proves the loop faster than
+ABLLS-R (500+). Reorder: f36 (done) → **f35** → f37 → f38/f39.
+
+## BAA — confirmed for Gmail and Drive
+
+So parent alert emails may go to real families once the sending address is
+chosen, and uploaded assessment PDFs may live in the practice Drive. The From
+address is now the only thing still blocking f54 from real use.
+
+## Student analyst — a profile value, not a credential column
+
+> *"add a profile option in the therapist profile in the admin panel called
+> RBT - Student Analyst"*
+
+Simpler than the `credential` column proposed in Part 1, and it reuses a field
+that already exists. **But it has a billing consequence that must be handled
+first.**
+
+```
+CFG.BILLING_MATRIX[`${b.profile}|${b.sessionType}`] = b.code
+```
+
+`profile` is **half the billing key**, and the Billing tab only has rows for
+`RBT` and `BCBA`. Add the profile without adding Billing rows and every session
+run by a student analyst submits with **no billing code** — which flows into
+`Time In Time Out`, `sessions.billing_code` in BigQuery, the weekly billing
+report, and authorization consumed-hours tracking. The practice would silently
+fail to bill those sessions and authorization utilisation would be wrong.
+
+**So this is not a one-line change.** Before the profile option ships, Billing
+needs rows for `RBT - Student Analyst` against each session type — and *which
+codes apply is a billing question only Tatiana can answer* (a student analyst may
+bill as a technician under 97153, or as an assistant under supervision, depending
+on credential and payer).
+
+## New requirement — plan approval pushes goals automatically
+
+> *"once a behavioral plan is finalized and approved the goals should be
+> automatically transfered to the tracker app for the sessions"*
+
+This is **seam A, and it is automatic** — not a manual "create goal" step. On
+finalise/approve, every short-term objective creates or links its row in the goal
+registry, and it appears on the RBT's trial screen from the next session.
+
+Consequences worth stating:
+- **Approval becomes a real state transition**, not a signature. `draft →
+  approved` is the event that writes goals.
+- Per Q5, a shared goal gets a **per-client copy** at that moment.
+- Un-approving must not orphan collected data: a goal that already has trial rows
+  is **deactivated**, never deleted.
+- Writing goals is a config write, so it goes through the same lock as every
+  other `saveConfig`, and must preserve `goalId` on existing rows.
