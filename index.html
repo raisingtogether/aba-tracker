@@ -994,8 +994,9 @@
     </div>
     <div class="card">
       <div class="card-ttl">Session Notes</div>
-      <div class="notes-hint">Answer each section. Your typing is saved continuously &mdash; you can switch tabs or
-        leave the app and come back without losing anything (minimum 150 content words overall).</div>
+      <div class="notes-hint">Every section must be answered &mdash; write <strong>None</strong> where it does not
+        apply. Your typing is saved continuously, so you can switch tabs or leave the app and come back without
+        losing anything (minimum 150 content words overall).</div>
       <div id="notes-form"></div>
       <div class="form-group" id="nf-extra-wrap" style="display:none">
         <label class="form-lbl" for="nf-extra">Additional notes</label>
@@ -1007,6 +1008,7 @@
            count) keeps reading exactly what it always read. -->
       <textarea id="session-notes" style="display:none" aria-hidden="true"></textarea>
       <div class="word-count" id="notes-word-count">0 / 150 words</div>
+      <div id="notes-missing" style="display:none;font-size:11.5px;color:var(--danger);font-weight:700;margin-top:4px"></div>
     </div>
     <div class="card" id="parent-sig-card">
       <div class="card-ttl">&#9997;&#65039; Parent / Guardian Signature</div>
@@ -2885,15 +2887,44 @@ const NOTES_MIN_WORDS = 150;
 // row are untouched. NOTES_SECTIONS[].header must stay in step with
 // NOTES_TEMPLATE_HEADERS, which countWords() strips before counting.
 const NOTES_SECTIONS = [
-  { id:'ov',        header:'SESSION OVERVIEW:',               hint:'Overall session flow and client presentation' },
-  { id:'skill',     header:'SKILL ACQUISITION & PROGRAMS:',   hint:'Goals targeted, prompting levels, and progress' },
-  { id:'behav',     header:'BEHAVIOR SUMMARY:',               hint:'Frequency and intensity of target behaviors' },
-  { id:'interv',    header:'INTERVENTIONS & STRATEGIES USED:',hint:'Specific ABA strategies applied' },
-  { id:'engage',    header:'ENGAGEMENT & RESPONSE:',          hint:"Client's engagement level and responsiveness" },
-  { id:'caregiver', header:'CAREGIVER INVOLVEMENT:',          hint:'Any parent/caregiver participation or training' },
-  { id:'safety',    header:'SAFETY INCIDENTS:',               hint:'Any safety concerns or incidents — write None if N/A' },
-  { id:'focus',     header:'FOCUS FOR NEXT SESSION:',         hint:'Priorities and goals for the next session' }
+  { id:'ov',        header:'SESSION OVERVIEW:',                label:'Session overview',             hint:'Overall session flow and client presentation' },
+  { id:'skill',     header:'SKILL ACQUISITION & PROGRAMS:',    label:'Skill acquisition & programs', hint:'Goals targeted, prompting levels, and progress' },
+  { id:'behav',     header:'BEHAVIOR SUMMARY:',                label:'Behavior summary',             hint:'Frequency and intensity of target behaviors' },
+  { id:'interv',    header:'INTERVENTIONS & STRATEGIES USED:', label:'Interventions & strategies',   hint:'Specific ABA strategies applied' },
+  { id:'engage',    header:'ENGAGEMENT & RESPONSE:',           label:'Engagement & response',        hint:"Client's engagement level and responsiveness" },
+  { id:'caregiver', header:'CAREGIVER INVOLVEMENT:',           label:'Caregiver involvement',        hint:'Any parent/caregiver participation or training' },
+  { id:'safety',    header:'SAFETY INCIDENTS:',                label:'Safety incidents',             hint:'Any safety concerns or incidents — write None if N/A' },
+  { id:'focus',     header:'FOCUS FOR NEXT SESSION:',          label:'Focus for next session',       hint:'Priorities and goals for the next session' }
 ];
+
+// f55b — every section must be answered. "None" satisfies Safety Incidents, so
+// the rule is non-empty rather than a per-section word count.
+function notesMissingSections() {
+  var missing = [];
+  for (var i = 0; i < NOTES_SECTIONS.length; i++) {
+    var v = String((S.notesSections || {})[NOTES_SECTIONS[i].id] || '').trim();
+    if (!v) missing.push(NOTES_SECTIONS[i]);
+  }
+  return missing;
+}
+
+function markMissingNoteFields(missing) {
+  for (var i = 0; i < NOTES_SECTIONS.length; i++) {
+    var el = document.getElementById('nf-' + NOTES_SECTIONS[i].id);
+    if (el) { el.style.borderColor = ''; el.style.boxShadow = ''; }
+  }
+  for (var j = 0; j < missing.length; j++) {
+    var me = document.getElementById('nf-' + missing[j].id);
+    if (me) {
+      me.style.borderColor = 'var(--danger)';
+      me.style.boxShadow   = '0 0 0 2px rgba(239,68,68,0.22)';
+    }
+  }
+  if (missing.length) {
+    var first = document.getElementById('nf-' + missing[0].id);
+    if (first) { first.scrollIntoView({ behavior:'smooth', block:'center' }); first.focus(); }
+  }
+}
 
 function buildNotesForm() {
   var wrap = document.getElementById('notes-form');
@@ -2904,7 +2935,7 @@ function buildNotesForm() {
     html +=
       '<div class="form-group" style="margin-bottom:11px">' +
         '<label class="form-lbl" for="nf-' + sec.id + '">' +
-          escHtml(sec.header.replace(/:$/, '')) + '</label>' +
+          escHtml(sec.label) + ' <span style="color:var(--danger)">*</span></label>' +
         '<textarea class="form-ctrl" id="nf-' + sec.id + '" rows="3" ' +
           'placeholder="' + escAttr(sec.hint) + '" ' +
           'oninput="onNotesInput(\'' + sec.id + '\', this.value)" ' +
@@ -2996,6 +3027,10 @@ function onNotesInput(id, value) {
   if (!S.notesSections) S.notesSections = {};
   if (id === '_extra') S.notesExtra = value;
   else S.notesSections[id] = value;
+  if (String(value || '').trim()) {
+    var fld = document.getElementById('nf-' + id);
+    if (fld) { fld.style.borderColor = ''; fld.style.boxShadow = ''; }
+  }
   syncNotesMirror();
   updateWordCount();
   if (_notesSaveTimer) clearTimeout(_notesSaveTimer);
@@ -3050,10 +3085,28 @@ function updateWordCount() {
   const count = countWords(text);
   const el    = document.getElementById('notes-word-count');
   const btn   = document.getElementById('submit-btn');
+  const missEl = document.getElementById('notes-missing');
+  const missing = notesMissingSections();
+  const wordsMet = count >= NOTES_MIN_WORDS;
+
   el.textContent = count + ' / ' + NOTES_MIN_WORDS + ' words';
-  const met = count >= NOTES_MIN_WORDS;
-  el.classList.toggle('met', met);
-  btn.disabled = !met;
+  el.classList.toggle('met', wordsMet);
+
+  // f55b: list what is still outstanding instead of silently refusing.
+  if (missEl) {
+    if (missing.length) {
+      var names = [];
+      for (var i = 0; i < missing.length; i++) names.push(missing[i].label);
+      missEl.textContent = 'Still to answer: ' + names.join(', ');
+      missEl.style.display = '';
+    } else {
+      missEl.textContent = '';
+      missEl.style.display = 'none';
+    }
+  }
+
+  // Submit requires 150 content words AND every section answered.
+  btn.disabled = !(wordsMet && missing.length === 0);
 }
 
 
@@ -3067,6 +3120,17 @@ function submitSession() {
   if (strippedCount < NOTES_MIN_WORDS) {
     console.log('[Submit] BLOCKED — word count below minimum');
     toast('Please write at least ' + NOTES_MIN_WORDS + ' content words in your notes', 'err'); return;
+  }
+  // f55b: every notes section must be answered. "None" is a valid answer, so the
+  // rule is non-empty rather than a per-section word count.
+  var missingNotes = notesMissingSections();
+  if (missingNotes.length) {
+    var missNames = [];
+    for (var mni = 0; mni < missingNotes.length; mni++) missNames.push(missingNotes[mni].label);
+    console.log('[Submit] BLOCKED — notes sections empty: ' + missNames.join(', '));
+    toast('Please answer: ' + missNames.join(', '), 'err');
+    markMissingNoteFields(missingNotes);
+    return;
   }
   // f30a: a prompt level is REQUIRED for every goal that was actually run.
   // A goal with no trials scored stays blank — that means "not run today",
