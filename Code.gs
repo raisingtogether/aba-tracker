@@ -17,7 +17,7 @@
  * Keep BQ_SYNC_BUILD in BigQuerySync.gs set to the same value: the two files are
  * pasted separately, so a stale BigQuerySync is otherwise invisible.
  */
-var APP_BUILD = '2026-10-03-f35';
+var APP_BUILD = '2026-10-03-f59';
 
 var ADMIN_SHEET_ID = '1VPBADMXvhOww_52O1n2CieTsQB6XCotLt6XdAQsq0ik';
 var AUDIT_SHEET_ID = '1tf98iS18vV08mQtPV9Vq6hQVkEp6Qg-ebUwHkeRlwaQ';
@@ -122,6 +122,9 @@ function doPost(e) {
 
     } else if (data.action === 'getInstruments') {
       result = getInstruments(data.approverRole);
+
+    } else if (data.action === 'getAssessmentDashboard') {
+      result = getAssessmentDashboard(data.clientId, data.approverRole);
 
     } else if (data.action === 'listAssessments') {
       result = listAssessments(data.clientId, data.approverRole);
@@ -4545,8 +4548,25 @@ var INSTRUMENT_HEADERS = [
 var ASSESSMENT_HEADERS = [
   'assessmentId', 'clientId', 'clientName', 'instrumentId', 'instrumentVersion',
   'administeredDate', 'assessorEmail', 'assessorName', 'status', 'isBaseline',
-  'startedAt', 'updatedAt', 'completedAt', 'itemCount', 'scoredCount', 'notes', 'scoresJson'
+  'startedAt', 'updatedAt', 'completedAt', 'itemCount', 'scoredCount', 'notes', 'scoresJson',
+  // f59: her workbooks compare across FIXED PERIODS (Baseline / 6-Month /
+  // 12-Month / 18-Month) laid out as aligned columns with delta columns between
+  // them. A free date cannot produce that grid, so the period is its own field.
+  // 'ad-hoc' covers a mid-cycle re-check or a client who transfers in off-schedule.
+  'administrationType'
 ];
+
+// Canonical order for the comparison grid. Anything else sorts after these, by date.
+var ADMIN_PERIODS = ['baseline', '6-month', '12-month', '18-month'];
+
+function _normPeriod(raw, isBaseline) {
+  var v = String(raw === null || raw === undefined ? '' : raw).trim().toLowerCase();
+  for (var i = 0; i < ADMIN_PERIODS.length; i++) {
+    if (v === ADMIN_PERIODS[i]) return v;
+  }
+  if (!v) return isBaseline ? 'baseline' : 'ad-hoc';   // rows predating this field
+  return 'ad-hoc';
+}
 var ASSESS_ITEM_HEADERS = [
   'assessmentId', 'clientId', 'instrumentId', 'itemCode', 'domain', 'subdomain',
   'score', 'criterion', 'belowCriterion', 'administeredDate', 'dateISO'
@@ -4643,6 +4663,7 @@ function listAssessments(clientId, approverRole) {
       instrumentId:     String(r.instrumentId || ''),
       instrumentVersion:String(r.instrumentVersion || ''),
       administeredDate: String(r.administeredDate || ''),
+      administrationType: _normPeriod(r.administrationType, String(r.isBaseline || '') === 'yes'),
       assessorName:     String(r.assessorName || ''),
       status:           String(r.status || 'draft'),
       isBaseline:       String(r.isBaseline || '') === 'yes',
@@ -4676,6 +4697,8 @@ function getAssessment(assessmentId, approverRole) {
       instrumentId:      String(values[r][cm['instrumentId']] || ''),
       instrumentVersion: String(values[r][cm['instrumentVersion']] || ''),
       administeredDate:  String(values[r][cm['administeredDate']] || ''),
+      administrationType: _normPeriod(values[r][cm['administrationType']],
+                            String(values[r][cm['isBaseline']] || '') === 'yes'),
       status:            String(values[r][cm['status']] || 'draft'),
       isBaseline:        String(values[r][cm['isBaseline']] || '') === 'yes',
       notes:             String(values[r][cm['notes']] || ''),
@@ -4727,6 +4750,8 @@ function saveAssessmentDraft(d) {
                  ' and cannot be edited. Start a re-assessment instead.' };
       }
       _setAlertCells(sheet, found + 1, cm, {
+        administrationType: _normPeriod(d.administrationType,
+                              String(values[found][cm['isBaseline']] || '') === 'yes'),
         scoresJson:  JSON.stringify(scores),
         scoredCount: scored,
         itemCount:   Number(d.itemCount || 0),
@@ -4744,6 +4769,7 @@ function saveAssessmentDraft(d) {
       instrumentId:      String(d.instrumentId),
       instrumentVersion: String(d.instrumentVersion || '1'),
       administeredDate:  String(d.administeredDate || nowISO.substring(0, 10)),
+      administrationType: _normPeriod(d.administrationType, d.isBaseline),
       assessorEmail:     String(d.assessorEmail || ''),
       assessorName:      String(d.assessorName || ''),
       status:            'draft',
@@ -5154,4 +5180,205 @@ function listInstruments() {
       ids[k], d.n, Object.keys(d.domains).length, d.scale);
   }
   return by;
+}
+
+
+// ── ASSESSMENT DASHBOARD (f59) ────────────────────────────────────────
+/**
+ * Everything the clinical console needs to show one client's assessment picture,
+ * computed server-side in a single call: the period grid, domain rollups with
+ * deltas between periods, and the gap list.
+ *
+ * Reads `scoresJson` from the Assessments header rows rather than the normalized
+ * Assessment Items, for two reasons: it is one read instead of one per
+ * administration, and it includes drafts, so a half-finished re-assessment still
+ * shows its progress.
+ *
+ * Rollups divide by the maximum of the items ACTUALLY SCORED, not by the domain's
+ * total. Otherwise a half-finished administration reads as a collapse in ability
+ * rather than as incomplete data — the single most misleading thing this view
+ * could do.
+ */
+function getAssessmentDashboard(clientId, approverRole) {
+  if (!_assessRoleOk(approverRole)) {
+    return { success: false, error: 'Unauthorized: BCBA or Admin role required' };
+  }
+  var want = String(clientId || '').trim();
+  if (!want) return { success: false, error: 'Missing clientId' };
+
+  var instRes = getInstruments(approverRole);
+  if (!instRes.success) return instRes;
+  var instById = {};
+  for (var i = 0; i < instRes.instruments.length; i++) {
+    instById[instRes.instruments[i].instrumentId] = instRes.instruments[i];
+  }
+
+  var sheet  = _adminTab(ASSESSMENTS_TAB, ASSESSMENT_HEADERS);
+  var values = sheet.getDataRange().getValues();
+  if (values.length < 2) return { success: true, instruments: [] };
+  var cm = _alertColMap(values[0]);
+
+  // Gather this client's administrations, newest last.
+  var admins = [];
+  for (var r = 1; r < values.length; r++) {
+    if (String(values[r][cm['clientId']] || '').trim() !== want) continue;
+    var id = String(values[r][cm['assessmentId']] || '').trim();
+    if (!id) continue;
+    var scores = {};
+    var raw = String(values[r][cm['scoresJson']] || '');
+    if (raw) { try { scores = JSON.parse(raw) || {}; } catch (e) { scores = {}; } }
+    admins.push({
+      assessmentId:  id,
+      instrumentId:  String(values[r][cm['instrumentId']] || ''),
+      date:          String(values[r][cm['administeredDate']] || ''),
+      status:        String(values[r][cm['status']] || 'draft').toLowerCase(),
+      period:        _normPeriod(values[r][cm['administrationType']],
+                       String(values[r][cm['isBaseline']] || '') === 'yes'),
+      scoredCount:   Number(values[r][cm['scoredCount']] || 0),
+      itemCount:     Number(values[r][cm['itemCount']] || 0),
+      assessorName:  String(values[r][cm['assessorName']] || ''),
+      scores:        scores
+    });
+  }
+  if (!admins.length) return { success: true, instruments: [] };
+
+  // Group by instrument.
+  var byInst = {};
+  for (var a = 0; a < admins.length; a++) {
+    var k = admins[a].instrumentId;
+    if (!byInst[k]) byInst[k] = [];
+    byInst[k].push(admins[a]);
+  }
+
+  var out = [];
+  var instIds = Object.keys(byInst);
+  for (var ii = 0; ii < instIds.length; ii++) {
+    var iid  = instIds[ii];
+    var inst = instById[iid];
+    var list = byInst[iid];
+
+    // Period order: the four canonical ones, then ad-hoc by date.
+    list.sort(function (x, y) {
+      var xi = ADMIN_PERIODS.indexOf(x.period), yi = ADMIN_PERIODS.indexOf(y.period);
+      if (xi < 0) xi = 99; if (yi < 0) yi = 99;
+      if (xi !== yi) return xi - yi;
+      return x.date < y.date ? -1 : (x.date > y.date ? 1 : 0);
+    });
+
+    if (!inst) {
+      // Definition missing — report the administrations rather than hiding them.
+      out.push({ instrumentId: iid, version: '?', definitionMissing: true,
+                 administrations: _adminSummaries(list), domains: [], gaps: [] });
+      continue;
+    }
+
+    // itemCode -> definition
+    var def = {};
+    for (var d2 = 0; d2 < inst.items.length; d2++) def[inst.items[d2].itemCode] = inst.items[d2];
+
+    // Domain rollups per administration.
+    var domainOrder = [];
+    var rollup = {};   // domain -> { total, byCol: { col -> {scored,sum,max} } }
+    for (var di = 0; di < inst.items.length; di++) {
+      var it = inst.items[di];
+      if (!rollup[it.domain]) { rollup[it.domain] = { total: 0, byCol: {} }; domainOrder.push(it.domain); }
+      rollup[it.domain].total++;
+    }
+
+    var cols = [];
+    for (var li = 0; li < list.length; li++) {
+      var adm = list[li];
+      var col = adm.period === 'ad-hoc' ? ('ad-hoc:' + adm.date) : adm.period;
+      cols.push({ key: col, period: adm.period, date: adm.date, status: adm.status,
+                  assessmentId: adm.assessmentId });
+      for (var code in adm.scores) {
+        if (!adm.scores.hasOwnProperty(code)) continue;
+        var v = Number(adm.scores[code]);
+        if (isNaN(v)) continue;
+        var itemDef = def[code];
+        if (!itemDef) continue;             // scored against a since-removed item
+        var bucket = rollup[itemDef.domain];
+        if (!bucket) continue;
+        if (!bucket.byCol[col]) bucket.byCol[col] = { scored: 0, sum: 0, max: 0 };
+        bucket.byCol[col].scored++;
+        bucket.byCol[col].sum += v;
+        // Max for this item: the top of its own scale, which varies per item.
+        var top = (itemDef.scoreOptions && itemDef.scoreOptions.length)
+          ? itemDef.scoreOptions[itemDef.scoreOptions.length - 1]
+          : itemDef.scoreMax;
+        bucket.byCol[col].max += Number(top || 0);
+      }
+    }
+
+    var domains = [];
+    for (var dj = 0; dj < domainOrder.length; dj++) {
+      var dn = domainOrder[dj];
+      var periods = {};
+      for (var ck = 0; ck < cols.length; ck++) {
+        var c = cols[ck].key;
+        var b = rollup[dn].byCol[c];
+        periods[c] = b
+          ? { scored: b.scored, of: rollup[dn].total, sum: b.sum, max: b.max,
+              pct: b.max > 0 ? Math.round(b.sum / b.max * 100) : null }
+          : { scored: 0, of: rollup[dn].total, sum: 0, max: 0, pct: null };
+      }
+      // Delta between consecutive columns that both have a percentage.
+      var deltas = {};
+      for (var dk = 1; dk < cols.length; dk++) {
+        var prev = periods[cols[dk - 1].key], cur = periods[cols[dk].key];
+        if (prev && cur && prev.pct !== null && cur.pct !== null) {
+          deltas[cols[dk - 1].key + '->' + cols[dk].key] = cur.pct - prev.pct;
+        }
+      }
+      domains.push({ domain: dn, itemCount: rollup[dn].total, periods: periods, deltas: deltas });
+    }
+
+    // Gap list from the most recent COMPLETE administration, in instrument order.
+    // That ordering is deliberate: it makes the list double as the f61 Tier 0
+    // shortlist, since the next item to target is the next unmet one in sequence.
+    var latest = null;
+    for (var lj = list.length - 1; lj >= 0; lj--) {
+      if (list[lj].status === 'complete' || list[lj].status === 'signed') { latest = list[lj]; break; }
+    }
+    var gaps = [];
+    if (latest) {
+      for (var gi = 0; gi < inst.items.length; gi++) {
+        var g = inst.items[gi];
+        if (g.criterion === null) continue;
+        var raw2 = latest.scores[g.itemCode];
+        if (raw2 === '' || raw2 === null || raw2 === undefined) continue;   // unscored is not a gap
+        var sv = Number(raw2);
+        if (isNaN(sv) || sv >= g.criterion) continue;
+        gaps.push({
+          itemCode: g.itemCode, domain: g.domain, subdomain: g.subdomain,
+          label: g.label, score: sv, criterion: g.criterion, sortOrder: g.sortOrder
+        });
+      }
+    }
+
+    out.push({
+      instrumentId: iid,
+      version: inst.version,
+      administrations: _adminSummaries(list),
+      columns: cols,
+      domains: domains,
+      gaps: gaps,
+      gapSourceAssessmentId: latest ? latest.assessmentId : null,
+      gapSourceDate: latest ? latest.date : null
+    });
+  }
+
+  return { success: true, instruments: out };
+}
+
+function _adminSummaries(list) {
+  var out = [];
+  for (var i = 0; i < list.length; i++) {
+    out.push({
+      assessmentId: list[i].assessmentId, period: list[i].period, date: list[i].date,
+      status: list[i].status, scoredCount: list[i].scoredCount, itemCount: list[i].itemCount,
+      assessorName: list[i].assessorName
+    });
+  }
+  return out;
 }

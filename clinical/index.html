@@ -149,6 +149,38 @@
   .stat .v { font-size: 27px; font-weight: 900; color: var(--g800); line-height: 1.15; margin-top: 4px; font-variant-numeric: tabular-nums; }
   .stat .s { font-size: 12.5px; color: var(--g600); }
 
+  /* ── dashboard (f59) ── */
+  .grid-tbl { width: 100%; border-collapse: collapse; font-size: 14px; }
+  .grid-tbl th, .grid-tbl td { padding: 8px 10px; border-bottom: 1px solid var(--g100); text-align: right; }
+  .grid-tbl th:first-child, .grid-tbl td:first-child { text-align: left; }
+  .grid-tbl thead th {
+    font-size: 10.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--g400); border-bottom: 2px solid var(--g200); white-space: nowrap;
+  }
+  .grid-tbl tbody tr:hover { background: var(--g100); }
+  .pct { font-weight: 800; font-variant-numeric: tabular-nums; }
+  .pct.none { color: var(--g400); font-weight: 600; }
+  .dlt { font-size: 11.5px; font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .dlt.up { color: var(--success); }
+  .dlt.dn { color: var(--danger); }
+  .dlt.flat { color: var(--g400); }
+  .ofn { font-size: 11px; color: var(--g400); font-weight: 600; }
+
+  .gap-row { display: flex; align-items: baseline; gap: 11px; padding: 7px 0;
+             border-bottom: 1px solid var(--g100); font-size: 14px; }
+  .gap-row:last-child { border-bottom: none; }
+  .gap-row .c { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px;
+                font-weight: 600; color: var(--g600); min-width: 112px; flex: none; }
+  .gap-row .l { flex: 1; min-width: 0; }
+  .gap-row .s { font-variant-numeric: tabular-nums; font-weight: 800; color: var(--secondary);
+                flex: none; }
+  .gap-dom { font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
+             color: var(--g400); margin: 16px 0 3px; }
+  .gap-dom:first-child { margin-top: 0; }
+  .shortlist { background: rgba(0,167,199,.07); border: 1px solid rgba(0,167,199,.28);
+               border-radius: var(--r-sm); padding: 13px 16px; margin-bottom: 14px; font-size: 14px; }
+  .shortlist b { color: var(--primary); }
+
   /* ── assessment renderer (f36) ── */
   .arow { display: flex; align-items: center; gap: 14px; padding: 9px 0; border-bottom: 1px solid var(--g100); }
   .arow:last-child { border-bottom: none; }
@@ -493,7 +525,7 @@ function renderClients() {
     b.addEventListener('click', function () {
       if (_asmtDirty) saveAssessmentNow();
       CLIENT = c;
-      ASMT = null; ASMT_INST = null; ASMT_LIST = null;
+      ASMT = null; ASMT_INST = null; ASMT_LIST = null; DASH = null;
       renderClients();
       render();
       logAudit('clinical_client_selected', c.name || '', 'console');
@@ -679,6 +711,139 @@ function newAssessmentId() {
   return 'as_' + r;
 }
 
+
+// ─── DASHBOARD (f59) ─────────────────────────────────────────────────
+// The layer that makes the data useful: where this child is, what has changed
+// since baseline, and what is still unmet. Mirrors her own History & Compare and
+// Recommended Goals tabs, which are the hand-built version of exactly this.
+var DASH = null;
+
+var PERIOD_LABEL = {
+  'baseline': 'Baseline', '6-month': '6-Month',
+  '12-month': '12-Month', '18-month': '18-Month', 'ad-hoc': 'Ad-hoc'
+};
+function colLabel(c) {
+  if (c.period !== 'ad-hoc') return PERIOD_LABEL[c.period] || c.period;
+  return 'Ad-hoc ' + (c.date || '');
+}
+
+function deltaCell(v) {
+  if (v === undefined || v === null) return '<span class="dlt flat">&mdash;</span>';
+  if (v > 0) return '<span class="dlt up">+' + v + '</span>';
+  if (v < 0) return '<span class="dlt dn">' + v + '</span>';
+  return '<span class="dlt flat">0</span>';
+}
+
+function renderDashboard(dash) {
+  if (!dash || !dash.instruments || !dash.instruments.length) {
+    return '<div class="panel"><div class="empty">' +
+      '<div class="big">No assessments yet for ' + esc(CLIENT.name) + '</div>' +
+      '<div>Start one below. Once there are two periods, this is where the comparison appears.</div>' +
+    '</div></div>';
+  }
+
+  var html = '';
+  dash.instruments.forEach(function (ins) {
+    html += '<div class="panel">' +
+      '<h2>' + esc(ins.instrumentId) + '</h2>';
+
+    if (ins.definitionMissing) {
+      html += '<p style="color:var(--danger)"><strong>Instrument definition is missing.</strong> ' +
+        'These administrations exist but the Instruments tab no longer defines ' +
+        esc(ins.instrumentId) + ', so scores cannot be interpreted. Re-import it.</p>';
+      html += '</div>';
+      return;
+    }
+
+    var cols = ins.columns || [];
+    var complete = ins.administrations.filter(function (a) {
+      return a.status === 'complete' || a.status === 'signed';
+    }).length;
+    html += '<p>' + ins.administrations.length + ' administration' +
+      (ins.administrations.length === 1 ? '' : 's') + ', ' + complete + ' complete &middot; ' +
+      ins.domains.length + ' domains</p>';
+
+    // ── period grid with deltas ──
+    if (cols.length) {
+      html += '<div class="scroll" style="margin-top:14px"><table class="grid-tbl"><thead><tr>' +
+        '<th>Domain</th>';
+      cols.forEach(function (c, idx) {
+        html += '<th>' + esc(colLabel(c)) +
+          (c.status !== 'complete' && c.status !== 'signed'
+            ? '<br><span style="font-weight:700;color:var(--secondary)">draft</span>' : '') +
+          '</th>';
+        if (idx > 0) html += '<th>&Delta;</th>';
+      });
+      html += '</tr></thead><tbody>';
+
+      ins.domains.forEach(function (d) {
+        html += '<tr><td><strong>' + esc(d.domain) + '</strong> ' +
+          '<span class="ofn">' + d.itemCount + ' items</span></td>';
+        cols.forEach(function (c, idx) {
+          var pd = d.periods[c.key] || {};
+          html += '<td>' + (pd.pct === null || pd.pct === undefined
+            ? '<span class="pct none">&mdash;</span>'
+            : '<span class="pct">' + pd.pct + '%</span>' +
+              '<br><span class="ofn">' + pd.scored + '/' + pd.of + ' scored</span>') + '</td>';
+          if (idx > 0) {
+            html += '<td>' + deltaCell(d.deltas[cols[idx - 1].key + '->' + c.key]) + '</td>';
+          }
+        });
+        html += '</tr>';
+      });
+      html += '</tbody></table></div>' +
+        '<p style="font-size:12.5px;color:var(--g600);margin-top:10px">Percentages are of the items ' +
+        '<strong>actually scored</strong>, not of the whole domain &mdash; otherwise a half-finished ' +
+        'administration would read as a loss of ability rather than as incomplete data.</p>';
+    }
+
+    // ── gap list, which doubles as the next-objective shortlist ──
+    if (ins.gaps && ins.gaps.length) {
+      html += '<h3 style="margin-top:26px">Unmet items <span class="ofn">' + ins.gaps.length +
+        ' below criterion, from ' + esc(ins.gapSourceDate || '') + '</span></h3>';
+
+      // Her ruling: a shortlist of the next 3-5 in instrument sequence, she picks.
+      var short = ins.gaps.slice(0, 5);
+      html += '<div class="shortlist"><b>Next to target</b> &mdash; the first ' + short.length +
+        ' unmet items in instrument order. ' +
+        '<span style="color:var(--g600)">Pick from these rather than being handed one choice.</span><br>' +
+        short.map(function (g) {
+          return '<span style="display:inline-block;margin:6px 10px 0 0">' +
+            '<code style="font-size:12px">' + esc(g.itemCode) + '</code> ' + esc(g.label.slice(0, 54)) +
+            (g.label.length > 54 ? '&hellip;' : '') + '</span>';
+        }).join('') +
+      '</div>';
+
+      var byDom = {}, order = [];
+      ins.gaps.forEach(function (g) {
+        if (!byDom[g.domain]) { byDom[g.domain] = []; order.push(g.domain); }
+        byDom[g.domain].push(g);
+      });
+      order.forEach(function (dn) {
+        html += '<div class="gap-dom">' + esc(dn) + ' &middot; ' + byDom[dn].length + '</div>';
+        byDom[dn].forEach(function (g) {
+          html += '<div class="gap-row">' +
+            '<span class="c">' + esc(g.itemCode) + '</span>' +
+            '<span class="l">' + esc(g.label) +
+              (g.subdomain ? ' <span class="ofn">' + esc(g.subdomain) + '</span>' : '') + '</span>' +
+            '<span class="s">' + g.score + ' / ' + g.criterion + '</span>' +
+          '</div>';
+        });
+      });
+    } else if (ins.gapSourceAssessmentId) {
+      html += '<p style="margin-top:22px;color:var(--success);font-weight:700">' +
+        'No items below criterion in the ' + esc(ins.gapSourceDate || '') + ' administration.</p>';
+    } else {
+      html += '<p style="margin-top:22px;color:var(--g600)">Unmet items appear here once an ' +
+        'administration is marked complete &mdash; drafts are not used, so a partly-scored ' +
+        'assessment cannot produce a misleading gap list.</p>';
+    }
+
+    html += '</div>';
+  });
+  return html;
+}
+
 async function renderAssessments() {
   if (ASMT) { renderAssessmentEditor(); return; }
   $('view-body').innerHTML = '<div class="panel"><div class="empty">Loading…</div></div>';
@@ -696,6 +861,9 @@ async function renderAssessments() {
 
   var ar = await post({ action: 'listAssessments', clientId: CLIENT.id, approverRole: rolePayload() });
   ASMT_LIST = (ar && ar.success) ? (ar.assessments || []) : [];
+
+  var dr = await post({ action: 'getAssessmentDashboard', clientId: CLIENT.id, approverRole: rolePayload() });
+  DASH = (dr && dr.success) ? dr : null;
 
   if (!INSTRUMENTS.length) {
     $('view-body').innerHTML =
@@ -733,6 +901,7 @@ async function renderAssessments() {
   }
 
   $('view-body').innerHTML =
+    renderDashboard(DASH) +
     '<div class="panel">' +
       '<h2>Start an administration</h2>' +
       '<p>Scores save as you go, so this does not have to be finished in one sitting.</p>' +
@@ -740,6 +909,16 @@ async function renderAssessments() {
         '<label style="display:flex;flex-direction:column;gap:5px">' +
           '<span style="font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--g400)">Instrument</span>' +
           '<select id="new-inst" style="padding:9px 11px;border:1.5px solid var(--g200);border-radius:var(--r-sm);font-family:inherit;font-size:14.5px;background:var(--white);color:var(--g800)">' + opts + '</select>' +
+        '</label>' +
+        '<label style="display:flex;flex-direction:column;gap:5px">' +
+          '<span style="font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--g400)">Period</span>' +
+          '<select id="new-period" style="padding:9px 11px;border:1.5px solid var(--g200);border-radius:var(--r-sm);font-family:inherit;font-size:14.5px;background:var(--white);color:var(--g800)">' +
+            '<option value="baseline">Baseline</option>' +
+            '<option value="6-month">6-Month</option>' +
+            '<option value="12-month">12-Month</option>' +
+            '<option value="18-month">18-Month</option>' +
+            '<option value="ad-hoc">Ad-hoc</option>' +
+          '</select>' +
         '</label>' +
         '<label style="display:flex;flex-direction:column;gap:5px">' +
           '<span style="font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--g400)">Date</span>' +
@@ -792,10 +971,13 @@ async function createAssessment(carryFromId) {
     return (st === 'complete' || st === 'signed') && a.instrumentId === instId;
   });
 
+  var periodEl = $('new-period');
+  var period = periodEl ? periodEl.value : 'ad-hoc';
   ASMT = {
     assessmentId: newAssessmentId(), clientId: CLIENT.id, clientName: CLIENT.name,
     instrumentId: instId, instrumentVersion: inst.version,
-    administeredDate: date, status: 'draft', isBaseline: !anyComplete,
+    administeredDate: date, administrationType: period,
+    status: 'draft', isBaseline: period === 'baseline' || !anyComplete,
     notes: '', scores: scores, _new: true
   };
   ASMT_INST = inst;
@@ -904,7 +1086,7 @@ function renderAssessmentEditor() {
 
   $('btn-back').addEventListener('click', function () {
     if (_asmtDirty) saveAssessmentNow();
-    ASMT = null; ASMT_INST = null; ASMT_LIST = null;
+    ASMT = null; ASMT_INST = null; ASMT_LIST = null; DASH = null;
     renderAssessments();
   });
   var cb = $('btn-complete');
@@ -968,6 +1150,7 @@ async function saveAssessmentNow() {
     instrumentId: ASMT.instrumentId, instrumentVersion: ASMT.instrumentVersion,
     administeredDate: ASMT.administeredDate, isBaseline: ASMT.isBaseline,
     notes: ASMT.notes || '', scores: ASMT.scores,
+    administrationType: ASMT.administrationType || 'ad-hoc',
     itemCount: ASMT_INST ? ASMT_INST.items.length : 0,
     assessorEmail: AUTH.user.email, assessorName: AUTH.user.name,
     approverRole: rolePayload()
@@ -1008,7 +1191,7 @@ async function doCompleteAssessment() {
            ' scored=' + r.scored + ' belowCriterion=' + r.belowCriterion);
   alert('Completed. ' + r.scored + ' items recorded, ' + r.belowCriterion +
         ' below criterion.\n\nThose gaps are what the plan generator (f38/f39) will draw on.');
-  ASMT = null; ASMT_INST = null; ASMT_LIST = null;
+  ASMT = null; ASMT_INST = null; ASMT_LIST = null; DASH = null;
   renderAssessments();
 }
 
