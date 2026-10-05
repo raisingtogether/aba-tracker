@@ -704,6 +704,13 @@
     .inactivity-sub { font-size:13px; color:var(--g400); font-weight:600; margin-bottom:20px; }
 
     /* ── REAUTH PROMPT ── */
+    #offline-auth-banner {
+      display: none; position: fixed; left: 0; right: 0; bottom: 0; z-index: 9000;
+      background: #FF9701; color: #3A2500; font-weight: 800; font-size: 13px;
+      padding: 10px 16px; text-align: center; line-height: 1.4;
+      box-shadow: 0 -2px 10px rgba(0,0,0,.14);
+    }
+    #offline-auth-banner.show { display: block; }
     #reauth-overlay {
       display:none; position:fixed; inset:0; z-index:2500;
       background:rgba(0,0,0,0.8); align-items:center; justify-content:center;
@@ -4192,7 +4199,24 @@ function resetInactivityTimer() {
   _inactWarnTimer = setTimeout(function() {
     document.getElementById('inactivity-warning').classList.add('show');
   }, INACTIVITY_WARN_MS);
-  _inactTimer = setTimeout(function() { logoutUser('inactivity'); }, INACTIVITY_MS);
+  _inactTimer = setTimeout(function() {
+    // Logging out offline is doubly harmful: it wipes the only copy of unsynced
+    // work AND she cannot sign back in to recover it. Defer instead.
+    if (!navigator.onLine && hasUnsyncedWork()) {
+      _reauthPending = 'logout';
+      showAuthBanner('\uD83D\uDCF6 Offline \u2014 your work is held on this device. You will be ' +
+                     'signed out for security once the connection returns.');
+      return;
+    }
+    logoutUser('inactivity', { auto: true });
+  }, INACTIVITY_MS);
+}
+
+/** Anything on this device the server may not have yet. */
+function hasUnsyncedWork() {
+  if (hasPendingSubmits()) return true;      // completed session queued offline
+  if (isSessionResumable()) return true;     // a session open right now
+  return !!readLocalBackup();                // a crash/pause snapshot
 }
 
 function startInactivityTimer() {
@@ -4232,15 +4256,106 @@ function discardStaleSession() {
 }
 
 document.addEventListener('visibilitychange', function() {
-  if (document.hidden) {
-    _bgStart = Date.now();
-  } else {
-    if (_bgStart && (Date.now() - _bgStart) > BACKGROUND_REAUTH_MS && AUTH.user) {
-      // Drop a completed/abandoned session before re-auth so it isn't "restored".
-      if (!isSessionResumable()) discardStaleSession();
-      showReauthOverlay();
-    }
-    _bgStart = null;
+  if (document.hidden) { _bgStart = Date.now(); return; }
+  var away = _bgStart ? (Date.now() - _bgStart) : 0;
+  _bgStart = null;
+  if (away <= BACKGROUND_REAUTH_MS || !AUTH.user) return;
+  // Drop a completed/abandoned session before re-auth so it isn't "restored".
+  if (!isSessionResumable()) discardStaleSession();
+  requireReauth('background');
+});
+
+// ── OFFLINE-SAFE RE-AUTH ──────────────────────────────────────────────
+// A BCBA signed in outside a school, walked inside where there is no signal, and
+// on returning to the app was shown a Google re-auth overlay she could not
+// possibly satisfy — Google sign-in needs the network. The overlay has no
+// dismiss and it stops the inactivity timer, so she was locked out mid-session
+// with a child in front of her.
+//
+// Re-auth is a control for an UNATTENDED DEVICE. Offline it cannot be satisfied,
+// so demanding it buys no security and costs the session. Therefore:
+//   1. never show the overlay while offline — defer it, and fire it the moment
+//      connectivity returns, so the control still happens;
+//   2. try a SILENT re-validation first when online, because a cached token that
+//      is still accepted already proves what the overlay would ask;
+//   3. give the overlay an escape hatch if the network drops while it is open.
+var _reauthPending = null;
+
+function _isGoogleRole() {
+  var r = AUTH.role || 'collector';
+  return r === 'admin' || r === 'bcba' || r === 'therapist';
+}
+
+function showAuthBanner(msg) {
+  var b = document.getElementById('offline-auth-banner');
+  var m = document.getElementById('offline-auth-msg');
+  if (m) m.innerHTML = msg;
+  if (b) b.classList.add('show');
+}
+function hideAuthBanner() {
+  var b = document.getElementById('offline-auth-banner');
+  if (b) b.classList.remove('show');
+}
+
+/** Is the cached Google token still accepted? Silent — no UI, no redirect. */
+async function silentTokenStillValid() {
+  var tok = getAuthTokenCache();
+  if (!tok) return false;
+  try {
+    var r = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+      headers: { 'Authorization': 'Bearer ' + tok }
+    });
+    return !!(r && r.ok);
+  } catch (e) {
+    return false;   // network died mid-check — treat as "cannot verify"
+  }
+}
+
+function deferReauth(reason) {
+  _reauthPending = reason || 'deferred';
+  showAuthBanner('\uD83D\uDCF6 Offline \u2014 keep working. You will be asked to sign in again ' +
+                 'when the connection returns.');
+  logAuditEvent('reauth_deferred_offline', AUTH.user ? AUTH.user.email : '', '',
+                'reason=' + _reauthPending);
+}
+
+async function requireReauth(reason) {
+  if (!AUTH.user) return;
+  if (!navigator.onLine) { deferReauth(reason); return; }
+  if (_isGoogleRole() && await silentTokenStillValid()) {
+    // Already proven. Do not interrupt her.
+    hideAuthBanner();
+    _reauthPending = null;
+    resetInactivityTimer();
+    logAuditEvent('reauth_silent_ok', AUTH.user ? AUTH.user.email : '', '', 'reason=' + (reason || ''));
+    return;
+  }
+  hideAuthBanner();
+  _reauthPending = null;
+  showReauthOverlay();
+}
+
+/** Connectivity returned — settle whatever was deferred. */
+async function settleDeferredAuth() {
+  if (!_reauthPending || !AUTH.user) { hideAuthBanner(); return; }
+  var reason = _reauthPending;
+  if (reason === 'logout') {
+    _reauthPending = null; hideAuthBanner();
+    logoutUser('inactivity_deferred', { auto: true });
+    return;
+  }
+  await requireReauth(reason);
+}
+window.addEventListener('online', settleDeferredAuth);
+
+// If the network drops while the overlay is open she is stuck again, so offer a
+// way out that keeps the deferral rather than cancelling the control.
+window.addEventListener('offline', function () {
+  var ov = document.getElementById('reauth-overlay');
+  if (ov && ov.classList.contains('show')) {
+    ov.classList.remove('show');
+    deferReauth('background');
+    startInactivityTimer();
   }
 });
 
@@ -4351,7 +4466,7 @@ async function confirmReauth() {
       errEl.textContent = 'Too many failed attempts — saving draft and logging out\u2026';
       logAuditEvent('account_locked', AUTH.user ? AUTH.user.email : '', '', 'Re-auth failed ' + _reauthFailCount + ' times');
       await saveDraftSession();
-      logoutUser('reauth_failed');
+      logoutUser('reauth_failed', { auto: true });
     } else {
       var remaining = MAX_LOGIN_ATTEMPTS - _reauthFailCount;
       errEl.textContent = 'Incorrect PIN \u2014 ' + remaining + ' attempt' + (remaining !== 1 ? 's' : '') + ' remaining';
@@ -4360,9 +4475,23 @@ async function confirmReauth() {
 }
 
 // ── LOGOUT ───────────────────────────────────────────────────────────
-function logoutUser(reason) {
+/**
+ * opts.auto — this logout was not asked for by the user (inactivity, failed
+ * re-auth). An automatic logout must NOT destroy unsynced work: confirmLogout
+ * warns before a manual one and the user accepts the loss, but nobody consented
+ * to losing a session because a phone sat idle. So the session backup and the
+ * offline submit queue survive an automatic logout and are recovered at the next
+ * login (the resume cards surface the snapshot; onReconnect flushes the queue).
+ *
+ * This leaves PHI on the device slightly longer than the clear-everything rule
+ * would. That is the right trade: the alternative is silently destroying a
+ * clinical record, and the device is still in the clinician's hands either way.
+ */
+function logoutUser(reason, opts) {
   window.onbeforeunload = null;
   var userEmail = AUTH.user ? AUTH.user.email : '';
+  // Must be read BEFORE resetState() clears the in-memory session.
+  var hadUnsynced = hasUnsyncedWork();
   logAuditEvent('logout', userEmail, '', reason || '');
   EventBus.emit('session:logout', { user: userEmail, timestamp: new Date().toISOString() });
   stopInactivityTimer();
@@ -4375,11 +4504,18 @@ function logoutUser(reason) {
   CFG.THERAPISTS = []; CFG.CLIENTS = []; CFG.BEHAVIORS = [];
   // Remove PHI from localStorage (keep adminPin, privacyAccepted)
   const keepKeys = ['adminPin', 'privacyAccepted', 'auditLog', 'googleAuthCache'];
+  if (opts && opts.auto && hadUnsynced) {
+    keepKeys.push(LOCAL_BACKUP_KEY, PENDING_SUBMITS_KEY);
+    logAuditEvent('logout_preserved_unsynced', userEmail, '',
+      'automatic logout (' + (reason || '') + ') kept unsynced work on device for recovery');
+  }
   Object.keys(localStorage).forEach(k => {
     if (!keepKeys.includes(k) && !k.startsWith('loginAttempts_')) {
       localStorage.removeItem(k);
     }
   });
+  _reauthPending = null;
+  hideAuthBanner();
   goTo('login');
 }
 
@@ -7111,6 +7247,8 @@ init();
 </div>
 
 <!-- ── INACTIVITY WARNING ── -->
+<div id="offline-auth-banner" role="status"><span id="offline-auth-msg"></span></div>
+
 <div id="inactivity-warning">
   <div class="inactivity-card">
     <div class="inactivity-icon">&#9201;</div>
