@@ -54,7 +54,11 @@ procurement. "Fine-tuned from a Chinese-origin base" is a question that gets
 asked repeatedly by people who will not evaluate it technically, and US policy on
 Chinese-origin models in healthcare may tighten inside the patent window.
 
-**Decision: IBM Granite 3.x 8B**, with **Phi-4-mini 3.8B** as the de-risk.
+**Decision: a US/EU model under a genuinely permissive licence.** Which one is
+settled by the m2 bake-off below, because the provenance question and the
+performance question have different answers: Granite is the safest procurement
+story, **Mistral Small 3.x is the strongest model that also clears the licence
+bar**, and Phi-4 is the best fit if memory is tight.
 
 | Requirement | Granite | Phi-4 | Mistral | Gemma | Llama | Qwen |
 |---|---|---|---|---|---|---|
@@ -114,10 +118,53 @@ I write the script and runbook; it executes on the Mini.
 
 Model choice is **conditional on m1's memory report**:
 
-| Detected memory | Recommendation |
+**m2 is a BAKE-OFF, not a pick.** Downloading three candidates costs a few
+hours of bandwidth and a config string; choosing wrong costs the whole phase.
+Decide on *our* data through m14, not on leaderboards built for other tasks.
+
+| Detected memory | Candidates to download and compare |
 |---|---|
-| 16 GB | Granite 3.x 8B at 4-bit via MLX — fits but tight; keep Phi-4-mini 3.8B as the de-risk |
-| 24 GB+ | Granite 3.x 8B comfortable; 8-bit becomes possible and usually trains better |
+| 16 GB | **Phi-4 14B** (MIT) · **Granite 3.x 8B** (Apache 2.0) · **Llama 3.1 8B** as the ecosystem baseline |
+| 24 GB+ | add **Mistral Small 3.x 24B** (Apache 2.0) — likely the capability leader that still trains here |
+
+LoRA needs headroom well above inference, so "fits in RAM" is not "trains in
+RAM". Approximate 4-bit footprints: Phi-4 14B ~8 GB, Mistral Small 24B ~13–14 GB,
+Gemma 3 27B ~15 GB, Llama 3.3 70B ~40 GB (out on hardware).
+
+### Why the base model probably matters less than it looks
+
+m17 (session notes) and m21 (plan drafts) are **format-following plus domain
+vocabulary** — generate into a fixed 8-section template, in her house style.
+That is what LoRA transfers well, and it is where a fine-tuned 8B and a
+fine-tuned 24B converge far closer than their base benchmarks suggest, at ~3x
+the training cost for the larger one.
+
+m18 (pattern detection) is probably **not an LLM task at all** — it is arithmetic
+over `behavior_records` and `mastery_log`. Same argument the plan already makes
+for f61: a tree, not a network, because it trains in seconds and reports feature
+importances that are defensible to a funder.
+
+**The real bottleneck is data volume.** ~100 mastery events across 7 clients
+constrains what any of these can learn far more than the choice between them.
+Treat the bake-off as cheap insurance, not as the decision that determines
+whether Phase 1.5 works.
+
+### Licence trade, stated plainly
+
+| | Origin | Licence | Express patent grant | Performance at fittable size |
+|---|---|---|---|---|
+| Mistral Small 3.x 24B | France | Apache 2.0 | yes | **highest** |
+| Phi-4 14B | US | MIT | **no** | high |
+| Granite 3.x 8B | US | Apache 2.0 | yes | mid |
+| Llama 3.x | US | custom + AUP | n/a | high |
+| Gemma 3 | US | custom + AUP | n/a | high |
+
+Mistral Small is the only candidate that wins on **both** axes — Apache 2.0 with
+a patent grant *and* the strongest capability that trains on this hardware — which
+makes it the preferred outcome of the bake-off if memory allows. Phi-4's MIT
+licence is a knowing trade, not a surprise: no express patent grant, which matters
+when the core asset is a patent (l10). Llama and Gemma stay excluded on the
+vendor-revisable acceptable-use policy.
 
 Pin the exact Granite release at download time and record it — "Granite 3.x" is
 deliberately unpinned here because the current release should be checked rather
