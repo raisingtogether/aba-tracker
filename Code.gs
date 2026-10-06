@@ -17,7 +17,7 @@
  * Keep BQ_SYNC_BUILD in BigQuerySync.gs set to the same value: the two files are
  * pasted separately, so a stale BigQuerySync is otherwise invisible.
  */
-var APP_BUILD = '2026-10-03-f59';
+var APP_BUILD = '2026-10-05-vbmapp';
 
 var ADMIN_SHEET_ID = '1VPBADMXvhOww_52O1n2CieTsQB6XCotLt6XdAQsq0ik';
 var AUDIT_SHEET_ID = '1tf98iS18vV08mQtPV9Vq6hQVkEp6Qg-ebUwHkeRlwaQ';
@@ -5095,7 +5095,7 @@ function _importInstrument(cfg) {
  * SET THE SHEET ID FIRST: copy her VB-MAPP workbook into the practice Drive and
  * paste its id below, or pass one through importVBMAPPFrom().
  */
-var VBMAPP_SOURCE_SHEET_ID = '';   // <-- paste the workbook id here
+var VBMAPP_SOURCE_SHEET_ID = '14DHwf9ePct2EpRaG3AqDQSogjDiP6b1ozaOa9m2TIto';
 
 function importVBMAPP() {
   return importVBMAPPFrom(VBMAPP_SOURCE_SHEET_ID);
@@ -5155,6 +5155,56 @@ function reimportVBMAPP() {
     },
     scoreOptions: '0,0.5,1', scoreMin: 0, scoreMax: 1, criterion: 1, replace: true
   });
+}
+
+/**
+ * READ-ONLY inspector for a source workbook. Run this BEFORE importing: it lists
+ * the tabs and prints the first rows of each, so the column map can be checked
+ * against the real file rather than assumed.
+ *
+ * Needed because the workbook is reachable by the script account but not through
+ * the Drive API, so its structure cannot be verified from outside. If the tab is
+ * not called "Milestones", or the header is not on row 5, this is what tells us.
+ */
+function inspectInstrumentSource(sheetId) {
+  var id = String(sheetId || VBMAPP_SOURCE_SHEET_ID || '').trim();
+  if (!id) throw new Error('Pass a sheet id, or set VBMAPP_SOURCE_SHEET_ID.');
+  var ss;
+  try {
+    ss = SpreadsheetApp.openById(id);
+  } catch (e) {
+    Logger.log('CANNOT OPEN: ' + e.message);
+    Logger.log('If this says "not found", the script account cannot see the file. Share it with the');
+    Logger.log('account that owns this Apps Script project, or move it into the practice Drive.');
+    Logger.log('If it mentions a format, the file is still an .xlsx — open it and use');
+    Logger.log('File > Save as Google Sheets, then use the NEW id.');
+    throw e;
+  }
+  Logger.log('=== ' + ss.getName() + ' ===');
+  var sheets = ss.getSheets();
+  Logger.log(sheets.length + ' tabs');
+  for (var i = 0; i < sheets.length; i++) {
+    var sh = sheets[i];
+    Logger.log('');
+    Logger.log('--- TAB "' + sh.getName() + '"  ' + sh.getLastRow() + ' rows x ' +
+               sh.getLastColumn() + ' cols');
+    var rows = Math.min(8, sh.getLastRow());
+    if (!rows) { Logger.log('    (empty)'); continue; }
+    var cols = Math.min(10, sh.getLastColumn());
+    var vals = sh.getRange(1, 1, rows, cols).getValues();
+    for (var r = 0; r < vals.length; r++) {
+      var cells = [];
+      for (var c = 0; c < vals[r].length; c++) {
+        var v = String(vals[r][c] === null || vals[r][c] === undefined ? '' : vals[r][c]).trim();
+        if (v) cells.push(String.fromCharCode(65 + c) + '=' + v.substring(0, 34));
+      }
+      if (cells.length) Logger.log('    r' + (r + 1) + '  ' + cells.join('  |  '));
+    }
+  }
+  Logger.log('');
+  Logger.log('Expected for VB-MAPP: a tab named "Milestones", header on row 5, data from row 6,');
+  Logger.log('columns A=Level B=Domain C=# D=Milestone. If it differs, send this log.');
+  return sheets.length;
 }
 
 /** Read-only: what is in the Instruments tab right now. */
