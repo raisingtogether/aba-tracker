@@ -1048,6 +1048,16 @@ function asmtScoredCount() {
 // An instrument may declare its allowed scores explicitly — VB-MAPP is 0/0.5/1,
 // and integer stepping would quietly drop the half point. Fall back to integers
 // between min and max when no list is given.
+/**
+ * Mirror of the server's _isGap. VB-MAPP Barriers are scored 0-4 where HIGH is
+ * the problem, so the red "needs work" styling has to follow the instrument's
+ * direction — otherwise the editor would mark a child with no barriers in red.
+ */
+function isGapScore(v, criterion, mode) {
+  if (criterion === null || criterion === undefined || criterion === '') return false;
+  return (mode === 'atOrAbove') ? (v >= Number(criterion)) : (v < Number(criterion));
+}
+
 function scoreOptionsFor(item) {
   if (item.scoreOptions && item.scoreOptions.length) return item.scoreOptions;
   var out = [];
@@ -1083,7 +1093,10 @@ function renderAssessmentEditor() {
       '<p>' + esc(CLIENT.name) + (ASMT.isBaseline ? ' &middot; <strong>baseline</strong>' : '') +
         ' &middot; scale ' + scoreOptionsFor(ASMT_INST.items[0]).join(' / ') +
         (ASMT_INST.items[0].criterion !== null
-          ? ' &middot; criterion ' + ASMT_INST.items[0].criterion + ' (below it counts as a gap)'
+          ? ' &middot; criterion ' + ASMT_INST.items[0].criterion +
+            (ASMT_INST.items[0].criterionMode === 'atOrAbove'
+              ? ' (at or above it counts as a barrier to target)'
+              : ' (below it counts as a gap)')
           : '') + '</p>' +
       (locked
         ? '<p style="color:var(--secondary);font-weight:700">This administration is ' + esc(ASMT.status) +
@@ -1143,7 +1156,7 @@ function renderAssessmentEditor() {
       for (var oi = 0; oi < opts.length; oi++) {
         var v = opts[oi];
         var on = (cur !== undefined && cur !== '' && Number(cur) === v);
-        var below = (it.criterion !== null && v < it.criterion);
+        var below = isGapScore(v, it.criterion, it.criterionMode);
         btns += '<button class="sbtn' + (below ? ' below' : '') + '" aria-pressed="' + (on ? 'true' : 'false') +
                 '" data-code="' + esc(it.itemCode) + '" data-val="' + v + '"' +
                 (locked ? ' disabled' : '') + '>' + v + '</button>';

@@ -17,7 +17,7 @@
  * Keep BQ_SYNC_BUILD in BigQuerySync.gs set to the same value: the two files are
  * pasted separately, so a stale BigQuerySync is otherwise invisible.
  */
-var APP_BUILD = '2026-10-05-vbmapp2';
+var APP_BUILD = '2026-10-05-f54f-bar';
 
 var ADMIN_SHEET_ID = '1VPBADMXvhOww_52O1n2CieTsQB6XCotLt6XdAQsq0ik';
 var AUDIT_SHEET_ID = '1tf98iS18vV08mQtPV9Vq6hQVkEp6Qg-ebUwHkeRlwaQ';
@@ -3822,6 +3822,75 @@ var PARENT_ALERT_HEADERS = [
 
 var PARENT_ALERT_FROM_NAME = 'Raising Together';
 
+/**
+ * f54: the address parents see, and the one they reply to.
+ *
+ * THE TRAP: Apps Script sends as the account that OWNS THE DEPLOYMENT. Setting
+ * `from` only works when this address is a VERIFIED ALIAS of that account
+ * (Gmail > Settings > Accounts > Send mail as). It is not enough for the address
+ * to merely exist in the Workspace. If it is not an alias, Gmail ignores `from`
+ * silently and the parent sees the deployment owner's address instead — so
+ * _parentAlertFrom() checks the alias list and the audit entry records the
+ * address actually used, rather than the one we hoped for.
+ *
+ * Run checkParentAlertSender() once before enabling auto-send.
+ */
+var PARENT_ALERT_FROM = 'tatiana@raising2gether.org';
+
+var _palCache = null;
+
+/**
+ * Returns { from, replyTo, viaAlias } — `from` is omitted when it cannot be
+ * honoured, so we never claim an address we are not sending from. replyTo is
+ * always set: a parent replying should reach the BCBA even when the envelope
+ * came from the deployment owner.
+ */
+function _parentAlertFrom() {
+  if (_palCache) return _palCache;
+  var want = String(PARENT_ALERT_FROM || '').trim().toLowerCase();
+  var out  = { from: '', replyTo: want, viaAlias: false, owner: '' };
+  if (!want) { _palCache = out; return out; }
+  try {
+    var owner = String(Session.getEffectiveUser().getEmail() || '').trim().toLowerCase();
+    out.owner = owner;
+    if (owner === want) { out.from = want; out.viaAlias = true; _palCache = out; return out; }
+    var aliases = GmailApp.getAliases() || [];
+    for (var i = 0; i < aliases.length; i++) {
+      if (String(aliases[i] || '').trim().toLowerCase() === want) {
+        out.from = want; out.viaAlias = true; break;
+      }
+    }
+  } catch (e) {
+    // Gmail scope missing or a consumer account — fall back to the owner address.
+  }
+  _palCache = out;
+  return out;
+}
+
+/**
+ * ONE-TIME CHECK, safe to run any time: proves what a parent will actually see
+ * in the From line. Sends nothing.
+ */
+function checkParentAlertSender() {
+  var f = _parentAlertFrom();
+  Logger.log('Configured PARENT_ALERT_FROM : ' + PARENT_ALERT_FROM);
+  Logger.log('Deployment owner account     : ' + (f.owner || '(could not read)'));
+  Logger.log('Can send as that address     : ' + (f.viaAlias ? 'YES' : 'NO'));
+  Logger.log('Parents will see From        : ' + (f.from || f.owner || '(unknown)'));
+  Logger.log('Reply-To on every message    : ' + f.replyTo);
+  if (!f.viaAlias) {
+    Logger.log('');
+    Logger.log('TO FIX: sign in as ' + (f.owner || 'the deployment owner') + ', open Gmail >');
+    Logger.log('Settings > Accounts > "Send mail as" > Add another email address,');
+    Logger.log('add ' + PARENT_ALERT_FROM + ' and confirm the verification email.');
+    Logger.log('Until then alerts still send, and Reply-To still reaches the BCBA,');
+    Logger.log('but the From line shows the owner address.');
+  }
+  Logger.log('');
+  Logger.log('Remaining daily quota (emails): ' + MailApp.getRemainingDailyQuota());
+  return f;
+}
+
 function _parentAlertsSheet() {
   var ss = SpreadsheetApp.openById(ADMIN_SHEET_ID);
   var sheet = getOrCreateSheet(ss, 'Parent Alerts', PARENT_ALERT_HEADERS);
@@ -3953,11 +4022,21 @@ function _sendParentAlertEmail(client, records, dateISO) {
     // One message PER recipient — never a shared To: line. Co-parents must not
     // learn each other's address from us: custody and contact arrangements vary,
     // and that would be a disclosure nobody asked us to make.
+    var sender   = _parentAlertFrom();
     var okList   = [];
     var failList = [];
     for (var ri = 0; ri < list.length; ri++) {
       try {
-        MailApp.sendEmail({ to: list[ri], subject: subject, body: body, name: PARENT_ALERT_FROM_NAME });
+        var opt = {
+          to: list[ri], subject: subject, body: body,
+          name: PARENT_ALERT_FROM_NAME, replyTo: sender.replyTo || undefined
+        };
+        if (sender.from) {
+          opt.from = sender.from;
+          GmailApp.sendEmail(opt.to, opt.subject, opt.body, opt);   // only GmailApp honours `from`
+        } else {
+          MailApp.sendEmail(opt);
+        }
         okList.push(list[ri]);
       } catch (se) {
         failList.push(list[ri] + ' (' + se.message + ')');
@@ -3969,6 +4048,9 @@ function _sendParentAlertEmail(client, records, dateISO) {
     return {
       sent: true,
       recipients: okList,
+      // The address a parent actually saw, not the configured one — the audit
+      // trail has to survive a misconfigured alias.
+      sentFrom: sender.from || sender.owner || '',
       error: failList.length ? 'Partial send — failed for ' + failList.join('; ') : ''
     };
   } catch (e) {
@@ -4090,7 +4172,13 @@ function evaluateParentAlerts(d) {
         autoBatch[ai].recipient = sendResult.recipients.join(', ');
       }
       if (!sendResult.sent) autoBatch[ai].note = sendResult.error || 'Send failed';
-      else if (sendResult.error) autoBatch[ai].note = sendResult.error;
+      else {
+        // The From a parent actually saw belongs in the disclosure record: if the
+        // alias is not configured it is the owner address, and we must not imply
+        // otherwise months later.
+        autoBatch[ai].note = 'from=' + (sendResult.sentFrom || '?') +
+                             (sendResult.error ? ' · ' + sendResult.error : '');
+      }
     }
   }
 
@@ -4227,6 +4315,7 @@ function approveParentAlert(alertId, approverEmail, approverRole) {
   writeAuditLog(nowISO, approverEmail || '', 'parent_alert_sent', clientName,
     'DISCLOSURE — ' + label + ' count=' + count + ' session=' + dateISO +
     ' recipients=' + recipient + ' (' + (sendResult.recipients || []).length + ')' +
+    ' from=' + (sendResult.sentFrom || '?') +
     ' approvedBy=' + (approverEmail || '') + ' alertId=' + id);
   return { success: true, sent: true, recipients: sendResult.recipients || [] };
 }
@@ -4543,7 +4632,13 @@ var INSTRUMENT_HEADERS = [
   // f35: an explicit list of allowed scores. VB-MAPP is scored 0 / 0.5 / 1 — the
   // HALF POINT is why min/max alone is not enough, and ABLLS-R items vary their
   // own maximum. scoreOptions wins when present; otherwise integers min..max.
-  'scoreOptions'
+  'scoreOptions',
+  // f35b: which DIRECTION of a score is the problem. VB-MAPP Milestones are
+  // scored 0/0.5/1 where high is good, so a gap is score < criterion ('below',
+  // the default). VB-MAPP BARRIERS are scored 0-4 where high is BAD, so a gap is
+  // score >= criterion ('atOrAbove'). Without this the gap list for barriers
+  // would flag exactly the children with no barriers.
+  'criterionMode'
 ];
 var ASSESSMENT_HEADERS = [
   'assessmentId', 'clientId', 'clientName', 'instrumentId', 'instrumentVersion',
@@ -4597,6 +4692,19 @@ function _adminTab(name, headers) {
 }
 
 /** Instrument definitions, grouped for the renderer. */
+/**
+ * THE gap test. Three call sites used to inline `score < criterion` — a single
+ * predicate means an inverted instrument cannot be half-supported.
+ * Returns false for an absent criterion or an unscored item: not assessed is not
+ * a gap, which is a clinical distinction, not a technicality.
+ */
+function _isGap(score, criterion, mode) {
+  if (criterion === null || criterion === '' || criterion === undefined) return false;
+  var n = Number(score);
+  if (isNaN(n)) return false;
+  return (mode === 'atOrAbove') ? (n >= Number(criterion)) : (n < Number(criterion));
+}
+
 function getInstruments(approverRole) {
   if (!_assessRoleOk(approverRole)) {
     return { success: false, error: 'Unauthorized: BCBA or Admin role required' };
@@ -4624,7 +4732,8 @@ function getInstruments(approverRole) {
       scoreMax:  (r.scoreMax === '' || r.scoreMax === null) ? 4 : Number(r.scoreMax),
       criterion: (r.criterion === '' || r.criterion === null) ? null : Number(r.criterion),
       sortOrder: (r.sortOrder === '' || r.sortOrder === null) ? 0 : Number(r.sortOrder),
-      scoreOptions: _parseScoreOptions(r.scoreOptions)
+      scoreOptions: _parseScoreOptions(r.scoreOptions),
+      criterionMode: String(r.criterionMode || 'below')
     });
   }
 
@@ -4841,7 +4950,9 @@ function completeAssessment(d) {
       var num = Number(raw);
       if (isNaN(num)) continue;
       scoredN++;
-      var below = (it.criterion !== null && num < it.criterion);
+      // 'belowCriterion' keeps its column name but means "this item is a gap",
+      // which for an inverted instrument is score AT OR ABOVE the criterion.
+      var below = _isGap(num, it.criterion, it.criterionMode);
       if (below) belowN++;
 
       var rec = {
@@ -5034,6 +5145,7 @@ function _importInstrument(cfg) {
       scoreMax:     cfg.scoreMax,
       scoreOptions: cfg.scoreOptions || '',
       criterion:    cfg.criterion,
+      criterionMode: cfg.criterionMode || 'below',
       // Level-major so the gap list and the "next to target" shortlist read
       // developmentally (all of Level 1 before Level 2), independent of how the
       // source happens to be sorted.
@@ -5076,7 +5188,9 @@ function _importInstrument(cfg) {
     Logger.log('IMPORTED ' + out.length + ' items as ' + cfg.instrumentId + ' v' + cfg.version +
                ' (skipped ' + skippedBlank + ' blank/unusable source rows).');
     Logger.log('Scale: ' + (cfg.scoreOptions || (cfg.scoreMin + '..' + cfg.scoreMax)) +
-               ' · criterion ' + cfg.criterion);
+               ' · criterion ' + cfg.criterion +
+               ((cfg.criterionMode === 'atOrAbove')
+                 ? ' · INVERTED (a HIGH score is the problem)' : ''));
     Logger.log('Item text now lives in YOUR admin sheet only — it is never committed to the repo.');
     return { imported: out.length, skippedBlank: skippedBlank };
   } finally { lock.releaseLock(); }
@@ -5159,6 +5273,127 @@ function _vbmappConfig(sheetId, replace) {
     scoreMin:      0,
     scoreMax:      1,
     criterion:     1,
+    replace:       !!replace
+  };
+}
+
+/**
+ * f58 prerequisite: the Billing matrix has no row for an assessment session, so
+ * one submitted today carries NO billing code — which silently breaks the weekly
+ * billing report and authorization consumed-hours for that session.
+ *
+ * Tatiana's ruling: assessment sessions bill under 97151, for BCBA and for
+ * RBT - Student Analyst alike. (Note for her, not a blocker: 97151 is the
+ * assessment code normally billed by the QHP, with 97152 the technician-delivered
+ * supporting assessment. Both rows are seeded as 97151 per her instruction; if a
+ * payer rejects the technician line, change the RBT row's code to 97152 in the
+ * Billing tab — no code change needed.)
+ *
+ * IDEMPOTENT and ADDITIVE: it appends only the rows that are missing and never
+ * rewrites an existing one, because objectsToSheet rewrites the whole tab from a
+ * fixed header list and the Billing tab is hers.
+ *
+ * `profile` is half the billing key, so the alias matters: 'RBT - Student Analyst'
+ * resolves to the 'RBT' row via BILLING_PROFILE_ALIAS, which is why no third row
+ * is needed for it.
+ */
+var ASSESSMENT_SESSION_TYPE = 'Assessment';
+var ASSESSMENT_BILLING_CODE = '97151';
+
+function seedAssessmentBillingCode() {
+  var ss    = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var sheet = ss.getSheetByName('Billing');
+  if (!sheet) throw new Error('No Billing tab in RT Admin.');
+
+  var want = [
+    { profile: 'BCBA', sessionType: ASSESSMENT_SESSION_TYPE, code: ASSESSMENT_BILLING_CODE },
+    { profile: 'RBT',  sessionType: ASSESSMENT_SESSION_TYPE, code: ASSESSMENT_BILLING_CODE }
+  ];
+
+  var rows = sheetToObjects(ss, 'Billing');
+  var have = {};
+  for (var i = 0; i < rows.length; i++) {
+    have[String(rows[i].profile || '').trim() + '|' +
+         String(rows[i].sessionType || '').trim()] = String(rows[i].code || '').trim();
+  }
+
+  var header = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  var cm = {};
+  for (var h = 0; h < header.length; h++) cm[String(header[h]).trim()] = h;
+  if (cm.profile === undefined || cm.sessionType === undefined || cm.code === undefined) {
+    throw new Error('Billing tab is missing profile/sessionType/code columns.');
+  }
+
+  var added = 0;
+  for (var w = 0; w < want.length; w++) {
+    var key = want[w].profile + '|' + want[w].sessionType;
+    if (have[key]) {
+      Logger.log('EXISTS  ' + key + ' -> ' + have[key] + ' (left alone)');
+      continue;
+    }
+    var row = [];
+    for (var c = 0; c < header.length; c++) row.push('');
+    row[cm.profile]     = want[w].profile;
+    row[cm.sessionType] = want[w].sessionType;
+    row[cm.code]        = want[w].code;
+    sheet.appendRow(row);
+    added++;
+    Logger.log('ADDED   ' + key + ' -> ' + want[w].code);
+  }
+
+  Logger.log('');
+  Logger.log('Added ' + added + ' Billing row(s). An assessment session can now be billed.');
+  Logger.log('RBT - Student Analyst resolves to the RBT row through BILLING_PROFILE_ALIAS.');
+  return { success: true, added: added };
+}
+
+/**
+ * VB-MAPP BARRIERS — the second half of the instrument, and the half that explains
+ * WHY a milestone is not progressing. Her workbook scores all 24 barriers 0-4 per
+ * test on a "Barriers" tab, header on row 5: A = #, B = Barrier.
+ *
+ * THE SCALE IS INVERTED. 0 means the barrier is absent; 4 means it is severe. So
+ * criterionMode is 'atOrAbove' and the criterion is the score at which a barrier
+ * becomes worth targeting. It is seeded at 2 (a moderate barrier) — Tatiana should
+ * confirm that number, and it can be changed without a re-import by editing the
+ * criterion column in the Instruments tab.
+ *
+ * Registered as its own instrumentId so a barriers administration is a separate
+ * record from a milestones administration: she may run them on different days,
+ * and mixing two scales in one assessment would make the scored/total count lie.
+ */
+function importVBMAPPBarriers() {
+  return _importInstrument(_vbmappBarriersConfig(VBMAPP_SOURCE_SHEET_ID, false));
+}
+
+/** Re-import the barriers, replacing existing rows. */
+function reimportVBMAPPBarriers() {
+  return _importInstrument(_vbmappBarriersConfig(VBMAPP_SOURCE_SHEET_ID, true));
+}
+
+function _vbmappBarriersConfig(sheetId, replace) {
+  var id = String(sheetId || '').trim();
+  if (!id) throw new Error('Set VBMAPP_SOURCE_SHEET_ID first.');
+  return {
+    instrumentId:  'VB-MAPP-Barriers',
+    version:       '1',
+    sourceSheetId: id,
+    sourceTab:     'Barriers',
+    headerRow:     5,
+    firstDataRow:  6,
+    cols:          { number: 'A', label: 'B' },
+    // 24 barriers with no domain of their own in the source. One flat group keeps
+    // the editor honest rather than inventing a taxonomy she did not score.
+    domainLabel:   function () { return 'Barriers'; },
+    codeFor:       function (row, ci) {
+                     var num = String(row[ci.number] || '').trim().replace(/\.0$/, '');
+                     return num ? ('BAR-' + num) : '';
+                   },
+    scoreOptions:  '0,1,2,3,4',
+    scoreMin:      0,
+    scoreMax:      4,
+    criterion:     2,
+    criterionMode: 'atOrAbove',
     replace:       !!replace
   };
 }
@@ -5404,7 +5639,7 @@ function getAssessmentDashboard(clientId, approverRole) {
         var raw2 = latest.scores[g.itemCode];
         if (raw2 === '' || raw2 === null || raw2 === undefined) continue;   // unscored is not a gap
         var sv = Number(raw2);
-        if (isNaN(sv) || sv >= g.criterion) continue;
+        if (!_isGap(sv, g.criterion, g.criterionMode)) continue;
         gaps.push({
           itemCode: g.itemCode, domain: g.domain, subdomain: g.subdomain,
           label: g.label, score: sv, criterion: g.criterion, sortOrder: g.sortOrder
