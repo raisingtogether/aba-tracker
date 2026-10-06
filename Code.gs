@@ -17,7 +17,7 @@
  * Keep BQ_SYNC_BUILD in BigQuerySync.gs set to the same value: the two files are
  * pasted separately, so a stale BigQuerySync is otherwise invisible.
  */
-var APP_BUILD = '2026-10-05-vbmapp';
+var APP_BUILD = '2026-10-05-vbmapp2';
 
 var ADMIN_SHEET_ID = '1VPBADMXvhOww_52O1n2CieTsQB6XCotLt6XdAQsq0ik';
 var AUDIT_SHEET_ID = '1tf98iS18vV08mQtPV9Vq6hQVkEp6Qg-ebUwHkeRlwaQ';
@@ -5019,7 +5019,9 @@ function _importInstrument(cfg) {
     var domain = cfg.domainLabel
       ? cfg.domainLabel(row, ci)
       : String(ci.domain !== undefined ? row[ci.domain] : '').trim();
-    var sub = String(ci.subdomain !== undefined ? row[ci.subdomain] : '').trim();
+    var sub = cfg.subdomainLabel
+      ? cfg.subdomainLabel(row, ci)
+      : String(ci.subdomain !== undefined ? row[ci.subdomain] : '').trim();
 
     rows.push({
       instrumentId: cfg.instrumentId,
@@ -5032,7 +5034,10 @@ function _importInstrument(cfg) {
       scoreMax:     cfg.scoreMax,
       scoreOptions: cfg.scoreOptions || '',
       criterion:    cfg.criterion,
-      sortOrder:    rows.length * 10 + 10,
+      // Level-major so the gap list and the "next to target" shortlist read
+      // developmentally (all of Level 1 before Level 2), independent of how the
+      // source happens to be sorted.
+      sortOrder:    (cfg.levelFor ? cfg.levelFor(row, ci) * 10000 : 0) + rows.length * 10 + 10,
       status:       'active'
     });
   }
@@ -5083,14 +5088,17 @@ function _importInstrument(cfg) {
  *
  * Source layout (her workbook, "Milestones" tab, header on row 5):
  *   A Level · B Domain · C # · D Milestone · E Method · F Materials
- *   G/H/I 1st/2nd/3rd test
+ *   G/H/I/J 1st/2nd/3rd/4th test (four administrations, not three)
  *
  * Scored 0 / 0.5 / 1 — note the HALF POINT, which is why Instruments carries
  * scoreOptions rather than only a min and max. Criterion is 1: anything below a
  * full point is an unmet milestone, i.e. a gap.
  *
- * Grouped by Level to match her Milestones Grid, which lays the levels out across
- * the top; the verbal operant (Mand, Tact, Listener…) becomes the subdomain.
+ * Grouped by the verbal operant (Mand, Tact, Listener Responding…) with the level
+ * as subdomain — NOT the other way round. Her own Summary tab is "Milestone totals
+ * by domain and level", with one row per operant and Max 15 across levels 1-3, and
+ * that is the rollup she actually compares across tests. Grouping by level instead
+ * would give the dashboard 3 buckets of ~57 items where she reads 16 of ~15.
  *
  * SET THE SHEET ID FIRST: copy her VB-MAPP workbook into the practice Drive and
  * paste its id below, or pass one through importVBMAPPFrom().
@@ -5102,59 +5110,57 @@ function importVBMAPP() {
 }
 
 function importVBMAPPFrom(sheetId) {
+  return _importInstrument(_vbmappConfig(sheetId, false));
+}
+
+/** Re-import VB-MAPP, replacing any existing rows. */
+function reimportVBMAPP() {
+  return _importInstrument(_vbmappConfig(VBMAPP_SOURCE_SHEET_ID, true));
+}
+
+/**
+ * ONE source of truth for the VB-MAPP column map. Both the first import and the
+ * re-import go through here: when these were two literals they drifted, which is
+ * the same failure the session snapshot builders had.
+ */
+function _vbmappConfig(sheetId, replace) {
   var id = String(sheetId || '').trim();
   if (!id) {
     throw new Error('No source workbook id. Set VBMAPP_SOURCE_SHEET_ID at the top of this ' +
                     'section to the id of the VB-MAPP workbook in the practice Drive.');
   }
-  return _importInstrument({
+  return {
     instrumentId:  'VB-MAPP',
     version:       '1',
     sourceSheetId: id,
     sourceTab:     'Milestones',
     headerRow:     5,
     firstDataRow:  6,
-    cols:          { domain: 'A', subdomain: 'B', number: 'C', label: 'D' },
+    // A = Level, B = Domain in the source. Domain becomes our grouping; level the sub.
+    cols:          { level: 'A', domain: 'B', number: 'C', label: 'D' },
     domainLabel:   function (row, ci) {
-                     var lvl = String(row[ci.domain] || '').trim().replace(/\.0$/, '');
-                     return lvl ? ('Level ' + lvl) : 'Unassigned';
+                     return String(row[ci.domain] || '').trim() || 'Unassigned';
+                   },
+    subdomainLabel:function (row, ci) {
+                     var lvl = String(row[ci.level] || '').trim().replace(/\.0$/, '');
+                     return lvl ? ('Level ' + lvl) : '';
                    },
     codeFor:       function (row, ci) {
-                     var lvl = String(row[ci.domain]    || '').trim().replace(/\.0$/, '');
-                     var dom = String(row[ci.subdomain] || '').trim().replace(/\s+/g, '');
-                     var num = String(row[ci.number]    || '').trim().replace(/\.0$/, '');
+                     var lvl = String(row[ci.level]  || '').trim().replace(/\.0$/, '');
+                     var dom = String(row[ci.domain] || '').trim().replace(/\s+/g, '');
+                     var num = String(row[ci.number] || '').trim().replace(/\.0$/, '');
                      if (!lvl || !dom || !num) return '';
                      return 'L' + lvl + '-' + dom + '-' + num;
+                   },
+    levelFor:      function (row, ci) {
+                     return Number(String(row[ci.level] || '0').trim()) || 0;
                    },
     scoreOptions:  '0,0.5,1',
     scoreMin:      0,
     scoreMax:      1,
     criterion:     1,
-    replace:       false
-  });
-}
-
-/** Re-import VB-MAPP, replacing any existing rows. */
-function reimportVBMAPP() {
-  var id = String(VBMAPP_SOURCE_SHEET_ID || '').trim();
-  if (!id) throw new Error('Set VBMAPP_SOURCE_SHEET_ID first.');
-  return _importInstrument({
-    instrumentId: 'VB-MAPP', version: '1', sourceSheetId: id, sourceTab: 'Milestones',
-    headerRow: 5, firstDataRow: 6,
-    cols: { domain: 'A', subdomain: 'B', number: 'C', label: 'D' },
-    domainLabel: function (row, ci) {
-      var lvl = String(row[ci.domain] || '').trim().replace(/\.0$/, '');
-      return lvl ? ('Level ' + lvl) : 'Unassigned';
-    },
-    codeFor: function (row, ci) {
-      var lvl = String(row[ci.domain] || '').trim().replace(/\.0$/, '');
-      var dom = String(row[ci.subdomain] || '').trim().replace(/\s+/g, '');
-      var num = String(row[ci.number] || '').trim().replace(/\.0$/, '');
-      if (!lvl || !dom || !num) return '';
-      return 'L' + lvl + '-' + dom + '-' + num;
-    },
-    scoreOptions: '0,0.5,1', scoreMin: 0, scoreMax: 1, criterion: 1, replace: true
-  });
+    replace:       !!replace
+  };
 }
 
 /**
