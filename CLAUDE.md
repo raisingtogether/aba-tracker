@@ -435,8 +435,17 @@ Full detail and the decision history: `docs/architecture/assessments_plans_desig
 - **Known limitation:** the role is caller-supplied, as with mastery
   approve/dismiss. Real enforcement needs device-token auth (**f26a**), which
   should land before auto-send is used widely.
-- **Prerequisites still open:** confirm the Workspace BAA covers Gmail, and pick
-  the sending From address (it sends as the Apps Script deployment owner).
+- **Sending address:** `PARENT_ALERT_FROM = 'tatiana@raising2gether.org'`, always
+  set as `Reply-To`. Whether it is also the **From** depends on who owns the
+  deployment — see `docs/appsscript-scopes.md`. The audit entry records the
+  address actually used, never the configured one.
+- **`appsscript.json` IS NOT IN THIS REPO.** It had no mail scope, so f54 could
+  never send: every `MailApp` call threw, the wrapper caught it, and the row was
+  written `failed`. Add `script.send_mail` + `userinfo.email` to the EXISTING
+  array and re-authorize. `https://mail.google.com/` is deliberately NOT added —
+  it grants full mailbox read access for a cosmetic From line.
+  `checkParentAlertSender()` / `sendTestParentAlertTo(email)` verify it.
+- **Prerequisite still open:** confirm the Workspace BAA covers Gmail.
 
 ### Prompt hierarchy (f30a) + probe flag (f30c)
 - One level per goal per session, recording the **programmed** level — that makes

@@ -17,7 +17,7 @@
  * Keep BQ_SYNC_BUILD in BigQuerySync.gs set to the same value: the two files are
  * pasted separately, so a stale BigQuerySync is otherwise invisible.
  */
-var APP_BUILD = '2026-10-05-f54f-bar';
+var APP_BUILD = '2026-10-05-f54g-scope';
 
 var ADMIN_SHEET_ID = '1VPBADMXvhOww_52O1n2CieTsQB6XCotLt6XdAQsq0ik';
 var AUDIT_SHEET_ID = '1tf98iS18vV08mQtPV9Vq6hQVkEp6Qg-ebUwHkeRlwaQ';
@@ -3848,20 +3848,57 @@ var _palCache = null;
 function _parentAlertFrom() {
   if (_palCache) return _palCache;
   var want = String(PARENT_ALERT_FROM || '').trim().toLowerCase();
-  var out  = { from: '', replyTo: want, viaAlias: false, owner: '' };
+  var out  = {
+    from: '', replyTo: want, viaAlias: false, owner: '',
+    canSend: false,          // is the send_mail scope granted at all?
+    ownerIsTarget: false,    // owner === PARENT_ALERT_FROM, the clean case
+    aliasChecked: false,     // did we actually get to read the alias list?
+    reason: ''
+  };
   if (!want) { _palCache = out; return out; }
+
+  // Can we send AT ALL? This is the question that matters; the From line is
+  // cosmetic next to it. A missing scope here means no alert has ever gone out.
   try {
-    var owner = String(Session.getEffectiveUser().getEmail() || '').trim().toLowerCase();
-    out.owner = owner;
-    if (owner === want) { out.from = want; out.viaAlias = true; _palCache = out; return out; }
+    MailApp.getRemainingDailyQuota();
+    out.canSend = true;
+  } catch (qe) {
+    out.reason = 'MISSING SCOPE script.send_mail — no email can be sent at all';
+    _palCache = out;
+    return out;
+  }
+
+  try {
+    out.owner = String(Session.getEffectiveUser().getEmail() || '').trim().toLowerCase();
+  } catch (oe) { /* userinfo.email not granted — owner stays unknown */ }
+
+  if (out.owner && out.owner === want) {
+    // The clean case: the deployment is owned by the address parents should see,
+    // so MailApp already sends from it and NO Gmail scope is needed.
+    out.from = '';   // MailApp sends as the owner; claiming `from` adds nothing
+    out.viaAlias = true;
+    out.ownerIsTarget = true;
+    _palCache = out;
+    return out;
+  }
+
+  // Rewriting the From line requires GmailApp, which needs mail.google.com —
+  // FULL MAILBOX ACCESS to the owner's account. That is a large grant for a
+  // cosmetic header in a practice holding PHI, so we only use it if it is
+  // already granted and never ask for it to be added. The better fix is to own
+  // the deployment from the address parents should see.
+  try {
     var aliases = GmailApp.getAliases() || [];
+    out.aliasChecked = true;
     for (var i = 0; i < aliases.length; i++) {
       if (String(aliases[i] || '').trim().toLowerCase() === want) {
         out.from = want; out.viaAlias = true; break;
       }
     }
-  } catch (e) {
-    // Gmail scope missing or a consumer account — fall back to the owner address.
+    if (!out.viaAlias) out.reason = 'Not a verified "Send mail as" alias of the owner account';
+  } catch (ae) {
+    out.reason = 'Gmail scope not granted — From stays as the owner address ' +
+                 '(deliberate: rewriting it would need full mailbox access)';
   }
   _palCache = out;
   return out;
@@ -3872,106 +3909,95 @@ function _parentAlertFrom() {
  * in the From line. Sends nothing.
  */
 function checkParentAlertSender() {
+  _palCache = null;
   var f = _parentAlertFrom();
+  var seen = f.from || f.owner || '(unknown — userinfo.email not granted)';
+
   Logger.log('Configured PARENT_ALERT_FROM : ' + PARENT_ALERT_FROM);
   Logger.log('Deployment owner account     : ' + (f.owner || '(could not read)'));
-  Logger.log('Can send as that address     : ' + (f.viaAlias ? 'YES' : 'NO'));
-  Logger.log('Parents will see From        : ' + (f.from || f.owner || '(unknown)'));
+  Logger.log('CAN SEND EMAIL AT ALL        : ' + (f.canSend ? 'YES' : 'NO  <-- blocker'));
+  Logger.log('Parents will see From        : ' + (f.canSend ? seen : '(nothing is sent)'));
   Logger.log('Reply-To on every message    : ' + f.replyTo);
-  if (!f.viaAlias) {
-    Logger.log('');
-    Logger.log('TO FIX: sign in as ' + (f.owner || 'the deployment owner') + ', open Gmail >');
-    Logger.log('Settings > Accounts > "Send mail as" > Add another email address,');
-    Logger.log('add ' + PARENT_ALERT_FROM + ' and confirm the verification email.');
-    Logger.log('Until then alerts still send, and Reply-To still reaches the BCBA,');
-    Logger.log('but the From line shows the owner address.');
-  }
+  if (f.reason) Logger.log('Note                         : ' + f.reason);
   Logger.log('');
-  Logger.log('Remaining daily quota (emails): ' + MailApp.getRemainingDailyQuota());
+
+  if (!f.canSend) {
+    Logger.log('>>> f54 CANNOT SEND. No parent alert has ever been delivered: every');
+    Logger.log('    send throws, the wrapper catches it, and the Parent Alerts row is');
+    Logger.log('    written as status=failed. Session data was never at risk.');
+    Logger.log('');
+    Logger.log('FIX — Apps Script editor > Project Settings > "Show appsscript.json"');
+    Logger.log('      then ADD these two entries to the EXISTING oauthScopes array.');
+    Logger.log('      Do NOT replace the array: dropping bigquery or spreadsheets');
+    Logger.log('      would break the hourly sync and every sheet write.');
+    Logger.log('');
+    Logger.log('        "https://www.googleapis.com/auth/script.send_mail",');
+    Logger.log('        "https://www.googleapis.com/auth/userinfo.email"');
+    Logger.log('');
+    Logger.log('      Save, then run any function once and ACCEPT the new consent');
+    Logger.log('      prompt. New scopes do not take effect until re-authorized.');
+    Logger.log('      Then run checkParentAlertSender() again, then');
+    Logger.log('      sendTestParentAlert("your@address") to prove delivery.');
+    return f;
+  }
+
+  Logger.log('Daily quota remaining        : ' + MailApp.getRemainingDailyQuota());
+  Logger.log('');
+  if (f.ownerIsTarget) {
+    Logger.log('>>> READY. The deployment is owned by ' + PARENT_ALERT_FROM + ', so that is');
+    Logger.log('    already the From line and no Gmail scope is needed.');
+  } else if (f.viaAlias) {
+    Logger.log('>>> READY. Sending as a verified alias of ' + f.owner + '.');
+  } else {
+    Logger.log('>>> SENDS WORK, but parents will see ' + (f.owner || 'the owner address') +
+               ', not ' + PARENT_ALERT_FROM + '.');
+    Logger.log('    Reply-To is ' + PARENT_ALERT_FROM + ', so replies still reach the BCBA.');
+    Logger.log('');
+    Logger.log('    PREFERRED FIX: re-deploy the web app from the ' + PARENT_ALERT_FROM);
+    Logger.log('    account (or transfer ownership of the script to it). Then the From');
+    Logger.log('    line is correct with NO extra permission at all.');
+    Logger.log('');
+    Logger.log('    The alternative — adding tatiana@ as a "Send mail as" alias and');
+    Logger.log('    granting https://mail.google.com/ — would give this script FULL');
+    Logger.log('    READ ACCESS to the owner\'s entire mailbox. That is a poor trade for');
+    Logger.log('    a header line in a practice that holds PHI. Not recommended.');
+  }
   return f;
 }
 
-function _parentAlertsSheet() {
-  var ss = SpreadsheetApp.openById(ADMIN_SHEET_ID);
-  var sheet = getOrCreateSheet(ss, 'Parent Alerts', PARENT_ALERT_HEADERS);
-  ensureSheetColumns(sheet, PARENT_ALERT_HEADERS);
-  return sheet;
-}
-
-function _alertColMap(headerRow) {
-  var map = {};
-  for (var i = 0; i < headerRow.length; i++) {
-    map[String(headerRow[i]).trim()] = i;
-  }
-  return map;
-}
-
-function _isValidEmail(value) {
-  var s = String(value || '').trim();
-  if (!s || s.length > 254) return false;
-  return /^[^\s@,;]+@[^\s@,;]+\.[A-Za-z]{2,}$/.test(s);
-}
-
 /**
- * Parse a comma / semicolon / newline separated list of addresses into the
- * valid, de-duplicated ones. Lets a client carry both parents (or a parent
- * plus a legal guardian) in the single parentEmail field.
+ * Proves delivery end to end WITHOUT touching patient data: same sender path and
+ * same disclosure-tier wording as a real alert, with an obviously fake behaviour
+ * and no client record involved. Writes no Parent Alerts row and no audit entry,
+ * because nothing was disclosed about anyone.
+ *
+ *   sendTestParentAlertTo('you@example.com')
  */
-function _parseRecipients(value) {
-  var raw  = String(value || '').split(/[,;\n]+/);
-  var out  = [];
-  var seen = {};
-  for (var i = 0; i < raw.length; i++) {
-    var e = raw[i].trim();
-    if (!e || !_isValidEmail(e)) continue;
-    var k = e.toLowerCase();
-    if (seen[k]) continue;
-    seen[k] = true;
-    out.push(e);
+function sendTestParentAlertTo(toEmail) {
+  var to = String(toEmail || '').trim();
+  if (!to || to.indexOf('@') < 0) throw new Error('Pass an email address.');
+  var f = _parentAlertFrom();
+  if (!f.canSend) {
+    throw new Error('Cannot send: ' + f.reason + '. Run checkParentAlertSender() for the fix.');
   }
-  return out;
+  var opt = {
+    to: to,
+    subject: 'Raising Together — parent alert test (no patient data)',
+    body: 'This is a delivery test of the parent alert channel.\n\n' +
+          'It contains no patient information. If you received it, the alert path\n' +
+          'works: scope, sender and quota are all in place.\n\n' +
+          'From line you should see: ' + (f.from || f.owner || 'the deployment owner') + '\n' +
+          'Reply-To: ' + f.replyTo + '\n\n— Raising Together',
+    name: PARENT_ALERT_FROM_NAME,
+    replyTo: f.replyTo || undefined
+  };
+  if (f.from) { opt.from = f.from; GmailApp.sendEmail(opt.to, opt.subject, opt.body, opt); }
+  else { MailApp.sendEmail(opt); }
+  Logger.log('Test sent to ' + to + ' — From will read ' + (f.from || f.owner || '(owner)'));
+  Logger.log('Nothing was written to Parent Alerts or the Audit Log: no disclosure occurred.');
+  return { success: true, to: to, from: f.from || f.owner || '' };
 }
 
-function _firstNameOf(fullName) {
-  var s = String(fullName || '').trim();
-  if (!s) return '';
-  return s.split(/\s+/)[0];
-}
-
-/** Deterministic id — also the dedup key for offline retries / resubmits. */
-function _parentAlertId(submissionId, behaviorKey) {
-  var sid = String(submissionId || '').replace(/[^A-Za-z0-9]/g, '').substring(0, 24);
-  var bk  = String(behaviorKey  || '').replace(/[^A-Za-z0-9]/g, '').substring(0, 16);
-  return 'pa_' + sid + '_' + bk;
-}
-
-function _setAlertCells(sheet, sheetRow, cm, updates) {
-  for (var field in updates) {
-    if (!updates.hasOwnProperty(field)) continue;
-    if (cm[field] === undefined) continue;
-    sheet.getRange(sheetRow, cm[field] + 1).setValue(updates[field]);
-  }
-}
-
-function _findClientRecord(clients, clientId, clientName) {
-  var wantId   = String(clientId   || '').trim();
-  var wantName = String(clientName || '').trim().toLowerCase();
-  for (var ci = 0; ci < clients.length; ci++) {
-    var c = clients[ci];
-    if (wantId && String(c.id || '').trim() === wantId) return c;
-  }
-  if (!wantName) return null;
-  for (var cj = 0; cj < clients.length; cj++) {
-    if (String(clients[cj].name || '').trim().toLowerCase() === wantName) return clients[cj];
-  }
-  return null;
-}
-
-/**
- * Build and send ONE minimal-content email covering every behavior in records.
- * records: array of { behaviorLabel, count }.
- * Re-checks the consent gate itself so no call path can bypass it.
- */
 function _sendParentAlertEmail(client, records, dateISO) {
   try {
     if (!client) return { sent: false, recipients: [], error: 'No client record' };
