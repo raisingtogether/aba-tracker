@@ -4612,42 +4612,31 @@ function acceptPrivacy() {
 function saveSessionForReauth() {
   if (!S.client) return;
   try {
-    var snap = {
-      behaviors:           JSON.parse(JSON.stringify(S.behaviors || {})),
-      trials:              JSON.parse(JSON.stringify(S.trials   || {})),
-      abc:                 JSON.parse(JSON.stringify(S.abc      || [])),
-      tantrum:             JSON.parse(JSON.stringify({
-        count: S.tantrum.count, totalSec: S.tantrum.totalSec, curSec: S.tantrum.curSec
-      })),
-      notes:               S.notes || '',
-      notesSections:       JSON.parse(JSON.stringify(S.notesSections || {})),
-      notesExtra:          S.notesExtra || '',
-      sessType:            S.sessType || '',
-      location:            S.location || '',
-      dateStr:             S.dateStr || '',
-      timeIn:              S.timeIn || '',
-      timeInDateISO:       S.timeInDate ? S.timeInDate.toISOString() : null,
-      appStartTime:        S.appStartTime || '',
-      actualStartTime:     S.actualStartTime || '',
-      lateStartReason:      S.lateStartReason || '',
-      sessStartTs:          S.sessStartTs || 0,
-      supervisionOccurred:  S.supervisionOccurred || false,
-      clientId:             S.client.id || '',
-      therapistId:          S.therapist ? (S.therapist.id || '') : '',
-      abcIdSeq:             abcIdSeq,
-      // Pause/resume accounting — preserved across re-auth
-      submissionId:         S.submissionId || null,
-      suspendId:            S.suspendId || null,
-      everPaused:           !!S.everPaused,
-      isResumed:            !!S.isResumed,
-      activeMsAccum:        activeElapsedMs(),
-      pausedMsTotal:        S.pausedMsTotal || 0,
-      pauseLog:             JSON.parse(JSON.stringify(S.pauseLog || [])),
-      isReauth:             true
-    };
+    // Derived from buildSessionSnapshot() ON PURPOSE. This used to be a second,
+    // hand-rolled copy of the session shape, and it drifted: prompt levels,
+    // trial timestamps and probe flags were added to the session but never here,
+    // so a re-auth restored the trials and silently wiped the prompt levels —
+    // which is exactly how that bug reached the field. One builder knows the
+    // session's shape; this adds only what re-auth needs on top.
+    var base = buildSessionSnapshot('active');
+    var snap = Object.assign({}, base, {
+      therapistId: S.therapist ? (S.therapist.id || '') : '',
+      sessStartTs: S.sessStartTs || 0,
+      abcIdSeq:    abcIdSeq,
+      isResumed:   !!S.isResumed,   // read by the re-auth restorer; not in the base
+      // The base snapshot zeroes curSec because a cross-device resume starts a
+      // fresh tantrum interval. Re-auth returns to the SAME device mid-timing,
+      // so the part-counted seconds are preserved here as they were before.
+      tantrum: {
+        count:    S.tantrum.count    || 0,
+        totalSec: S.tantrum.totalSec || 0,
+        curSec:   S.tantrum.curSec   || 0
+      },
+      isReauth:    true
+    });
     sessionStorage.setItem('pendingReauth', JSON.stringify(snap));
-  } catch(e) {
-    // If we can't save, just proceed — session data may be lost but auth will still work
+  } catch (e) {
+    // If we can't save, proceed — auth still works, though session data may be lost.
   }
 }
 
