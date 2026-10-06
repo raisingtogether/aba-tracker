@@ -206,6 +206,41 @@
   }
   .dom-h .n { font-size: 15px; font-weight: 900; color: var(--g800); }
   .dom-h .c { font-size: 11.5px; font-weight: 800; color: var(--g400); margin-left: auto; font-variant-numeric: tabular-nums; }
+  /* A 170-item instrument is navigated, not scrolled. The domain header is a
+     toggle, so "Collapse all" turns the page into a 16-line index with counts —
+     that is the nav, which is why there is no separate jump bar. */
+  .dom-h { cursor: pointer; user-select: none; }
+  .dom-h .car { font-size: 11px; color: var(--g400); width: 12px; flex: none; transition: transform .12s; }
+  .dom.collapsed .dom-h .car { transform: rotate(-90deg); }
+  .dom.collapsed .arow, .dom.collapsed .sub-h { display: none; }
+  .dom[hidden] { display: none; }
+
+  /* Level header inside a domain. VB-MAPP is administered one level at a time,
+     so the level needs to read as a break, not as subtext under a label. */
+  .sub-h {
+    display: flex; align-items: center; gap: 8px; margin: 14px 0 2px;
+    font-size: 11px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase;
+    color: var(--g400);
+  }
+  .sub-h::after { content: ''; flex: 1; height: 1px; background: var(--g100); }
+  .sub-h:first-of-type { margin-top: 4px; }
+  .arow[hidden], .sub-h[hidden] { display: none; }
+
+  .lvlbar {
+    position: sticky; top: 0; z-index: 5; display: flex; align-items: center;
+    flex-wrap: wrap; gap: 8px; padding: 11px 0 13px; margin-bottom: 4px;
+    background: var(--bg); border-bottom: 1px solid var(--g100);
+  }
+  .lvlbar .cap { font-size: 11px; font-weight: 800; letter-spacing: .06em;
+                 text-transform: uppercase; color: var(--g400); }
+  .lvlbtn {
+    border: 1px solid var(--g200); background: #fff; color: var(--g600);
+    border-radius: 999px; padding: 6px 13px; font-size: 12.5px; font-weight: 700;
+    cursor: pointer; font-variant-numeric: tabular-nums;
+  }
+  .lvlbtn:hover { border-color: var(--primary); color: var(--primary); }
+  .lvlbtn[aria-pressed="true"] { background: var(--primary); border-color: var(--primary); color: #fff; }
+  .lvlbar .spacer { flex: 1; }
 
   .abar {
     position: sticky; top: 61px; z-index: 4; background: var(--white);
@@ -525,7 +560,7 @@ function renderClients() {
     b.addEventListener('click', function () {
       if (_asmtDirty) saveAssessmentNow();
       CLIENT = c;
-      ASMT = null; ASMT_INST = null; ASMT_LIST = null; DASH = null;
+      ASMT = null; ASMT_INST = null; ASMT_LIST = null; DASH = null; ASMT_LVL = '';
       renderClients();
       render();
       logAudit('clinical_client_selected', c.name || '', 'console');
@@ -1020,6 +1055,8 @@ function scoreOptionsFor(item) {
   return out.length ? out : [0, 1];
 }
 
+var ASMT_LVL = '';   // active level filter; '' = all
+
 function renderAssessmentEditor() {
   var locked = (ASMT.status === 'complete' || ASMT.status === 'signed');
   var total  = ASMT_INST.items.length;
@@ -1054,12 +1091,52 @@ function renderAssessmentEditor() {
         : '') +
     '</div>';
 
+  // Distinct subdomains in definition order — these are VB-MAPP's levels, and an
+  // instrument without them (RT Core Probe) simply gets no level bar.
+  var lvls = [], seenL = {}, domsOf = {};
+  ASMT_INST.items.forEach(function (it) {
+    var sd = it.subdomain || '';
+    if (!sd) return;
+    if (!seenL[sd]) { seenL[sd] = 1; lvls.push(sd); domsOf[sd] = {}; }
+    domsOf[sd][it.domain] = 1;
+  });
+
+  // Only a CROSS-CUTTING subdomain is a filter. VB-MAPP's "Level 2" spans all 16
+  // operants, so filtering to it is how the instrument is actually administered.
+  // RT Core Probe's subdomains are nested one-per-domain (Requesting > Mands), so
+  // a filter there would just hide five of six panels for no reason.
+  var crossCut = false;
+  for (var sdk in domsOf) {
+    if (!domsOf.hasOwnProperty(sdk)) continue;
+    var n = 0; for (var dk in domsOf[sdk]) { if (domsOf[sdk].hasOwnProperty(dk)) n++; }
+    if (n > 1) { crossCut = true; break; }
+  }
+  if (!crossCut) { lvls = []; ASMT_LVL = ''; }
+
+  if (lvls.length > 1) {
+    html += '<div class="lvlbar"><span class="cap">Show</span>' +
+      '<button class="lvlbtn" data-lvl="" aria-pressed="' + (ASMT_LVL ? 'false' : 'true') + '">All</button>';
+    lvls.forEach(function (L) {
+      html += '<button class="lvlbtn" data-lvl="' + esc(L) + '" aria-pressed="' +
+              (ASMT_LVL === L ? 'true' : 'false') + '">' + esc(L) + '</button>';
+    });
+    html += '<span class="spacer"></span>' +
+      '<button class="btn ghost sm" id="btn-collapse">Collapse all</button>' +
+      '<button class="btn ghost sm" id="btn-expand">Expand all</button></div>';
+  }
+
   doms.forEach(function (d) {
     var items = byDom[d];
-    html += '<div class="panel dom">' +
-      '<div class="dom-h"><span class="n">' + esc(d) + '</span>' +
+    html += '<div class="panel dom" data-dom="' + esc(d) + '">' +
+      '<div class="dom-h"><span class="car">&#9660;</span><span class="n">' + esc(d) + '</span>' +
         '<span class="c" data-domcount="' + esc(d) + '"></span></div>';
+    var lastSub = null;
     items.forEach(function (it) {
+      var sd = it.subdomain || '';
+      if (sd && sd !== lastSub) {
+        html += '<div class="sub-h" data-lvl="' + esc(sd) + '">' + esc(sd) + '</div>';
+        lastSub = sd;
+      }
       var cur = ASMT.scores[it.itemCode];
       var opts = scoreOptionsFor(it);
       var btns = '';
@@ -1071,10 +1148,10 @@ function renderAssessmentEditor() {
                 '" data-code="' + esc(it.itemCode) + '" data-val="' + v + '"' +
                 (locked ? ' disabled' : '') + '>' + v + '</button>';
       }
-      html += '<div class="arow" data-row="' + esc(it.itemCode) + '">' +
+      html += '<div class="arow" data-row="' + esc(it.itemCode) + '"' +
+          (it.subdomain ? ' data-lvl="' + esc(it.subdomain) + '"' : '') + '>' +
         '<span class="code">' + esc(it.itemCode) + '</span>' +
-        '<span class="lbl">' + esc(it.label) +
-          (it.subdomain ? '<div class="sub">' + esc(it.subdomain) + '</div>' : '') + '</span>' +
+        '<span class="lbl">' + esc(it.label) + '</span>' +
         '<span class="scores">' + btns + '</span>' +
         (locked ? '' : '<button class="clr" data-clear="' + esc(it.itemCode) + '" title="Clear">&times;</button>') +
       '</div>';
@@ -1100,7 +1177,45 @@ function renderAssessmentEditor() {
       b.addEventListener('click', function () { setScore(b.dataset.clear, ''); });
     });
   }
+  Array.prototype.forEach.call(document.querySelectorAll('.dom-h'), function (h) {
+    h.addEventListener('click', function () { h.parentNode.classList.toggle('collapsed'); });
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('.lvlbtn'), function (b) {
+    b.addEventListener('click', function () { applyLevelFilter(b.dataset.lvl); });
+  });
+  var bc = $('btn-collapse'), be = $('btn-expand');
+  if (bc) bc.addEventListener('click', function () { setAllCollapsed(true); });
+  if (be) be.addEventListener('click', function () { setAllCollapsed(false); });
+
+  applyLevelFilter(ASMT_LVL, true);
   paintAsmtProgress();
+}
+
+function setAllCollapsed(on) {
+  Array.prototype.forEach.call(document.querySelectorAll('.dom'), function (p) {
+    p.classList[on ? 'add' : 'remove']('collapsed');
+  });
+}
+
+/**
+ * Show one level at a time. The progress bar deliberately keeps counting all
+ * 170 items: filtering changes what she is looking at, never what was scored.
+ */
+function applyLevelFilter(lvl, quiet) {
+  ASMT_LVL = lvl || '';
+  Array.prototype.forEach.call(document.querySelectorAll('.lvlbtn'), function (b) {
+    b.setAttribute('aria-pressed', (b.dataset.lvl === ASMT_LVL) ? 'true' : 'false');
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('.arow, .sub-h'), function (el) {
+    var own = el.dataset.lvl;
+    el.hidden = !!(ASMT_LVL && own && own !== ASMT_LVL);
+  });
+  // A domain with nothing left at this level is hidden entirely, so the page
+  // shows only the domains that actually have items at the chosen level.
+  Array.prototype.forEach.call(document.querySelectorAll('.dom'), function (p) {
+    p.hidden = !p.querySelector('.arow:not([hidden])');
+  });
+  if (!quiet) window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 function setScore(code, val) {
