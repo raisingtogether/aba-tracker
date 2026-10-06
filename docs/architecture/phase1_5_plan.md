@@ -24,7 +24,9 @@ needs materially more memory, which pushes toward a smaller base model.
 
 **Verify this before writing the training code**, not after.
 
-### 2. Llama 3.1 is not Apache 2.0
+### 2. Base model: not Llama (licence), not Qwen (provenance)
+
+#### 2a. Llama 3.1 is not Apache 2.0
 
 m2 says *"Llama 3.1 8B or Qwen 3 8B"* and *"Apache 2.0 licensed"*. Llama 3.1
 ships under the **Llama Community License**, not Apache 2.0 — it carries use
@@ -35,7 +37,7 @@ question, not a detail.
 Apache 2.0 is the right licence bar. **Qwen was the wrong way to clear it** —
 see below.
 
-### 2b. Model provenance — Qwen is out (Oct 5, 2026)
+#### 2b. Model provenance — Qwen is out (Oct 5, 2026)
 
 The licence analysis above was correct and incomplete: it asked what the licence
 permits and never asked where the model comes from.

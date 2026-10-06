@@ -18,7 +18,7 @@ Deployed on Firebase Hosting at `rt-aba-tracker`.
 | `clinical/index.html` | **Clinical console** (`/clinical`) — desktop BCBA surface for assessments + plans |
 | `docs/architecture/assessments_plans_design.md` | Assessment + plan schema, Tatiana's rulings, findings from her real workbooks |
 | `docs/architecture/api_bus_design.md` | f26a/f26b integration bus design |
-| `docs/architecture/phase1_5_plan.md` | m1–m4 ML scope (MLX not bitsandbytes; Qwen not Llama) |
+| `docs/architecture/phase1_5_plan.md` | m1–m4 ML scope (MLX not bitsandbytes; **IBM Granite** — Qwen dropped on provenance, Llama on licence) |
 | `Assessments for BP/` | **PHI — gitignored.** Her real workbooks + a completed plan, used as schema reference |
 
 ## Critical Code.gs constraint
