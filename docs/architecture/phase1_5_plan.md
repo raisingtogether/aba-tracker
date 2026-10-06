@@ -32,7 +32,54 @@ restrictions and an acceptable-use policy. Given the patent (l10) and the planne
 C-Corp holding the IP (l12), the licence of the base model is a commercial
 question, not a detail.
 
-**Qwen (Apache 2.0) is the correct choice** on licensing grounds alone.
+Apache 2.0 is the right licence bar. **Qwen was the wrong way to clear it** —
+see below.
+
+### 2b. Model provenance — Qwen is out (Oct 5, 2026)
+
+The licence analysis above was correct and incomplete: it asked what the licence
+permits and never asked where the model comes from.
+
+**The data risk with Qwen is zero.** Weights run locally on the Mini through MLX,
+no network calls, on de-identified exports. Nothing reaches Alibaba. Anyone
+framing Qwen as a HIPAA exposure is wrong, and the plan should not change on that
+basis.
+
+**The commercial risk is real, and it is the same category of risk that already
+disqualified Llama.** A non-provisional patent is due April 2027 (l10), a C-Corp
+will hold the IP (l12), and this goes in front of insurance funders and hospital
+procurement. "Fine-tuned from a Chinese-origin base" is a question that gets
+asked repeatedly by people who will not evaluate it technically, and US policy on
+Chinese-origin models in healthcare may tighten inside the patent window.
+
+**Decision: IBM Granite 3.x 8B**, with **Phi-4-mini 3.8B** as the de-risk.
+
+| Requirement | Granite | Phi-4 | Mistral | Gemma | Llama | Qwen |
+|---|---|---|---|---|---|---|
+| Origin | US | US | EU | US | US | CN |
+| Licence | Apache 2.0 | MIT | Apache 2.0 | custom | custom | Apache 2.0 |
+| Express patent grant | yes | **no** | yes | n/a | n/a | yes |
+| Use restrictions | none | none | none | **yes** | **yes** | none |
+
+Granite over Phi-4 despite Phi-4 being stronger per parameter: **MIT carries no
+express patent grant; Apache 2.0 § 3 does, and it terminates against anyone who
+sues.** When the company's core asset is a patent, that is not a detail. Granite
+also ships documented training-data governance, and IBM offers IP indemnification
+— that indemnity attaches to watsonx usage rather than self-hosted weights, but
+the documented provenance travels with the model and is what a funder's counsel
+actually asks for.
+
+Fallback if Granite underperforms on our data: **Mistral Small / Nemo**
+(Apache 2.0, France) — avoids China without requiring US-only. **Gemma is
+excluded** for the same reason as Llama: a custom licence with a prohibited-use
+policy the vendor can revise.
+
+**Cost of this change: near zero.** m2 is a download and a config string, and
+nothing is built on it yet. The architecture is already model-agnostic — m16 is a
+local inference API, so the base model sits behind an interface, and m3's export
+format is model-independent. The only real check is that `mlx-lm` supports the
+architecture; Granite is Llama-shaped, so it does. **Verify in m2 before
+training, not after** — the same rule as MLX itself.
 
 ---
 
@@ -67,8 +114,14 @@ Model choice is **conditional on m1's memory report**:
 
 | Detected memory | Recommendation |
 |---|---|
-| 16 GB | Qwen3 8B at 4-bit via MLX — fits but tight; keep Qwen3 4B as the de-risk |
-| 24 GB+ | Qwen3 8B comfortable; 8-bit becomes possible and usually trains better |
+| 16 GB | Granite 3.x 8B at 4-bit via MLX — fits but tight; keep Phi-4-mini 3.8B as the de-risk |
+| 24 GB+ | Granite 3.x 8B comfortable; 8-bit becomes possible and usually trains better |
+
+Pin the exact Granite release at download time and record it — "Granite 3.x" is
+deliberately unpinned here because the current release should be checked rather
+than inherited from this document. The version is evidence for the patent's
+reduction-to-practice, so it belongs in m19 (training data versioning and
+lineage) alongside the data snapshot.
 
 Verify local inference with a test prompt before any fine-tuning.
 
