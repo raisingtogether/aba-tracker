@@ -1335,6 +1335,7 @@ let S = {
   actualStartTime: null,  // overridden if therapist says "started late"
   lateStartReason: '',
   // End-time adjustment
+  actualStartTimeDate: null,      // Date for the manually entered start (see confirmLateStart)
   adjustedEndTime: null,          // display string e.g. "3:45 PM" or null
   adjustedEndTimeDate: null,      // Date object for duration calc
   endTimeAdjustmentReason: '',
@@ -1635,6 +1636,7 @@ function promptLateStart() {
 function confirmOnTime() {
   document.getElementById('modal-late-start').classList.remove('active');
   S.actualStartTime = S.appStartTime;  // same — started on time
+  S.actualStartTimeDate = S.timeInDate ? new Date(S.timeInDate) : new Date();
   beginSession();
 }
 
@@ -1651,6 +1653,11 @@ function confirmLateStart() {
   const ap = hh >= 12 ? 'PM' : 'AM';
   const h12 = hh % 12 || 12;
   S.actualStartTime = `${h12}:${pad(mm)} ${ap}`;
+  // Keep a real Date too. The display string alone cannot be compared or
+  // subtracted, which is why both the end-time check and the billed duration
+  // silently fell back to the app-open moment instead of the start she entered.
+  var _base = S.timeInDate ? new Date(S.timeInDate) : new Date();
+  S.actualStartTimeDate = new Date(_base.getFullYear(), _base.getMonth(), _base.getDate(), hh, mm, 0);
   S.lateStartReason = reasonVal;
   document.getElementById('modal-late-start').classList.remove('active');
   beginSession();
@@ -1717,6 +1724,29 @@ function beginSession() {
 // Active (billable) elapsed ms = time accumulated in completed segments plus
 // the current running segment. Excludes paused time. For a never-paused session
 // this equals (Date.now() - sessStartTs), identical to the legacy calculation.
+/**
+ * When did therapy actually start? The manually entered time when there is one,
+ * otherwise the moment the app was opened. Both the end-time validation and the
+ * billed duration must use THIS, not S.timeInDate — an RBT who opens the app
+ * after therapy has begun and back-dates the start is the common case, and
+ * S.timeInDate is then simply the wrong instant.
+ */
+function sessionStartDate() {
+  return S.actualStartTimeDate || S.timeInDate || null;
+}
+
+/**
+ * Therapy that happened before the app was opened, because the start was
+ * back-dated. The timer never observed it, but it was still therapy and it is
+ * still billable. Zero when the app was opened first (a genuine late start),
+ * which keeps an ordinary on-time session byte-identical to before.
+ */
+function unobservedLeadInMs() {
+  if (!S.actualStartTimeDate || !S.timeInDate) return 0;
+  var lead = S.timeInDate.getTime() - S.actualStartTimeDate.getTime();
+  return lead > 0 ? lead : 0;
+}
+
 function activeElapsedMs() {
   var accum = S.activeMsAccum || 0;
   if (S.segStartTs && !S.paused) accum += (Date.now() - S.segStartTs);
@@ -1791,6 +1821,7 @@ function buildSessionSnapshot(status) {
     dateISO:        _isoDate(S.timeInDate),
     timeIn:         S.timeIn || null,
     timeInDateISO:  S.timeInDate ? S.timeInDate.toISOString() : null,
+    actualStartTimeDateISO: S.actualStartTimeDate ? S.actualStartTimeDate.toISOString() : null,
     appStartTime:    S.appStartTime || null,
     actualStartTime: S.actualStartTime || null,
     lateStartReason: S.lateStartReason || '',
@@ -1976,6 +2007,7 @@ function applySessionSnapshot(snap) {
     S.timeInDate = snap.timeInDateISO ? new Date(snap.timeInDateISO) : new Date();
     S.appStartTime    = snap.appStartTime || null;
     S.actualStartTime = snap.actualStartTime || null;
+    S.actualStartTimeDate = snap.actualStartTimeDateISO ? new Date(snap.actualStartTimeDateISO) : null;
     S.lateStartReason = snap.lateStartReason || '';
     S.supervisionOccurred = !!snap.supervisionOccurred;
     S.notes     = snap.notes || '';
@@ -2632,10 +2664,16 @@ function buildEndScreen() {
     // segments), excluding travel/breaks. Time In/Out remain the wall-clock
     // bookends, so Time Out - Time In will exceed the billed duration by the
     // total paused time — expected and correct.
-    S.durationMin = Math.max(0, Math.round(activeElapsedMs() / 60000));
+    // Paused: bill summed ACTIVE segments, plus any therapy that happened before
+    // the app was opened when the start was back-dated.
+    S.durationMin = Math.max(0, Math.round((unobservedLeadInMs() + activeElapsedMs()) / 60000));
   } else {
-    // Never paused → unchanged legacy calculation.
-    S.durationMin = Math.round((endDate - S.timeInDate) / 60000);
+    // Never paused: end minus the ACTUAL start. Using S.timeInDate here meant a
+    // back-dated session was under-billed by however long the app was late to be
+    // opened, while Time In and Time Out in the sheet already showed the real
+    // span — so the row contradicted its own duration.
+    var startRef = sessionStartDate() || S.timeInDate;
+    S.durationMin = Math.max(0, Math.round((endDate - startRef) / 60000));
   }
   const dh = Math.floor(S.durationMin / 60), dm = S.durationMin % 60;
   const durStr  = dh > 0 ? `${dh}h ${dm}m` : `${dm}m`;
@@ -2849,9 +2887,14 @@ function confirmAdjustedEnd() {
   var today = S.timeInDate ? new Date(S.timeInDate) : new Date();
   var adjustedDate = new Date(today.getFullYear(), today.getMonth(), today.getDate(), hh, mm, 0);
 
-  // If same day but time before session start (by more than 1 min), reject
-  if (S.timeInDate && adjustedDate.getTime() < S.timeInDate.getTime() - 60000) {
-    errEl.textContent = 'End time cannot be before start time';
+  // Compare against the ACTUAL start — the time she entered — not the moment the
+  // app happened to be opened. Logging a session after it finished (open the app
+  // at 11:30, back-date the start to 9:00, real end 11:00) previously tripped
+  // this check even though 11:00 is plainly after 9:00.
+  var startRef = sessionStartDate();
+  if (startRef && adjustedDate.getTime() < startRef.getTime() - 60000) {
+    errEl.textContent = 'End time cannot be before the start time (' +
+      (S.actualStartTime || S.timeIn || '') + ')';
     return;
   }
 
@@ -3373,7 +3416,8 @@ function resetState() {
   S.tantrum = { count:0, totalSec:0, curSec:0, running:false, interval:null, startTs:null };
   S.trials = {}; S.promptLevels = {}; S.trialTimes = {}; S.isProbe = {};
   S.abc = []; abcIdSeq = 0;
-  S.appStartTime = null; S.actualStartTime = null; S.lateStartReason = '';
+  S.appStartTime = null; S.actualStartTime = null; S.actualStartTimeDate = null;
+  S.lateStartReason = '';
   S.adjustedEndTime = null; S.adjustedEndTimeDate = null; S.endTimeAdjustmentReason = '';
   S.parentSignerName = ''; S.parentSignedAt = ''; S.parentSignature = ''; S.signatureSkipReason = '';
   resetSignaturePad();
@@ -4930,6 +4974,7 @@ function restoreSessionAfterReauth() {
     S.timeInDate  = snap.timeInDateISO ? new Date(snap.timeInDateISO) : new Date();
     S.appStartTime       = snap.appStartTime    || null;
     S.actualStartTime    = snap.actualStartTime || null;
+    S.actualStartTimeDate = snap.actualStartTimeDateISO ? new Date(snap.actualStartTimeDateISO) : null;
     S.lateStartReason    = snap.lateStartReason || '';
     S.supervisionOccurred = snap.supervisionOccurred || false;
     S.sessStartTs = snap.sessStartTs || Date.now();
