@@ -40,3 +40,6 @@ Assessments for BP/
 Assessments for BPs/
 reference/phi/
 *-PHI.*
+
+# Firebase CLI local deploy cache — machine-specific, regenerates on every deploy
+.firebase/
