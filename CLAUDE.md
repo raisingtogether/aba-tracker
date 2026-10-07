@@ -376,12 +376,57 @@ New BigQuery tables as modules are built:
 - `video_annotations`: sessionId, timestamp, type, code, promptLevel, result, reviewerEmail
 - `skeleton_frames`: sessionId, frameNumber, timestamp, keypointsJson, behaviorLabel
 
-### Medium Term — BigQuery as Source of Truth (10+ clients)
-When Sheets latency becomes noticeable:
-- App writes directly to BigQuery via Apps Script (`BigQuery.Jobs.insert`)
-- Sheets become read-only mirrors (or eliminated)
-- Eliminates column alignment problems permanently
-- Schema versioning via BigQuery table metadata
+### Medium Term — a HYBRID, not "BigQuery as source of truth" (revised Oct 7, 2026)
+
+The earlier plan here said *BigQuery as source of truth at 10+ clients, Sheets
+become read-only mirrors*. **Both halves of that are wrong.**
+
+**The threshold is wrong.** Sheets capacity is not the constraint — one
+spreadsheet per client bounds row growth per *child*, not per practice. A client
+at 5 sessions/week for 3 years is ~7,500 Trial Summary rows ≈ 135k cells against
+a 10M-cell limit. Nothing strains at 7 clients and nothing would at 100.
+
+**The target store is wrong for half the data.** BigQuery is an append-optimized
+warehouse: no primary keys, no constraints, no cheap single-row `UPDATE`,
+streaming-buffer latency before rows are updatable. Approving a mastery row,
+adjusting a session end time, changing a PIN — all row-level mutations. Those do
+not belong in a warehouse.
+
+**The target:**
+| Layer | Store | Contents |
+|---|---|---|
+| Immutable events | **BigQuery** (already is) | sessions, trials, behaviours, ABC, assessments, annotations, skeletons |
+| Mutable operational | Sheets today → Cloud SQL / Firestore *only when concurrency demands* | config, PINs, authorizations, approvals, corrections |
+
+**What actually breaks, in arrival order:**
+1. **The hourly sync** — re-reads every tab of every client and `WRITE_TRUNCATE`s
+   11 tables inside a 6-min cap. O(clients × history). First wall, ~25–35 clients.
+   **It already logs its own duration**: `'Sync complete in ' + elapsed + 's'` in
+   the Audit Log. That number is the leading indicator — plot it, act at ~180s.
+   Fix is incremental sync (`dateISO` watermark + `WRITE_APPEND` for the four
+   event tables, `WRITE_TRUNCATE` only for small reference tables). ~2 days.
+2. **Unlocked session writes** — `processSession` takes **no** lock; only
+   `writeTrialData` does. Concurrent submits for one client race
+   `ensureSheetColumns`, which is the exact class behind every structural repair
+   in this file's history. Small fix, worth doing regardless of scale.
+3. **Dynamic columns** — goals and behaviours as *columns* is a pivot table
+   pretending to be a schema. Already biting (3 repairs). **Policy going forward:
+   new per-goal/per-behaviour data gets ONE JSON column**, as f30 did, never a
+   column per key.
+4. **Skeleton frames (Phase 3) — absolute, no workaround.** 30fps × 60min ≈
+   **108,000 rows per session**. Sheets cannot hold two of them and `appendRow`
+   cannot write them at all. Device → GCS → BigQuery, bypassing Apps Script.
+
+**So the forcing function is the ROADMAP, not the client count.** Phase 2/3 data
+volumes require the direct path regardless of how many children are served, which
+is why the hybrid is the destination rather than a staging post.
+
+**The expensive part is not the data — it is that Sheets is Tatiana's correction
+UI.** She fixes data by opening a tab. Every hand-correction needs a replacement
+admin screen before the mutable half can move. Budget Phase C as UI work.
+
+**The one thing that forces everything early:** multi-practice federation (`l6`).
+Tenant isolation and row-level security in Sheets is not viable at any scale.
 
 ### Long Term — LHBM Training Pipeline
 - BigQuery = data lake for all behavioral data
