@@ -24,14 +24,23 @@ Two audiences:
    ```bash
    PROJECT=rt-aba-tracker
    USER=tatiana@raising2gether.org
-   # If you created a de-identified dataset (recommended), grant on THAT only:
-   #   bq add-iam-policy-binding --member="user:$USER" \
-   #     --role="roles/bigquery.dataViewer" $PROJECT:aba_tracker_deid
+   # jobUser at project level — needed to RUN a query, grants no data access
    gcloud projects add-iam-policy-binding "$PROJECT" \
-     --member="user:$USER" --role="roles/bigquery.jobUser"     # run queries
-   gcloud projects add-iam-policy-binding "$PROJECT" \
-     --member="user:$USER" --role="roles/bigquery.dataViewer"  # read data
+     --member="user:$USER" --role="roles/bigquery.jobUser"
+
+   # dataViewer on the DE-IDENTIFIED DATASET ONLY. Never project-level: that
+   # would grant read on sessions, behavior_records and audit_log directly and
+   # make the de-identified views decorative.
+   bq add-iam-policy-binding --member="user:$USER" \
+     --role="roles/bigquery.dataViewer" "$PROJECT:aba_tracker_deid"
+
+   # And the step that makes the views actually work: authorize the deid dataset
+   # on the source, so a view can read a table its CALLER cannot.
+   bq update --source_dataset="$PROJECT:aba_tracker" \
+             --authorized_dataset="$PROJECT:aba_tracker_deid"
    ```
+   > **If you previously ran the project-level dataViewer grant, REMOVE it:**
+   > `gcloud projects remove-iam-policy-binding "$PROJECT" --member="user:$USER" --role="roles/bigquery.dataViewer"`
 5. **Create the de-identified views** in `deidentified_views.sql` (so notes/names
    never surface), and point Tatiana at those.
 6. **Get the managed MCP server URL** from Google's doc
