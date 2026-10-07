@@ -1771,6 +1771,11 @@ function updateElapsed() {
 // to the client's real data tabs — only the completed session is, on submit.
 
 const LOCAL_BACKUP_KEY = 'rtSessionBackup';  // transient; cleared on logout/complete
+const REAUTH_KEY       = 'rtPendingReauth'; // in-flight OAuth re-auth snapshot.
+// localStorage, NOT sessionStorage: a standalone PWA signs in via window.open(),
+// i.e. a SEPARATE browsing context, and sessionStorage does not cross one.
+// Declared here with the other storage keys because logoutUser() reads it well
+// above the re-auth code.
 // f30a — prompt hierarchy. ORDER IS CLINICAL and comes from this array's index;
 // the stored value is the CODE, never the rank, so Tatiana can reorder or insert
 // a level later with no migration of historical data.
@@ -4541,6 +4546,10 @@ function logoutUser(reason, opts) {
   stopInactivityTimer();
   // Clear pending reauth data if any
   try { sessionStorage.removeItem('pendingReauth'); } catch(e) {}
+  // An AUTO logout preserves unsynced work (that is the point of opts.auto), so
+  // the pending re-auth snapshot must survive it too — otherwise the inactivity
+  // timer firing during sign-in throws the session away.
+  if (!(opts && opts.auto)) { try { localStorage.removeItem(REAUTH_KEY); } catch(e) {} }
   // Clear PHI from memory
   AUTH = { user: null, tier: null };
   resetState();
@@ -4652,7 +4661,16 @@ function acceptPrivacy() {
 
 // ── GOOGLE SIGN-IN (OAuth redirect flow) ─────────────────────────────
 
-// Save in-progress session to sessionStorage before OAuth redirect (reauth flow)
+/**
+ * Save the in-progress session before an OAuth re-auth.
+ *
+ * THIS LIVES IN localStorage, NOT sessionStorage, AND THAT IS THE WHOLE POINT.
+ * In standalone (home-screen) mode startGoogleSignIn() does window.open(), so
+ * sign-in completes in a SEPARATE BROWSING CONTEXT. sessionStorage is per-context,
+ * so the old key could never be read back — the token crossed because it sits in
+ * localStorage, and the session snapshot silently did not. That was not a flake:
+ * on the standalone path it lost the session every single time.
+ */
 function saveSessionForReauth() {
   if (!S.client) return;
   try {
@@ -4676,12 +4694,21 @@ function saveSessionForReauth() {
         totalSec: S.tantrum.totalSec || 0,
         curSec:   S.tantrum.curSec   || 0
       },
-      isReauth:    true
+      isReauth:    true,
+      // Which context saved this. A browser tab opened by a standalone PWA must
+      // NOT restore the session into itself — it exists only to mint a token, and
+      // two contexts both believing they own one session is worse than neither.
+      fromStandalone: isStandalonePWA(),
+      savedAtMs:      Date.now()
     });
-    sessionStorage.setItem('pendingReauth', JSON.stringify(snap));
+    localStorage.setItem(REAUTH_KEY, JSON.stringify(snap));
+    // Belt and braces: make sure the 15 s local backup is current too, so the
+    // fallback chain in restoreSessionAfterReauth has something fresh to find.
+    saveLocalBackup(base, false);
   } catch (e) {
     // If we can't save, proceed — auth still works, though session data may be lost.
   }
+  try { sessionStorage.removeItem('pendingReauth'); } catch (e) {}   // retire the old key
 }
 
 function startGoogleReauth() {
@@ -4937,12 +4964,54 @@ function completeRBTLogin(t) {
   afterAuth();
 }
 
+/**
+ * Restore after re-auth. Reads localStorage (see REAUTH_KEY), falls back to the
+ * 15 s local backup, and is NON-DESTRUCTIVE: the key is cleared only on success.
+ *
+ * The old version removed the key BEFORE validating, so a single failed attempt
+ * — config not loaded yet, wrong context, anything — destroyed the only copy and
+ * made the loss permanent. It also never consulted rtSessionBackup, which is
+ * written every 15 s and definitely had the data.
+ */
 function restoreSessionAfterReauth() {
-  var snapStr = sessionStorage.getItem('pendingReauth');
-  if (!snapStr) return false;
-  sessionStorage.removeItem('pendingReauth');
+  var snap = null, viaFallback = false, keyExisted = false;
   try {
-    var snap = JSON.parse(snapStr);
+    var raw = localStorage.getItem(REAUTH_KEY);
+    keyExisted = !!raw;
+    if (raw) snap = JSON.parse(raw);
+  } catch (e) { snap = null; }
+
+  // A standalone PWA opens a plain browser tab purely to mint a token. That tab
+  // must sign in and stop — restoring there would strand her in the browser with
+  // a session the PWA also thinks it owns.
+  if (snap && snap.fromStandalone && !isStandalonePWA()) {
+    toast('Signed in \u2014 return to the Raising Together app to continue your session', 'ok');
+    return false;   // key deliberately left in place for the PWA to pick up
+  }
+
+  // Too old to be a live re-auth: fall through rather than resurrect yesterday.
+  if (snap && snap.savedAtMs && (Date.now() - snap.savedAtMs) > SESSION_MAX_AGE_MS) {
+    try { localStorage.removeItem(REAUTH_KEY); } catch (e) {}
+    snap = null;
+  }
+
+  // FALLBACK, deliberately NARROW: only when a re-auth really was in flight and
+  // its snapshot turned out unusable (corrupt, or truncated by a storage limit).
+  // It must NOT fire when no key existed — afterAuth() runs this on every login,
+  // so an unconditional fallback would silently resurrect an old session on a
+  // deliberate fresh sign-in. Recovering an abandoned session is a different
+  // flow, and that one ASKS her rather than guessing.
+  if (keyExisted && (!snap || !snap.clientId)) {
+    var lb = readLocalBackup();
+    if (lb && lb.snapshot && lb.snapshot.clientId) {
+      snap = lb.snapshot;
+      snap.isReauth = true;
+      viaFallback = true;
+    }
+  }
+  if (!snap || !snap.clientId) return false;
+
+  try {
     if (!snap.isReauth || !snap.clientId) return false;
 
     // Find client and therapist from CFG
@@ -5058,12 +5127,17 @@ function restoreSessionAfterReauth() {
     document.getElementById('tantrum-total').textContent = tanMin;
 
     goTo('session');
-    toast('Session restored after re-authentication', 'ok');
-    logAuditEvent('reauth_success', AUTH.user ? AUTH.user.email : '', '', 'Google OAuth reauth — session restored');
+    try { localStorage.removeItem(REAUTH_KEY); } catch (e) {}   // consumed, and only now
+    toast(viaFallback
+      ? 'Session recovered from local backup'
+      : 'Session restored after re-authentication', 'ok');
+    logAuditEvent('reauth_success', AUTH.user ? AUTH.user.email : '', '',
+      'Google OAuth reauth — session restored' + (viaFallback ? ' VIA LOCAL BACKUP FALLBACK' : ''));
     loadMasteryStatus();
     return true;
   } catch(e) {
-    sessionStorage.removeItem('pendingReauth');
+    // Leave the key alone. A failed restore must stay retryable — destroying the
+    // snapshot here is exactly what made this unrecoverable before.
     return false;
   }
 }
@@ -6537,13 +6611,40 @@ if ('serviceWorker' in navigator) {
 }
 
 // ─── PWA STANDALONE: CHECK CACHED TOKEN ON RETURN ─────────────────────
-// When user signs in via browser tab (opened from standalone PWA), they
-// return to the PWA and this fires — picks up the cached token automatically.
-document.addEventListener('visibilitychange', function() {
-  if (document.visibilityState === 'visible' && isStandalonePWA() && !AUTH.user) {
-    var tok = getAuthTokenCache();
-    if (tok) { handleGoogleOAuthReturn(tok); }
+// When she signs in via the browser tab opened from a standalone PWA, she returns
+// to the PWA and this picks the cached token up.
+//
+// IT USED TO BE GATED ON !AUTH.user, WHICH IS NEVER TRUE DURING RE-AUTH: a
+// re-auth never logs her out, the overlay just covers a live session. So coming
+// back to the PWA did nothing at all — the overlay simply sat there, and tapping
+// the button again opened yet another browser tab. The overlay being open is the
+// second, equally valid reason to check for a token.
+document.addEventListener('visibilitychange', async function() {
+  if (document.visibilityState !== 'visible' || !isStandalonePWA()) return;
+  var ov = document.getElementById('reauth-overlay');
+  var overlayOpen = !!(ov && ov.classList.contains('show'));
+  if (AUTH.user && !overlayOpen) return;          // nothing to settle
+  var tok = getAuthTokenCache();
+  if (!tok) return;
+
+  if (overlayOpen && AUTH.user) {
+    // Already signed in underneath — just prove the new token and lift the
+    // overlay in place, keeping the live session in memory untouched. Far safer
+    // than re-running the whole login path over a session already loaded.
+    if (await silentTokenStillValid()) {
+      ov.classList.remove('show');
+      _reauthFailCount = 0;
+      _reauthPending = null;
+      hideAuthBanner();
+      startInactivityTimer();
+      try { localStorage.removeItem(REAUTH_KEY); } catch (e) {}
+      toast('Signed in \u2014 session continues', 'ok');
+      logAuditEvent('reauth_success', AUTH.user ? AUTH.user.email : '', '',
+                    'standalone PWA — token picked up on return, session kept in memory');
+      return;
+    }
   }
+  handleGoogleOAuthReturn(tok);
 });
 
 
