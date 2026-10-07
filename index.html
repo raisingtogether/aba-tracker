@@ -2216,21 +2216,50 @@ async function discardActiveSession() {
   renderResumeCards();
 }
 
+/** The on-device recovery entry, if any. Pure and synchronous ON PURPOSE. */
+function _localResumeEntry() {
+  const local = readLocalBackup();
+  if (!local || !local.snapshot || !local.snapshot.clientId) return null;
+  const snap = local.snapshot;
+  return { suspendId: snap.suspendId || null, clientName: snap.clientName,
+           updatedAt: snap.savedAtISO, state: snap, _local: true, _synced: local.synced,
+           _recovered: snap.status === 'active' };
+}
+
+/**
+ * Paint the resume cards. Separated from fetching so the LOCAL card can be shown
+ * immediately — it used to sit behind an un-timed `await fetch` to GAS, so if that
+ * request hung (routine on iOS right after an OAuth round trip or a network
+ * transition) this function never reached the local fallback and the whole resume
+ * section stayed display:none. The therapist then sees a plain client list and
+ * reasonably concludes the session is gone, while the snapshot is sitting in
+ * localStorage the whole time.
+ */
 async function renderResumeCards() {
   const section = document.getElementById('resume-section');
   const listEl  = document.getElementById('resume-list');
   if (!section || !listEl) return;
-  listEl.innerHTML = '';
   const email = AUTH.user ? AUTH.user.email : '';
-  let sessions = [];
 
+  // 1. ON-DEVICE FIRST, synchronously. Never gate recovery on the network.
+  const localEntry = _localResumeEntry();
+  _paintResumeCards(localEntry ? [localEntry] : []);
+
+  // 2. Then enrich with the server's list. A timeout matters as much as the
+  //    try/catch: a hanging fetch is not an error and would otherwise wait
+  //    forever without ever rejecting.
+  let sessions = [];
   const LIVE_STALE_MS = 3 * 60 * 1000;  // a 'live' record fresher than this is on an active device — hide it
   const nowMs = Date.now();
 
   if (GAS_URL !== 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE' && email) {
     try {
+      const ctl = new AbortController();
+      const tmr = setTimeout(function(){ ctl.abort(); }, 8000);
       const resp = await fetch(GAS_URL, { method:'POST', headers:{'Content-Type':'text/plain'}, redirect:'follow',
+        signal: ctl.signal,
         body: JSON.stringify({ action:'listSuspendedSessions', therapistEmail: email }) });
+      clearTimeout(tmr);
       const data = await resp.json();
       if (data && data.success && Array.isArray(data.sessions)) {
         sessions = data.sessions.filter(function(s){
@@ -2245,21 +2274,26 @@ async function renderResumeCards() {
           return true;
         });
       }
-    } catch (e) { /* offline — local fallback below */ }
+    } catch (e) { /* offline, or aborted after 8 s — the local card already shows */ }
   }
 
-  // Local fallback: a paused (offline/unsynced) or crash-recovered snapshot.
-  const local = readLocalBackup();
-  if (local && local.snapshot && local.snapshot.clientId) {
-    const snap = local.snapshot;
-    const dup  = snap.suspendId && sessions.some(function(s){ return s.suspendId === snap.suspendId; });
-    if (!dup) {
-      sessions.unshift({ suspendId: snap.suspendId || null, clientName: snap.clientName,
-        updatedAt: snap.savedAtISO, state: snap, _local: true, _synced: local.synced,
-        _recovered: snap.status === 'active' });
-    }
+  // Merge the on-device snapshot back in, de-duplicated against the server rows.
+  if (localEntry) {
+    const dup = localEntry.suspendId &&
+                sessions.some(function(s){ return s.suspendId === localEntry.suspendId; });
+    if (!dup) sessions.unshift(localEntry);
   }
 
+  // Nothing from the server and nothing local — only now is it right to hide.
+  _paintResumeCards(sessions);
+}
+
+function _paintResumeCards(sessions) {
+  const section = document.getElementById('resume-section');
+  const listEl  = document.getElementById('resume-list');
+  if (!section || !listEl) return;
+  const email = AUTH.user ? AUTH.user.email : '';
+  listEl.innerHTML = '';
   if (!sessions.length) { section.style.display = 'none'; return; }
   section.style.display = '';
   _resumeCards = sessions;
