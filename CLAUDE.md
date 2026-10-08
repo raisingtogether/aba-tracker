@@ -396,7 +396,48 @@ not belong in a warehouse.
 | Layer | Store | Contents |
 |---|---|---|
 | Immutable events | **BigQuery** (already is) | sessions, trials, behaviours, ABC, assessments, annotations, skeletons |
-| Mutable operational | Sheets today → Cloud SQL / Firestore *only when concurrency demands* | config, PINs, authorizations, approvals, corrections |
+| Mutable operational | Sheets today → **Cloud SQL Postgres** | config, PINs, authorizations, approvals, corrections |
+
+**Postgres, not Firestore, and not BigQuery** (decided Oct 8, 2026). Firestore was
+the close call — its native streaming export to BigQuery would delete
+`BigQuerySync.gs` outright, and its real-time listeners do properly what
+`pushLiveBackup` + "stale >3 min" approximates by hand. Postgres wins on this
+codebase's own failure history: every expensive incident recorded in this file is
+an **integrity** failure (three column-misalignment repairs, 117 submission IDs
+reconciled, duplicate mastery entries, 417 missing fields), and Postgres makes
+those structurally impossible rather than carefully managed —
+`UNIQUE(submission_id)`, `UNIQUE(client_id, goal_code)`, real `FOREIGN KEY`s, one
+transaction across what are currently four separate tab writes, and
+`trial_records(session_id, goal_id, trial_no, score)` which **ends the
+dynamic-column problem rather than mitigating it**. Apps Script reaches Cloud SQL
+today via `Jdbc.getConnection()`, so dual-write is incremental with no Cloud Run
+rewrite on day one. ~$10–25/month.
+
+**Tatiana does NOT edit the sheets — she reads them for analysis.** That removes
+the expensive half of this migration: config is already edited through the app's
+admin panel, so there is no inventory of hand-corrections needing replacement
+screens. The analysis layer (f52/f53, both done) replaces her read use; that is a
+**one-week** job and touches no write path. Moving the system of record is a
+separate **4–6 week** job gated on the sync clock or Phase 2.
+
+### Schema findings (Oct 8, 2026) — extracted from the code, not from memory
+
+1. **The HIPAA audit log is NOT in BigQuery.** Eleven tables sync; `audit_log` is
+   not one of them. It is the one dataset with a **statutory six-year retention
+   requirement** and the sheet is its only copy. Fix before anything else here.
+2. **Three M:N relationships are comma-separated strings** — `Therapists.clientIds`,
+   `Behaviors.clientIds`, `Goals.clientIds` (and `Clients.parentEmail`). No join
+   tables. Second core weakness after dynamic columns.
+3. **`goalId` never reaches BigQuery.** f43b minted an immutable key and migrated
+   243 rows, but `goals_reference` syncs `code, description, client_ids,
+   num_trials, status` with no `goalId`, and `trial_records` joins on `goal_code`.
+   A renamed code still breaks the analytics join f43b existed to protect — **f43b
+   is half done.**
+4. **`Goals` carries both `clientId` and `clientIds`** — two fields for one
+   relationship, with nothing declaring which wins.
+5. **The dynamic-column problem leaked into the warehouse**: `trial_records` has
+   `trial_1`…`trial_10` as fixed fields. Normalisation is partial — one row per
+   goal, but trials are still columns.
 
 **What actually breaks, in arrival order:**
 1. **The hourly sync** — re-reads every tab of every client and `WRITE_TRUNCATE`s
