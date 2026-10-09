@@ -3682,10 +3682,28 @@ function renderAdminList(type) {
         sub = `${item.key} \u2022 ${names}`;
       }
     } else if (type === 'goals') {
-      const clientName = (raw.clients||[]).find(c=>c.id===item.clientId)?.name || item.clientId;
+      // f70: show EVERY client this goal is assigned to, not one of them.
+      //
+      // This used to read item.clientId, which saveEntity sets to whichever
+      // ticked id sorts FIRST. So a goal assigned to three children displayed as
+      // one child's goal, and an arbitrary one. Multi-assignment was invisible
+      // here — which is how a goal assigned to the wrong client on 2026-08-29
+      // went unnoticed for six weeks, and how DaReMath02 came to hold data for
+      // three children under a name implying one.
+      const goalClientIds = String(item.clientIds || item.clientId || '')
+        .split(/[,;]/).map(function(x){ return x.trim(); }).filter(Boolean);
+      const goalClientNames = goalClientIds.map(function (gid) {
+        const hit = (raw.clients||[]).find(function(c){ return c.id === gid; });
+        return hit ? hit.name : gid;
+      });
+      let clientLabel;
+      if (!goalClientNames.length)      clientLabel = 'UNASSIGNED';
+      else if (goalClientNames.length === 1) clientLabel = goalClientNames[0];
+      else clientLabel = goalClientNames.length + ' clients: ' + goalClientNames.join(', ');
+
       preview = `<span class="goal-code" style="font-size:11px">${item.code}</span>`;
       name    = item.description;
-      sub     = `${clientName} \u2022 ${maint ? '3 trials \u2022 probe every 2 weeks' : (item.numTrials||5) + ' trials'}`;
+      sub     = `${clientLabel} \u2022 ${maint ? '3 trials \u2022 probe every 2 weeks' : (item.numTrials||5) + ' trials'}`;
     }
 
     const deleteBtn = (type === 'goals' && AUTH.role === 'admin')
@@ -4082,6 +4100,19 @@ function saveEntity() {
     const description = document.getElementById('ef-description').value.trim();
     const numTrials   = document.getElementById('ef-numTrials').value || '5';
     if (!clientIds || !code || !description) { toast('At least one client, code, and description required', 'err'); return; }
+    // f70: assigning one goal to several children is supported and sometimes
+    // correct, but it is a clinical decision and the checkbox grid makes it a
+    // single silent click. One confirm, naming them, so it cannot happen by
+    // accident — which is what produced Juan's 2026-08-29 rows.
+    if (cbs.length > 1) {
+      const names = Array.from(cbs).map(function (cb) {
+        const hit = (raw.clients||[]).find(function(c){ return c.id === cb.value; });
+        return hit ? hit.name : cb.value;
+      });
+      if (!window.confirm('This goal will be scored for ' + cbs.length + ' clients:\n\n' +
+            names.join('\n') + '\n\nEach child gets their own data in their own sheet. ' +
+            'Continue?')) return;
+    }
     // Duplicate check — unique per client+code (not code alone): the same code
     // can be assigned to different clients as separate goal entries.
     const codeUpper = code.toUpperCase();
