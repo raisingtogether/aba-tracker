@@ -17,7 +17,7 @@
  * Keep BQ_SYNC_BUILD in BigQuerySync.gs set to the same value: the two files are
  * pasted separately, so a stale BigQuerySync is otherwise invisible.
  */
-var APP_BUILD = '2026-10-08-f67';
+var APP_BUILD = '2026-10-08-f68';
 
 var ADMIN_SHEET_ID = '1VPBADMXvhOww_52O1n2CieTsQB6XCotLt6XdAQsq0ik';
 var AUDIT_SHEET_ID = '1tf98iS18vV08mQtPV9Vq6hQVkEp6Qg-ebUwHkeRlwaQ';
@@ -609,7 +609,11 @@ function saveConfig(cfg) {
       // Listed here so a config save preserves it — objectsToSheet rewrites the
       // tab from this list, so omitting a column drops it.
       objectsToSheet(ss, 'Goals',
-        ['goalId', 'clientId', 'clientIds', 'code', 'description', 'numTrials', 'status'],
+        // f68: maintenanceSince APPENDED. 'status' gains a third value,
+        // 'maintenance' — set when the BCBA approves a goal mastery — and this
+        // records when that happened so the first probe can be scheduled from it
+        // rather than from a last-run date that does not exist yet.
+        ['goalId', 'clientId', 'clientIds', 'code', 'description', 'numTrials', 'status', 'maintenanceSince'],
         cfg.goals);
     }
 
@@ -2083,7 +2087,7 @@ function objectsToSheet(ss, tabName, headers, objects) {
  * Returns: { goals: { code: bool }, behaviors: { key: statusString }, newMasteries: [...] }
  */
 function getMasteryStatus(clientSheetId, clientId, clientName, therapistName, therapistEmail, behaviorLabelToKey) {
-  var result = { goals: {}, behaviors: {}, newMasteries: [] };
+  var result = { goals: {}, behaviors: {}, newMasteries: [], lastRun: {} };
   if (!clientSheetId) return result;
 
   try {
@@ -2118,6 +2122,17 @@ function checkGoalMastery(ss, clientId, clientName, therapistName, therapistEmai
   // five) is what lets a not-run day be skipped instead of blocking mastery.
   // A goal absent from Percent Correct had no trials scored that session, so it
   // never enters its own sequence.
+  // f68: the last date each goal was actually run, so the frontend can tell when
+  // a maintenance probe is due. Read from the SAME rows the mastery scan already
+  // walks — no extra sheet read for a per-session question.
+  var dateCol = -1;
+  for (var di = 0; di < headers.length; di++) {
+    var dn = String(headers[di]).trim();
+    if (dn === 'dateISO') { dateCol = di; break; }       // prefer the ISO column
+    if (dn === 'Date' && dateCol < 0) dateCol = di;      // fall back to display date
+  }
+  if (!result.lastRun) result.lastRun = {};
+
   var goalSeq = {};
   for (var ri = 1; ri < rows.length; ri++) {
     var pctJson = String(rows[ri][pctJsonCol] || '').trim();
@@ -2132,9 +2147,21 @@ function checkGoalMastery(ss, clientId, clientName, therapistName, therapistEmai
       if (lvlStr) { try { lvlObj = JSON.parse(lvlStr) || {}; } catch (e) { lvlObj = {}; } }
     }
 
+    // Row date, used for lastRun only.
+    var rowDate = '';
+    if (dateCol >= 0) {
+      rowDate = toDateISO(rows[ri][dateCol]) || '';
+    }
+
     var rowCodes = Object.keys(pctObj);
     for (var ki = 0; ki < rowCodes.length; ki++) {
       var rc  = rowCodes[ki];
+      // lastRun counts ANY session the goal was scored in, with or without a
+      // prompt level — a maintenance probe is "was it run", not "did it count
+      // toward mastery", so this deliberately sits above the level check below.
+      if (rowDate && (!result.lastRun[rc] || rowDate > result.lastRun[rc])) {
+        result.lastRun[rc] = rowDate;
+      }
       var lvl = String(lvlObj[rc] || '').trim();
       if (!lvl) continue;   // unknown → not run (or pre-f30a row) → skip entirely
       if (!goalSeq[rc]) goalSeq[rc] = [];

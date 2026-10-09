@@ -774,6 +774,15 @@
                         font-weight: 600; text-align: right; margin-top: 2px; }
 
     /* ── MASTERY BADGES ── */
+    .maint-badge {
+      display:inline-flex; align-items:center; gap:3px;
+      background:#E0F2FE; border:1.5px solid #0284C7; border-radius:100px;
+      padding:2px 8px; font-size:10px; font-weight:800; color:#075985;
+      margin-left:6px; vertical-align:middle;
+    }
+    .goal-card.goal-maint { border-left:3px solid #0284C7; }
+    .admin-maint-tag { font-size:10px; font-weight:800; color:#075985;
+      background:#E0F2FE; border-radius:100px; padding:1px 7px; margin-left:6px; }
     .mastery-badge-goal {
       display: inline-flex; align-items: center; gap: 3px;
       background: #FEF3C7; border: 1.5px solid #F59E0B;
@@ -1333,6 +1342,7 @@ let S = {
   trials: {},
   promptLevels: {},   // f30a: goalCode -> level code, one per goal per session
   isProbe:      {},   // f30c: goalCode -> true when this goal was PROBED (unprompted)
+  maintHidden:  {},   // f68: goalCode -> true when a maintenance probe is NOT due this session
   trialTimes:   {},   // f30a: goalCode -> [ISO per trial], captured automatically
   abc: [],
   clockInterval: null, sessInterval: null, sessStartTs: null,
@@ -1466,7 +1476,11 @@ function applyConfig(raw, opts = {}) {
           var gids = g.clientIds || g.clientId || '';
           return gids.split(',').map(function(s){return s.trim();}).indexOf(c.id) >= 0;
         })
-        .map(g => ({ code:g.code, name:g.description, numTrials:parseInt(g.numTrials)||5 })),
+        // f68: status and maintenanceSince must survive this mapping — buildTrials
+        // needs to know a goal is in maintenance SYNCHRONOUSLY. Only its due-date
+        // needs the server.
+        .map(g => ({ code:g.code, name:g.description, numTrials:parseInt(g.numTrials)||5,
+                     status:(g.status||'active'), maintenanceSince:(g.maintenanceSince||'') })),
       // Behaviors assigned to this client (empty clientIds = all clients)
       behaviors: activeBehaviors.filter(b => {
         if (!b.clientIds || !b.clientIds.trim()) return true;
@@ -2508,13 +2522,25 @@ function buildTrials() {
     return;
   }
   S.client.goals.forEach(g => {
-    const n = g.numTrials || 5;
+    // f68 MAINTENANCE. Tatiana's ruling: once she approves a goal mastery it moves
+    // to maintenance and is probed ONCE EVERY TWO WEEKS. A maintenance check is a
+    // probe by definition — unprompted, one opportunity — so it reuses the f30c
+    // probe mechanism rather than inventing a second concept: one trial, probe
+    // ticked, level forced to Independent and the dropdown locked.
+    const isMaint = (g.status === 'maintenance');
+    const n = isMaint ? 1 : (g.numTrials || 5);
     S.trials[g.code] = Array(n).fill(null);
-    S.promptLevels[g.code] = '';
+    S.promptLevels[g.code] = isMaint ? 'I' : '';
     S.trialTimes[g.code]   = Array(n).fill('');
-    S.isProbe[g.code]      = false;
+    S.isProbe[g.code]      = isMaint;
     const card = document.createElement('div');
-    card.className = 'goal-card';
+    card.className = 'goal-card' + (isMaint ? ' goal-maint' : '');
+    // Tagged so the async due-check can hide the ones not yet due — the config
+    // says "maintenance", only the server knows when it was last run.
+    if (isMaint) {
+      card.setAttribute('data-maint', g.code);
+      card.setAttribute('data-maint-since', g.maintenanceSince || '');
+    }
     var slots = '';
     for (var i = 0; i < n; i++) {
       slots +=
@@ -2530,6 +2556,7 @@ function buildTrials() {
         '<span class="goal-name">' + escHtml(g.name) +
           '<span class="mastery-loading" id="mastery-loading-goal-' + g.code + '" title="Checking mastery...">&#9203;</span>' +
           '<span class="mastery-badge-goal" id="mastery-goal-' + g.code + '" style="display:none">&#11088; MASTERED</span>' +
+          (isMaint ? '<span class="maint-badge">&#128260; MAINTENANCE PROBE</span>' : '') +
         '</span>' +
         '<span class="goal-pct" id="pct-' + g.code + '">\u2014</span>' +
       '</div>' +
@@ -2540,15 +2567,16 @@ function buildTrials() {
         '<label style="display:flex;align-items:center;gap:5px;font-size:10.5px;font-weight:800;' +
           'color:var(--muted);text-transform:uppercase;letter-spacing:.3px;white-space:nowrap;cursor:pointer" ' +
           'title="Probe / cold probe — run with no prompting">' +
-          '<input type="checkbox" id="pb-' + escAttr(g.code) + '" ' +
+          '<input type="checkbox" id="pb-' + escAttr(g.code) + '"' + (isMaint ? ' checked disabled' : '') + ' ' +
             'onchange="setProbe(\'' + esc(g.code) + '\',this.checked)"> Probe' +
         '</label>' +
         '<label for="pl-' + escAttr(g.code) + '" style="font-size:10.5px;font-weight:800;' +
           'color:var(--muted);text-transform:uppercase;letter-spacing:.3px;white-space:nowrap">Prompt level</label>' +
-        '<select class="form-ctrl" id="pl-' + escAttr(g.code) + '" ' +
+        '<select class="form-ctrl" id="pl-' + escAttr(g.code) + '"' + (isMaint ? ' disabled' : '') + ' ' +
           'style="flex:1;padding:9px 10px;font-size:13px" ' +
           'onchange="setPromptLevel(\'' + esc(g.code) + '\',this.value)">' +
-          '<option value="">\u2014 select \u2014</option>' + promptLevelOptions('') +
+          (isMaint ? promptLevelOptions('I')
+                   : '<option value="">\u2014 select \u2014</option>' + promptLevelOptions('')) +
         '</select>' +
       '</div>' +
       '<div class="trial-btns">' + slots + '</div>';
@@ -3332,7 +3360,10 @@ function buildPayload() {
   const profile    = S.therapist.profile || 'RBT';
   const billingCode = billingCodeFor(profile, S.sessType);
 
-  const trialData = S.client.goals.map(g => {
+  // f68: a maintenance goal not due this fortnight is withheld, not scored — it
+  // must not produce a row. Only goals THIS session deliberately removed are
+  // filtered; every other unscored goal still behaves exactly as before.
+  const trialData = S.client.goals.filter(g => !(S.maintHidden || {})[g.code]).map(g => {
     const t = S.trials[g.code] || [];
     const answered = t.filter(x => x !== null);
     const pct = answered.length ? Math.round(t.filter(x=>x===true).length/answered.length*100) : null;
@@ -3459,7 +3490,7 @@ function resetState() {
   S.behaviors = {};
   CFG.BEHAVIORS.forEach(b => { S.behaviors[b.key] = 0; });
   S.tantrum = { count:0, totalSec:0, curSec:0, running:false, interval:null, startTs:null };
-  S.trials = {}; S.promptLevels = {}; S.trialTimes = {}; S.isProbe = {};
+  S.trials = {}; S.promptLevels = {}; S.trialTimes = {}; S.isProbe = {}; S.maintHidden = {};
   S.abc = []; abcIdSeq = 0;
   S.appStartTime = null; S.actualStartTime = null; S.actualStartTimeDate = null;
   S.lateStartReason = '';
@@ -3612,6 +3643,10 @@ function renderAdminList(type) {
   items.forEach((item, idx) => {
     adminItems.push(item);
     const inactive = (item.status || 'active') === 'inactive';
+    const maint    = (item.status || '') === 'maintenance';
+    // Shown as its own tag: 'maintenance' is neither active nor inactive, and
+    // without a marker a goal being probed fortnightly looks like a normal one.
+    const maintTag = maint ? '<span class="admin-maint-tag">MAINTENANCE</span>' : '';
     const div = document.createElement('div');
     div.className = 'admin-item' + (inactive ? ' inactive' : '');
 
@@ -3643,7 +3678,7 @@ function renderAdminList(type) {
       const clientName = (raw.clients||[]).find(c=>c.id===item.clientId)?.name || item.clientId;
       preview = `<span class="goal-code" style="font-size:11px">${item.code}</span>`;
       name    = item.description;
-      sub     = `${clientName} \u2022 ${item.numTrials||5} trials`;
+      sub     = `${clientName} \u2022 ${maint ? '1 trial \u2022 probe every 2 weeks' : (item.numTrials||5) + ' trials'}`;
     }
 
     const deleteBtn = (type === 'goals' && AUTH.role === 'admin')
@@ -3652,7 +3687,7 @@ function renderAdminList(type) {
     div.innerHTML =
       '<div class="admin-item-left">' + preview + '</div>' +
       '<div class="admin-item-body">' +
-        '<div class="admin-item-name">' + escHtml(name) + '</div>' +
+        '<div class="admin-item-name">' + escHtml(name) + maintTag + '</div>' +
         (sub ? '<div class="admin-item-sub">' + escHtml(sub) + '</div>' : '') +
       '</div>' +
       '<div class="admin-item-actions">' +
@@ -5427,7 +5462,51 @@ async function loadMasteryStatus() {
   document.querySelectorAll('.mastery-loading').forEach(function(el) { el.style.display = 'none'; });
 }
 
+const MAINTENANCE_DAYS = 14;   // f68: Tatiana's ruling — one probe every 2 weeks
+
+/**
+ * f68: hide maintenance goals that are not due yet.
+ *
+ * Due-ness needs the server (when was this goal last run), so it arrives after
+ * the trials are drawn. A maintenance goal is therefore rendered first and hidden
+ * second — never the reverse, because a goal that appears late would be missed.
+ *
+ * Baseline is the last session the goal was RUN in; if it has not been run since
+ * going to maintenance, maintenanceSince is the baseline instead, so the first
+ * probe lands two weeks after approval rather than immediately.
+ */
+function applyMaintenanceDue(lastRun) {
+  const cards = document.querySelectorAll('[data-maint]');
+  if (!cards.length) return;
+  const cutoff = new Date(Date.now() - MAINTENANCE_DAYS * 86400000)
+                   .toISOString().slice(0, 10);
+  Array.prototype.forEach.call(cards, function (card) {
+    const code = card.getAttribute('data-maint');
+    const since = card.getAttribute('data-maint-since') || '';
+    const last = (lastRun && lastRun[code]) ? String(lastRun[code]) : since;
+    // No baseline at all (approved before maintenanceSince existed, or never run):
+    // show it, because a silent omission is worse than an early probe.
+    const due = !last || last <= cutoff;
+    card.style.display = due ? '' : 'none';
+    if (!due) {
+      // Clear its state and record that it was withheld. Clearing alone is not
+      // enough: buildPayload maps over S.client.goals, so the goal would still
+      // emit a Trial Summary row with empty trials. The submit gate is already
+      // safe either way (it only demands a prompt level for goals with scored
+      // trials), so this is about not writing noise.
+      delete S.trials[code];
+      delete S.promptLevels[code];
+      delete S.trialTimes[code];
+      delete S.isProbe[code];
+      S.maintHidden[code] = true;
+    } else {
+      delete S.maintHidden[code];
+    }
+  });
+}
+
 function applyMasteryBadges(mastery) {
+  if (mastery && mastery.lastRun) applyMaintenanceDue(mastery.lastRun);
   if (mastery.goals) {
     var goalKeys = Object.keys(mastery.goals);
     for (var gi = 0; gi < goalKeys.length; gi++) {
@@ -5629,7 +5708,31 @@ async function masteryApprove(clientSheetId, clientId, behaviorKey, btn, mastery
     });
     var data = await resp.json();
     if (data.success) {
-      toast('Mastery confirmed', 'ok');
+      // f68: approving a GOAL mastery moves it to maintenance. Done here, on the
+      // frontend, deliberately: the admin panel is the single editor of the Goals
+      // tab (objectsToSheet rewrites it from a fixed header list), so a second
+      // server-side writer would be the one-editor-per-tab hazard. This also keeps
+      // RAW_CONFIG in step without a reload.
+      if (masteryType === 'goal') {
+        const rawCfg = JSON.parse(JSON.stringify(RAW_CONFIG || DEFAULT_CONFIG));
+        const gl = rawCfg.goals || [];
+        const gi = gl.findIndex(function (x) {
+          return String(x.code || '') === String(behaviorKey) &&
+                 (!clientId || String(x.clientId || '') === String(clientId) ||
+                  String(x.clientIds || '').split(/[,;]/).map(function(t){return t.trim();}).indexOf(String(clientId)) >= 0);
+        });
+        if (gi >= 0) {
+          gl[gi].status = 'maintenance';
+          gl[gi].maintenanceSince = new Date().toISOString().slice(0, 10);
+          rawCfg.goals = gl;
+          persistConfig(rawCfg);
+          toast('Mastery confirmed \u2014 goal moved to maintenance (probe every 2 weeks)', 'ok');
+        } else {
+          toast('Mastery confirmed \u2014 could not find the goal to set maintenance', 'warn');
+        }
+      } else {
+        toast('Mastery confirmed', 'ok');
+      }
       _masteryReportData = null;
       loadMasteryReport();
     } else {
