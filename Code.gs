@@ -17,7 +17,7 @@
  * Keep BQ_SYNC_BUILD in BigQuerySync.gs set to the same value: the two files are
  * pasted separately, so a stale BigQuerySync is otherwise invisible.
  */
-var APP_BUILD = '2026-10-08-f69b';
+var APP_BUILD = '2026-10-08-f69c';
 
 var ADMIN_SHEET_ID = '1VPBADMXvhOww_52O1n2CieTsQB6XCotLt6XdAQsq0ik';
 var AUDIT_SHEET_ID = '1tf98iS18vV08mQtPV9Vq6hQVkEp6Qg-ebUwHkeRlwaQ';
@@ -1431,15 +1431,29 @@ function auditClientGoalColumns(clientId) {
   if (!values.length) { Logger.log('Trial Data is empty'); return { success: true, columns: [] }; }
   var headers = values[0];
 
-  // Everything that is not a known base/analytics header is a goal column.
+  // Everything that is not a known header is a goal column.
+  //
+  // CORRECTED: Trial Data stores each goal as a GROUP of columns —
+  //   <GoalCode> | Trial 1 | Trial 2 | ... | %
+  // The first version of this list only excluded the base and analytics headers,
+  // so every 'Trial N' and '%' sub-column was reported as an unassigned goal.
+  // That produced ~850 false positives out of 884 flags and buried the handful of
+  // real ones. The sub-column names are now excluded by pattern.
   var known = {};
   var baseAndAnalytics = [
     'Date', 'Setting', 'Therapist', 'Percent Correct', 'Prompt Levels',
     'Trial Times', 'Probe Flags', 'submissionId', 'clientName', 'clientId',
     'therapistEmail', 'sessionType', 'billingCode', 'isDraft', 'payloadHash',
-    'submittedAt', 'dateISO'
+    'submittedAt', 'dateISO', '%', 'Percentage', 'Notes', 'Session ID'
   ];
   for (var ki = 0; ki < baseAndAnalytics.length; ki++) known[baseAndAnalytics[ki]] = true;
+
+  function isSubColumn(h) {
+    if (known[h]) return true;
+    if (/^Trial\s*\d+$/i.test(h)) return true;   // Trial 1 … Trial 10
+    if (/^%$/.test(h)) return true;
+    return false;
+  }
 
   Logger.log('=== ' + (client.name || cid) + ' (' + cid + ') — Trial Data goal columns ===');
   Logger.log('Goals assigned to this client today: ' + Object.keys(assigned).length);
@@ -1448,7 +1462,7 @@ function auditClientGoalColumns(clientId) {
   var out = [], flagged = 0;
   for (var hi = 0; hi < headers.length; hi++) {
     var h = String(headers[hi] || '').replace(/^\s+|\s+$/g, '');
-    if (!h || known[h]) continue;
+    if (!h || isSubColumn(h)) continue;
     var filled = 0;
     for (var r = 1; r < values.length; r++) {
       var cell = values[r][hi];
@@ -1463,7 +1477,8 @@ function auditClientGoalColumns(clientId) {
   }
 
   Logger.log('');
-  Logger.log(out.length + ' goal column(s). ' + flagged + ' hold data for a goal not currently assigned.');
+  Logger.log(out.length + ' GOAL(s) in this sheet. ' + flagged +
+             ' hold data for a goal not assigned to this client today.');
   if (flagged) {
     Logger.log('REVIEW each one: a goal that was assigned, scored, then un-assigned is');
     Logger.log('legitimate history. A goal never assigned to this client is not.');
