@@ -17,7 +17,7 @@
  * Keep BQ_SYNC_BUILD in BigQuerySync.gs set to the same value: the two files are
  * pasted separately, so a stale BigQuerySync is otherwise invisible.
  */
-var APP_BUILD = '2026-10-05-f54g-scope';
+var APP_BUILD = '2026-10-08-f67';
 
 var ADMIN_SHEET_ID = '1VPBADMXvhOww_52O1n2CieTsQB6XCotLt6XdAQsq0ik';
 var AUDIT_SHEET_ID = '1tf98iS18vV08mQtPV9Vq6hQVkEp6Qg-ebUwHkeRlwaQ';
@@ -83,11 +83,11 @@ function doPost(e) {
       result = { success: true, removed: cleanResult.removed, details: cleanResult.details };
 
     } else if (data.action === 'approveBehaviorMastery') {
-      var abmResult = approveBehaviorMastery(data.clientSheetId, data.clientId, data.behaviorKey, data.approverEmail, data.approverRole);
+      var abmResult = approveBehaviorMastery(data.clientSheetId, data.clientId, data.behaviorKey, data.approverEmail, data.approverRole, data.masteryType);
       result = abmResult;
 
     } else if (data.action === 'dismissBehaviorMastery') {
-      var dbmResult = dismissBehaviorMastery(data.clientSheetId, data.clientId, data.behaviorKey, data.approverEmail, data.approverRole);
+      var dbmResult = dismissBehaviorMastery(data.clientSheetId, data.clientId, data.behaviorKey, data.approverEmail, data.approverRole, data.masteryType);
       result = dbmResult;
 
     } else if (data.action === 'recoverTrialData') {
@@ -2164,7 +2164,11 @@ function checkGoalMastery(ss, clientId, clientName, therapistName, therapistEmai
       // Check if this mastery is already recorded in Mastery Log
       if (!isMasteryLogged(ss, 'goal', code)) {
         var scoresStr = scoreList.join(', ') + '% at Independent';
-        writeMasteryLog(ss, 'goal', code, '', today, scoresStr, therapistName, therapistEmail, clientName, clientId);
+        // f67: 'recommended', not auto-confirmed. Tatiana asked to approve goal
+        // mastery the same way she approves behaviour mastery, and a goal that
+        // auto-confirms gives her nothing to approve. Legacy rows keep defaulting
+        // to 'confirmed' (see the backfill below) so no past goal is un-confirmed.
+        writeMasteryLog(ss, 'goal', code, '', today, scoresStr, therapistName, therapistEmail, clientName, clientId, 'recommended');
         result.newMasteries.push({ type: 'goal', code: code, description: '', masteryDate: today, lastScores: scoresStr });
       }
     }
@@ -2602,7 +2606,14 @@ function cleanDuplicateMasteries(clients) {
  * Sets status = 'confirmed', approvedBy, approvalDate on the most recent
  * matching mastery log row.
  */
-function approveBehaviorMastery(clientSheetId, clientId, behaviorKey, approverEmail, approverRole) {
+/**
+ * f67: now handles GOAL mastery as well as behaviour mastery. `masteryType`
+ * defaults to 'behavior' so any older caller keeps working unchanged — the row
+ * match used to be hardcoded to 'behavior', which is why a goal could never be
+ * approved however the UI was wired.
+ */
+function approveBehaviorMastery(clientSheetId, clientId, behaviorKey, approverEmail, approverRole, masteryType) {
+  var mType = (masteryType === 'goal') ? 'goal' : 'behavior';
   if (!approverRole || (approverRole !== 'Admin' && approverRole !== 'BCBA')) {
     return { success: false, error: 'Unauthorized: BCBA or Admin role required' };
   }
@@ -2628,7 +2639,7 @@ function approveBehaviorMastery(clientSheetId, clientId, behaviorKey, approverEm
     var lastMatchRow = -1;
     for (var ri = 1; ri < data.length; ri++) {
       var row = data[ri];
-      if (String(row[colMap['type']]).trim() === 'behavior' &&
+      if (String(row[colMap['type']]).trim() === mType &&
           String(row[colMap['code']]).trim() === behaviorKey) {
         lastMatchRow = ri;
       }
@@ -2667,7 +2678,14 @@ function approveBehaviorMastery(clientSheetId, clientId, behaviorKey, approverEm
  * BCBA/Admin dismisses a behavior mastery recommendation.
  * Sets status = 'dismissed' on the most recent matching mastery log row.
  */
-function dismissBehaviorMastery(clientSheetId, clientId, behaviorKey, approverEmail, approverRole) {
+/**
+ * f67: now handles GOAL mastery as well as behaviour mastery. `masteryType`
+ * defaults to 'behavior' so any older caller keeps working unchanged — the row
+ * match used to be hardcoded to 'behavior', which is why a goal could never be
+ * approved however the UI was wired.
+ */
+function dismissBehaviorMastery(clientSheetId, clientId, behaviorKey, approverEmail, approverRole, masteryType) {
+  var mType = (masteryType === 'goal') ? 'goal' : 'behavior';
   if (!approverRole || (approverRole !== 'Admin' && approverRole !== 'BCBA')) {
     return { success: false, error: 'Unauthorized: BCBA or Admin role required' };
   }
@@ -2692,7 +2710,7 @@ function dismissBehaviorMastery(clientSheetId, clientId, behaviorKey, approverEm
     var lastMatchRow = -1;
     for (var ri = 1; ri < data.length; ri++) {
       var row = data[ri];
-      if (String(row[colMap['type']]).trim() === 'behavior' &&
+      if (String(row[colMap['type']]).trim() === mType &&
           String(row[colMap['code']]).trim() === behaviorKey) {
         lastMatchRow = ri;
       }

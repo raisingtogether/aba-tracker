@@ -440,6 +440,12 @@
     .admin-tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); }
 
     /* ── ADMIN LIST ITEMS ── */
+    .admin-filter-row { display:flex; align-items:center; gap:10px; padding:10px 0 14px; }
+    .admin-filter-row label { font-size:11px; font-weight:800; letter-spacing:.06em;
+      text-transform:uppercase; color:var(--g400); flex:none; }
+    .admin-filter-row select { flex:1; min-width:0; padding:9px 11px; font-size:14px;
+      font-weight:600; border:1px solid var(--g200); border-radius:8px;
+      background:#fff; color:var(--g800); }
     .admin-item {
       background: white; border-radius: var(--r); padding: 14px 16px;
       margin-bottom: 10px; box-shadow: var(--shadow);
@@ -3477,6 +3483,9 @@ function resetState() {
 // ─── ADMIN PANEL ──────────────────────────────────────────────────────
 let adminTab   = 'therapists';
 let adminItems = [];
+// f67 Goals/Behaviors client filter. Declared here with the other admin state
+// because showAdminTab() resets it well above renderAdminList's definition.
+let _adminClientFilter = '';
 let editModalType = null;
 let editModalItem = null;
 
@@ -3520,7 +3529,22 @@ function showAdminTab(tab) {
   if (tabEl) tabEl.classList.add('active');
   const noAddBar = ['settings','authorizations','payroll','admins','mastery','billing','manual','alerts'];
   document.getElementById('admin-add-bar').style.display = noAddBar.indexOf(tab) >= 0 ? 'none' : '';
+  _adminClientFilter = '';
   renderAdminList(tab);
+}
+
+// f67. Goals carry BOTH clientId and clientIds (see the entity map) and nothing
+// declares which wins, so membership accepts either: the single owner field, or
+// the comma-separated list. Behaviors use clientIds only. An item with neither is
+// treated as unassigned and shown under every client — hiding it would make it
+// unreachable in the admin UI, which is worse than showing it twice.
+function _itemBelongsToClient(item, clientId) {
+  if (!clientId) return true;
+  const one = String(item.clientId || '').trim();
+  if (one && one === clientId) return true;
+  const many = String(item.clientIds || '').split(/[,;]/).map(function(x){ return x.trim(); }).filter(Boolean);
+  if (many.length) return many.indexOf(clientId) >= 0;
+  return !one;
 }
 
 function renderAdminList(type) {
@@ -3541,12 +3565,48 @@ function renderAdminList(type) {
     return;
   }
 
-  const raw   = RAW_CONFIG || DEFAULT_CONFIG;
-  const items = raw[type] || [];
+  const raw    = RAW_CONFIG || DEFAULT_CONFIG;
+  const allRaw = raw[type] || [];
 
-  if (!items.length) {
+  if (!allRaw.length) {
     container.innerHTML = '<div class="empty-msg">No ' + type + ' yet. Tap + Add to create one.</div>';
     return;
+  }
+
+  // f67: client filter for Goals (and Behaviors, same shape). 243 goals across 7
+  // clients in one flat list is not reviewable — which is what Tatiana ran into.
+  // Kept in a module var so the 500 ms persistConfig debounce cannot reset it
+  // mid-edit, and the per-client counts come from the same predicate as the
+  // filter so the number in the dropdown always matches what the list shows.
+  let items = allRaw;
+  if (type === 'goals' || type === 'behaviors') {
+    const clients = (raw.clients || []).filter(function(c){ return (c.status||'active') !== 'inactive'; });
+    const row = document.createElement('div');
+    row.className = 'admin-filter-row';
+    let opts = '<option value="">All clients (' + allRaw.length + ')</option>';
+    for (let ci = 0; ci < clients.length; ci++) {
+      const cid = String(clients[ci].id || '');
+      const n = allRaw.filter(function(it){ return _itemBelongsToClient(it, cid); }).length;
+      opts += '<option value="' + escAttr(cid) + '"' + (_adminClientFilter === cid ? ' selected' : '') + '>' +
+              escHtml(clients[ci].name || cid) + ' (' + n + ')</option>';
+    }
+    row.innerHTML = '<label for="admin-client-filter">Client</label>' +
+                    '<select id="admin-client-filter">' + opts + '</select>';
+    container.appendChild(row);
+    row.querySelector('select').addEventListener('change', function (e) {
+      _adminClientFilter = e.target.value || '';
+      renderAdminList(type);
+    });
+    if (_adminClientFilter) {
+      items = allRaw.filter(function(it){ return _itemBelongsToClient(it, _adminClientFilter); });
+      if (!items.length) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-msg';
+        empty.textContent = 'No ' + type + ' assigned to this client yet.';
+        container.appendChild(empty);
+        return;
+      }
+    }
   }
 
   items.forEach((item, idx) => {
@@ -5479,16 +5539,19 @@ function renderMasteryReportResults(entries, year, month) {
       var ent = cEntries[ei];
       var entStatus = ent.status || 'recommended';
       var actionBtns = '';
-      if (canApprove && ent.type === 'behavior' && (entStatus === 'recommended' || entStatus === 'pendingGeneralization')) {
+      // f67: goals are reviewable too. 'pendingGeneralization' is behaviour-only
+      // (it means one setting observed), so a goal only ever shows as recommended.
+      if (canApprove && (entStatus === 'recommended' || entStatus === 'pendingGeneralization')) {
+        var entType = (ent.type === 'goal') ? 'goal' : 'behavior';
         var bhKey = esc(ent.code || '');
         var bhClientId = esc(ent.clientId || '');
         // Use sheetId returned directly by server in the mastery entry (no CFG.CLIENTS lookup needed)
         var bhSheetId = esc((ent.sheetId || '').trim());
         actionBtns = '<span style="margin-left:8px">' +
           '<button class="btn btn-sm" style="padding:2px 10px;font-size:11px;background:#16A34A;color:white;border-radius:100px;border:none;cursor:pointer" ' +
-            'onclick="masteryApprove(\'' + bhSheetId + '\',\'' + bhClientId + '\',\'' + bhKey + '\',this)">Approve</button> ' +
+            'onclick="masteryApprove(\'' + bhSheetId + '\',\'' + bhClientId + '\',\'' + bhKey + '\',this,\'' + entType + '\')">Approve</button> ' +
           '<button class="btn btn-sm" style="padding:2px 10px;font-size:11px;background:transparent;color:#EF4444;border:1px solid #EF4444;border-radius:100px;cursor:pointer" ' +
-            'onclick="masteryDismiss(\'' + bhSheetId + '\',\'' + bhClientId + '\',\'' + bhKey + '\',this)">Dismiss</button>' +
+            'onclick="masteryDismiss(\'' + bhSheetId + '\',\'' + bhClientId + '\',\'' + bhKey + '\',this,\'' + entType + '\')">Dismiss</button>' +
         '</span>';
       }
       var approvalInfo = '';
@@ -5513,7 +5576,7 @@ function renderMasteryReportResults(entries, year, month) {
   body.innerHTML = html;
 }
 
-async function masteryApprove(clientSheetId, clientId, behaviorKey, btn) {
+async function masteryApprove(clientSheetId, clientId, behaviorKey, btn, masteryType) {
   if (!AUTH.user) { toast('Not authenticated', 'err'); return; }
   if (AUTH.role !== 'admin' && AUTH.role !== 'bcba') { toast('Only BCBA or Admin can approve mastery', 'err'); return; }
   btn.disabled = true;
@@ -5526,6 +5589,7 @@ async function masteryApprove(clientSheetId, clientId, behaviorKey, btn) {
         clientSheetId: clientSheetId,
         clientId: clientId,
         behaviorKey: behaviorKey,
+        masteryType: (masteryType === 'goal') ? 'goal' : 'behavior',
         approverEmail: AUTH.user.email,
         approverRole: AUTH.role === 'admin' ? 'Admin' : (AUTH.role === 'bcba' ? 'BCBA' : AUTH.role)
       })
@@ -5545,7 +5609,7 @@ async function masteryApprove(clientSheetId, clientId, behaviorKey, btn) {
   }
 }
 
-async function masteryDismiss(clientSheetId, clientId, behaviorKey, btn) {
+async function masteryDismiss(clientSheetId, clientId, behaviorKey, btn, masteryType) {
   if (!AUTH.user) { toast('Not authenticated', 'err'); return; }
   if (AUTH.role !== 'admin' && AUTH.role !== 'bcba') { toast('Only BCBA or Admin can approve mastery', 'err'); return; }
   btn.disabled = true;
@@ -5558,6 +5622,7 @@ async function masteryDismiss(clientSheetId, clientId, behaviorKey, btn) {
         clientSheetId: clientSheetId,
         clientId: clientId,
         behaviorKey: behaviorKey,
+        masteryType: (masteryType === 'goal') ? 'goal' : 'behavior',
         approverEmail: AUTH.user.email,
         approverRole: AUTH.role === 'admin' ? 'Admin' : (AUTH.role === 'bcba' ? 'BCBA' : AUTH.role)
       })
