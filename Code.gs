@@ -17,7 +17,7 @@
  * Keep BQ_SYNC_BUILD in BigQuerySync.gs set to the same value: the two files are
  * pasted separately, so a stale BigQuerySync is otherwise invisible.
  */
-var APP_BUILD = '2026-10-08-f69d';
+var APP_BUILD = '2026-10-08-f71';
 
 var ADMIN_SHEET_ID = '1VPBADMXvhOww_52O1n2CieTsQB6XCotLt6XdAQsq0ik';
 var AUDIT_SHEET_ID = '1tf98iS18vV08mQtPV9Vq6hQVkEp6Qg-ebUwHkeRlwaQ';
@@ -1333,6 +1333,133 @@ function writeSessionLog(ss, d) {
  * of duplicate columns when two sessions submit simultaneously.
  */
 /**
+ * f71 — READ-ONLY survey of duplicate goal columns. Writes nothing.
+ *
+ * Reports, per client:
+ *   - every Trial Data header appearing more than once, with each column's row
+ *     count, the number of rows where BOTH columns hold data, and whether those
+ *     overlapping values AGREE or CONFLICT
+ *   - every Goals row duplicated for that client in RT Admin, which is the cause
+ *
+ * The overlap verdict decides whether a merge is even possible:
+ *   DISJOINT  — no row has data in both. Merge is a straight copy.
+ *   AGREE     — overlaps hold identical values. Merge is safe.
+ *   CONFLICT  — overlaps disagree. NO automatic merge can be correct; a human
+ *               has to decide which reading of that session is the real one.
+ *
+ * I deliberately have NOT written the merge yet. Writing a destructive repair
+ * for a data shape nobody has looked at is how data gets destroyed — this tells
+ * us the shape first.
+ */
+function previewDuplicateGoalColumns() {
+  var adminSS  = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var clients  = sheetToObjects(adminSS, 'Clients');
+  var goalsRaw = sheetToObjects(adminSS, 'Goals');
+  var totalDup = 0, totalConflict = 0, totalDupRows = 0;
+
+  var known = { 'Date':1,'Setting':1,'Therapist':1,'Percent Correct':1,'Prompt Levels':1,
+    'Trial Times':1,'Probe Flags':1,'submissionId':1,'clientName':1,'clientId':1,
+    'therapistEmail':1,'sessionType':1,'billingCode':1,'isDraft':1,'payloadHash':1,
+    'submittedAt':1,'dateISO':1,'%':1,'Percentage':1,'Notes':1,'Session ID':1 };
+
+  for (var ci = 0; ci < clients.length; ci++) {
+    var c   = clients[ci];
+    var cid = String(c.id || '').replace(/^\s+|\s+$/g, '');
+    var sid = String(c.sheetId || '').replace(/^\s+|\s+$/g, '');
+    if (!cid || !sid) continue;
+    if (String(c.status || 'active').toLowerCase() === 'inactive') continue;
+
+    // duplicate GOALS ROWS for this client — the cause
+    var codeCount = {};
+    for (var gi = 0; gi < goalsRaw.length; gi++) {
+      if (!_goalRowIsForClient(goalsRaw[gi], cid)) continue;
+      var gc = String(goalsRaw[gi].code || '').replace(/^\s+|\s+$/g, '').toUpperCase();
+      if (!gc) continue;
+      codeCount[gc] = (codeCount[gc] || 0) + 1;
+    }
+    var dupRows = [];
+    for (var k in codeCount) { if (codeCount.hasOwnProperty(k) && codeCount[k] > 1) dupRows.push(k + ' x' + codeCount[k]); }
+
+    var td;
+    try { td = SpreadsheetApp.openById(sid).getSheetByName('Trial Data'); } catch (e) { continue; }
+    if (!td) continue;
+    var values = td.getDataRange().getValues();
+    if (values.length < 2) continue;
+    var headers = values[0];
+
+    // group column indexes by header name
+    var byName = {};
+    for (var hi = 0; hi < headers.length; hi++) {
+      var h = String(headers[hi] || '').replace(/^\s+|\s+$/g, '');
+      if (!h || known[h] || /^Trial\s*\d+$/i.test(h)) continue;
+      if (!byName[h]) byName[h] = [];
+      byName[h].push(hi);
+    }
+
+    var names = Object.keys(byName), printed = false;
+    for (var ni = 0; ni < names.length; ni++) {
+      var cols = byName[names[ni]];
+      if (cols.length < 2) continue;
+
+      if (!printed) {
+        Logger.log('=== ' + (c.name || cid) + ' ===');
+        if (dupRows.length) Logger.log('  DUPLICATE GOALS ROWS in RT Admin: ' + dupRows.join(', '));
+        printed = true;
+      }
+
+      var counts = [], both = 0, agree = 0, conflict = 0;
+      for (var q = 0; q < cols.length; q++) counts.push(0);
+      for (var r = 1; r < values.length; r++) {
+        var present = [], vals = [];
+        for (var q2 = 0; q2 < cols.length; q2++) {
+          var v = values[r][cols[q2]];
+          var filled = !(v === '' || v === null || v === undefined);
+          if (filled) { counts[q2]++; present.push(q2); vals.push(String(v)); }
+        }
+        if (present.length > 1) {
+          both++;
+          var same = true;
+          for (var vi = 1; vi < vals.length; vi++) { if (vals[vi] !== vals[0]) { same = false; break; } }
+          if (same) agree++; else conflict++;
+        }
+      }
+      var verdict = conflict ? 'CONFLICT' : (both ? 'AGREE' : 'DISJOINT');
+      if (conflict) totalConflict++;
+      totalDup++;
+
+      Logger.log('  ' + names[ni] + '  x' + cols.length +
+                 '  rows=[' + counts.join(', ') + ']' +
+                 '  overlap=' + both + (both ? (' (agree ' + agree + ', conflict ' + conflict + ')') : '') +
+                 '  -> ' + verdict);
+    }
+    if (printed) Logger.log('');
+  }
+
+  Logger.log('==================================================');
+  Logger.log(totalDup + ' duplicated goal column set(s). ' + totalConflict + ' with CONFLICTING overlaps.');
+  Logger.log('');
+  if (!totalDup) {
+    Logger.log('Nothing to repair.');
+  } else if (!totalConflict) {
+    Logger.log('Every duplicate is DISJOINT or AGREEs on its overlaps, so a merge');
+    Logger.log('can be done losslessly: copy values into the first column, then');
+    Logger.log('delete the extra. Send me this log and I will write it with a');
+    Logger.log('backup, dry-run and rollback.');
+  } else {
+    Logger.log('At least one pair CONFLICTS — the same session holds different');
+    Logger.log('values in two columns for the same goal. No automatic merge can');
+    Logger.log('be right there; Tatiana has to say which reading is real.');
+  }
+  Logger.log('');
+  Logger.log('CAUSE, now fixed going forward (f71): _ensureColumnsBefore never');
+  Logger.log('marked a code as seen while scanning, so a code appearing twice in');
+  Logger.log('one payload inserted two columns. Any DUPLICATE GOALS ROWS listed');
+  Logger.log('above will keep splitting that goal until they are merged in the');
+  Logger.log('Goals tab as well.');
+  return { duplicates: totalDup, conflicts: totalConflict };
+}
+
+/**
  * f69d — READ-ONLY tracer. For every goal flagged by auditAllClientGoalColumns
  * (data present, not assigned to that client today) this prints the DATE,
  * SUBMISSION ID and THERAPIST of each row holding data.
@@ -2017,7 +2144,10 @@ function ensureSheetColumns(sheet, headers) {
   var existing = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
   var existingMap = {};
   for (var i = 0; i < existing.length; i++) {
-    existingMap[String(existing[i]).trim()] = true;
+    var have = String(existing[i]).trim();
+    if (!have) continue;
+    existingMap[have] = true;
+    existingMap[have.toUpperCase()] = true;   // f71: match the writer's fallback
   }
   var toAdd = [];
   for (var j = 0; j < headers.length; j++) {
@@ -2062,11 +2192,26 @@ function _ensureColumnsBefore(sheet, newCols, stopColsMap, preferredStops) {
   for (var i = 0; i < existing.length; i++) {
     existingMap[String(existing[i]).trim()] = true;
   }
+  // f71 ROOT CAUSE OF THE DUPLICATE GOAL COLUMNS. This loop never wrote back to
+  // existingMap, so a code appearing TWICE in newCols was pushed to `missing`
+  // twice and TWO columns were inserted with the same header. Two Goals rows
+  // with the same code for one client is all it took — and the f67 duplicate
+  // check only guards NEW saves, while the multi-client checkbox grid makes such
+  // rows easy to create. The result splits that goal's history across two
+  // columns, so any report reading one of them sees half the data.
+  //
+  // Marking each code as seen closes it. Case-insensitive too, because the WRITER
+  // already falls back to an uppercase lookup (colMap[code] then
+  // colMap[code.toUpperCase()]) while this creator matched exactly — so a code
+  // whose case changed would also have produced a second column.
   var missing = [];
   for (var j = 0; j < newCols.length; j++) {
-    if (!existingMap[String(newCols[j]).trim()]) {
-      missing.push(newCols[j]);
-    }
+    var want = String(newCols[j]).trim();
+    if (!want) continue;
+    if (existingMap[want] || existingMap[want.toUpperCase()]) continue;
+    missing.push(newCols[j]);
+    existingMap[want] = true;
+    existingMap[want.toUpperCase()] = true;
   }
   if (!missing.length) return;
 
