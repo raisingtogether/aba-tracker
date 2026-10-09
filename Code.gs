@@ -2073,8 +2073,10 @@ function objectsToSheet(ss, tabName, headers, objects) {
  * A recorded level that is NOT Independent does break the streak: that is a
  * known fact about a session the goal was actually run in, not a gap.
  *
- * Already-confirmed masteries are never revoked — isMasteryLogged only ever
- * suppresses a re-log.
+ * Already-confirmed masteries are never revoked. f67: a goal mastery is written
+ * as 'recommended' for Tatiana to approve, and a re-log is suppressed while the
+ * status is 'recommended' or 'confirmed' — but ALLOWED again after 'dismissed',
+ * so a dismissal is not a permanent veto on a goal the child later masters.
  * Behavior mastery: <=1 occurrence for 10 consecutive sessions →
  *   'recommended' (2+ distinct settings observed) or
  *   'pendingGeneralization' (only 1 setting observed).
@@ -2161,16 +2163,24 @@ function checkGoalMastery(ss, clientId, clientName, therapistName, therapistEmai
     }
     result.goals[code] = allMastered;
     if (allMastered) {
-      // Check if this mastery is already recorded in Mastery Log
-      if (!isMasteryLogged(ss, 'goal', code)) {
+      // f67: status-aware, mirroring checkBehaviorMastery.
+      //
+      // This used to call isMasteryLogged(), which only asks "does a row exist".
+      // That was fine while goal mastery auto-confirmed and there was no way to
+      // dismiss it. Now that Tatiana can DISMISS a goal, row-existence would be a
+      // ONE-WAY DOOR: a dismissed goal could never be recommended again, even if
+      // the child later met criteria. Behaviours already handle exactly this
+      // ('Recovery after dismiss'), so goals now follow the same rule.
+      var goalStatus = getMasteryLogStatus(ss, 'goal', code);
+      if (goalStatus === null || goalStatus === '' || goalStatus === 'dismissed') {
         var scoresStr = scoreList.join(', ') + '% at Independent';
-        // f67: 'recommended', not auto-confirmed. Tatiana asked to approve goal
-        // mastery the same way she approves behaviour mastery, and a goal that
-        // auto-confirms gives her nothing to approve. Legacy rows keep defaulting
-        // to 'confirmed' (see the backfill below) so no past goal is un-confirmed.
+        // 'recommended', not auto-confirmed — a goal that auto-confirms gives her
+        // nothing to approve. Legacy rows keep defaulting to 'confirmed' in the
+        // backfill, so no past goal is un-confirmed.
         writeMasteryLog(ss, 'goal', code, '', today, scoresStr, therapistName, therapistEmail, clientName, clientId, 'recommended');
         result.newMasteries.push({ type: 'goal', code: code, description: '', masteryDate: today, lastScores: scoresStr });
       }
+      // 'recommended' or 'confirmed' → already in her queue or already approved; skip.
     }
   }
 }

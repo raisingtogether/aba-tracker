@@ -4083,19 +4083,52 @@ function saveEntity() {
   persistConfig(raw);  // admin panel stays open — applyConfig called with navigate:false
 }
 
+/**
+ * f67: map a RENDERED row index back to its position in the full config list.
+ *
+ * Before the client filter, the rendered list WAS the full list, so a positional
+ * index worked. It no longer is. A positional index into the full list now points
+ * at a different record entirely — which would delete or disable the wrong goal,
+ * silently, with a confirm dialog naming the right one. Resolve by identity only.
+ *
+ * Matching mirrors the save path (goalId, then clientId+code) so there is one
+ * convention for what identifies a config row, not two.
+ */
+function _resolveAdminIndex(type, renderedIdx, list) {
+  const shown = adminItems[renderedIdx];
+  if (!shown) return -1;
+  if (type === 'goals') {
+    if (shown.goalId) {
+      const byId = list.findIndex(function(g){ return String(g.goalId||'') === String(shown.goalId); });
+      if (byId >= 0) return byId;
+    }
+    return list.findIndex(function(g){
+      return String(g.clientId||'') === String(shown.clientId||'') &&
+             String(g.code||'')     === String(shown.code||'');
+    });
+  }
+  if (type === 'behaviors') {
+    return list.findIndex(function(b){ return String(b.key||'') === String(shown.key||''); });
+  }
+  return list.findIndex(function(x){ return String(x.id||'') === String(shown.id||''); });
+}
+
 function toggleEntityStatus(type, idx) {
   const raw  = JSON.parse(JSON.stringify(RAW_CONFIG || DEFAULT_CONFIG));
   const list = raw[type] || [];
-  if (list[idx]) {
-    list[idx].status = (list[idx].status === 'inactive') ? 'active' : 'inactive';
-    persistConfig(raw);
-  }
+  const real = _resolveAdminIndex(type, idx, list);
+  if (real < 0) { toast('Could not locate that record \u2014 reload and try again', 'err'); return; }
+  list[real].status = (list[real].status === 'inactive') ? 'active' : 'inactive';
+  persistConfig(raw);
 }
 
 async function deleteGoal(idx) {
   const raw  = JSON.parse(JSON.stringify(RAW_CONFIG || DEFAULT_CONFIG));
   const list = raw.goals || [];
-  const goal = list[idx];
+  // Resolve by identity, never by position — the list may be filtered (f67).
+  const real = _resolveAdminIndex('goals', idx, list);
+  if (real < 0) { toast('Could not locate that goal \u2014 reload and try again', 'err'); return; }
+  const goal = list[real];
   if (!goal) return;
 
   if (!confirm('Are you sure you want to permanently delete goal ' + goal.code + ' \u2014 ' + goal.description + '? This action cannot be undone.')) return;
@@ -4128,7 +4161,7 @@ async function deleteGoal(idx) {
   }
 
   // No data found — safe to delete
-  list.splice(idx, 1);
+  list.splice(real, 1);
   raw.goals = list;
   const userName = AUTH.user ? (AUTH.user.name || AUTH.user.email) : 'admin';
   logAuditEvent('goal_deleted', AUTH.user ? AUTH.user.email : 'admin', '', 'Goal ' + goal.code + ' - ' + goal.description + ' deleted by ' + userName);
