@@ -17,7 +17,7 @@
  * Keep BQ_SYNC_BUILD in BigQuerySync.gs set to the same value: the two files are
  * pasted separately, so a stale BigQuerySync is otherwise invisible.
  */
-var APP_BUILD = '2026-10-08-f69c';
+var APP_BUILD = '2026-10-08-f69d';
 
 var ADMIN_SHEET_ID = '1VPBADMXvhOww_52O1n2CieTsQB6XCotLt6XdAQsq0ik';
 var AUDIT_SHEET_ID = '1tf98iS18vV08mQtPV9Vq6hQVkEp6Qg-ebUwHkeRlwaQ';
@@ -1332,6 +1332,121 @@ function writeSessionLog(ss, d) {
  * and row-write sequence is wrapped in a ScriptLock to prevent concurrent inserts
  * of duplicate columns when two sessions submit simultaneously.
  */
+/**
+ * f69d — READ-ONLY tracer. For every goal flagged by auditAllClientGoalColumns
+ * (data present, not assigned to that client today) this prints the DATE,
+ * SUBMISSION ID and THERAPIST of each row holding data.
+ *
+ * This is the question the audit could not answer: a goal assigned for a whole
+ * period then retired shows one row per session across months, while a goal
+ * wrongly offered shows a single row on a single date. Same flag, completely
+ * different story, and only the dates separate them.
+ *
+ * No arguments — runnable from the Run dropdown. Writes nothing.
+ */
+function traceUnassignedGoalRows() {
+  var MAX_ROWS_PER_GOAL = 12;   // enough to see a pattern without flooding the log
+  var adminSS = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var clients = sheetToObjects(adminSS, 'Clients');
+  var goalsRaw = sheetToObjects(adminSS, 'Goals');
+  var bySubmission = {};        // submissionId -> [ 'client/goal', ... ]
+
+  for (var i = 0; i < clients.length; i++) {
+    var c = clients[i];
+    var cid = String(c.id || '').replace(/^\s+|\s+$/g, '');
+    var sid = String(c.sheetId || '').replace(/^\s+|\s+$/g, '');
+    if (!cid || !sid) continue;
+    if (String(c.status || 'active').toLowerCase() === 'inactive') continue;
+
+    var assigned = {};
+    for (var gi = 0; gi < goalsRaw.length; gi++) {
+      if (!_goalRowIsForClient(goalsRaw[gi], cid)) continue;
+      var ac = String(goalsRaw[gi].code || '').replace(/^\s+|\s+$/g, '').toUpperCase();
+      if (ac) assigned[ac] = true;
+    }
+
+    var td;
+    try { td = SpreadsheetApp.openById(sid).getSheetByName('Trial Data'); } catch (e) { continue; }
+    if (!td) continue;
+    var values = td.getDataRange().getValues();
+    if (values.length < 2) continue;
+    var headers = values[0];
+
+    // locate the metadata columns we want to report
+    var col = {};
+    for (var hi = 0; hi < headers.length; hi++) {
+      var hn = String(headers[hi] || '').replace(/^\s+|\s+$/g, '');
+      if (col[hn] === undefined) col[hn] = hi;
+    }
+    var dateCol = (col['dateISO'] !== undefined) ? col['dateISO'] : col['Date'];
+    var subCol  = col['submissionId'];
+    var thCol   = (col['Therapist'] !== undefined) ? col['Therapist'] : col['therapistEmail'];
+
+    var known = { 'Date':1,'Setting':1,'Therapist':1,'Percent Correct':1,'Prompt Levels':1,
+      'Trial Times':1,'Probe Flags':1,'submissionId':1,'clientName':1,'clientId':1,
+      'therapistEmail':1,'sessionType':1,'billingCode':1,'isDraft':1,'payloadHash':1,
+      'submittedAt':1,'dateISO':1,'%':1,'Percentage':1,'Notes':1,'Session ID':1 };
+
+    var printedHeader = false;
+    for (var hj = 0; hj < headers.length; hj++) {
+      var h = String(headers[hj] || '').replace(/^\s+|\s+$/g, '');
+      if (!h || known[h] || /^Trial\s*\d+$/i.test(h)) continue;
+      if (assigned[h.toUpperCase()]) continue;          // assigned today → not flagged
+
+      var hits = [];
+      for (var r = 1; r < values.length; r++) {
+        var cell = values[r][hj];
+        if (cell === '' || cell === null || cell === undefined) continue;
+        hits.push({
+          date: (dateCol !== undefined) ? toDateISO(values[r][dateCol]) : '?',
+          sub:  (subCol  !== undefined) ? String(values[r][subCol] || '') : '',
+          th:   (thCol   !== undefined) ? String(values[r][thCol]  || '') : ''
+        });
+      }
+      if (!hits.length) continue;
+
+      if (!printedHeader) {
+        Logger.log('=== ' + (c.name || cid) + ' ===');
+        printedHeader = true;
+      }
+      Logger.log('  ' + h + '  (' + hits.length + ' row(s))');
+      for (var k = 0; k < hits.length && k < MAX_ROWS_PER_GOAL; k++) {
+        Logger.log('      ' + hits[k].date + '  ' + hits[k].th +
+                   (hits[k].sub ? ('  sub=' + hits[k].sub.substring(0, 12)) : ''));
+        if (hits[k].sub) {
+          if (!bySubmission[hits[k].sub]) bySubmission[hits[k].sub] = [];
+          bySubmission[hits[k].sub].push((c.name || cid) + '/' + h);
+        }
+      }
+      if (hits.length > MAX_ROWS_PER_GOAL) {
+        Logger.log('      … ' + (hits.length - MAX_ROWS_PER_GOAL) + ' more');
+      }
+    }
+    if (printedHeader) Logger.log('');
+  }
+
+  // The payoff: one submission carrying SEVERAL unassigned goals is a single
+  // mis-scored session, which is a very different finding from a retired goal.
+  Logger.log('==================================================');
+  Logger.log('SESSIONS CARRYING MORE THAN ONE UNASSIGNED GOAL');
+  Logger.log('(a single session scoring several goals that are not that');
+  Logger.log(' client\'s is the signature of a mis-assignment, not of history)');
+  Logger.log('');
+  var subs = Object.keys(bySubmission), found = 0;
+  for (var si = 0; si < subs.length; si++) {
+    if (bySubmission[subs[si]].length < 2) continue;
+    found++;
+    Logger.log('  sub=' + subs[si].substring(0, 16) + '  ->  ' +
+               bySubmission[subs[si]].length + ' unassigned goals');
+    Logger.log('      ' + bySubmission[subs[si]].join(', '));
+  }
+  if (!found) {
+    Logger.log('  None. Every flagged goal spreads across separate sessions,');
+    Logger.log('  which is consistent with retired goals rather than mis-assignment.');
+  }
+  return { success: true };
+}
+
 /**
  * f69 — NO-ARG wrapper, which is the only kind the Apps Script Run dropdown can
  * actually invoke. auditClientGoalColumns() takes a clientId, so it is not
