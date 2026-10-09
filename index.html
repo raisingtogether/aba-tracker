@@ -2528,7 +2528,7 @@ function buildTrials() {
     // probe mechanism rather than inventing a second concept: one trial, probe
     // ticked, level forced to Independent and the dropdown locked.
     const isMaint = (g.status === 'maintenance');
-    const n = isMaint ? 1 : (g.numTrials || 5);
+    const n = isMaint ? MAINTENANCE_TRIALS : (g.numTrials || 5);
     S.trials[g.code] = Array(n).fill(null);
     S.promptLevels[g.code] = isMaint ? 'I' : '';
     S.trialTimes[g.code]   = Array(n).fill('');
@@ -3370,7 +3370,12 @@ function buildPayload() {
     const times = (S.trialTimes[g.code] || []).slice(0, t.length);
     const stamped = times.filter(function(x){ return !!x; });
     return {
-      goalCode: g.code, goalName: g.description,
+      // f69: g.name, NOT g.description. applyConfig maps description -> name, so
+      // g.description was undefined on every session — which meant the server
+      // ALWAYS fell back to its goal-description map, and that map was keyed on
+      // code alone across every client. Sending the right name is the actual fix;
+      // scoping the server map is the belt to this braces.
+      goalCode: g.code, goalName: g.name,
       trials: t.map(v=>v===true?'\u2713':v===false?'\u2717':''),
       percentage: pct,
       promptLevel:  S.promptLevels[g.code] || '',
@@ -3678,7 +3683,7 @@ function renderAdminList(type) {
       const clientName = (raw.clients||[]).find(c=>c.id===item.clientId)?.name || item.clientId;
       preview = `<span class="goal-code" style="font-size:11px">${item.code}</span>`;
       name    = item.description;
-      sub     = `${clientName} \u2022 ${maint ? '1 trial \u2022 probe every 2 weeks' : (item.numTrials||5) + ' trials'}`;
+      sub     = `${clientName} \u2022 ${maint ? '3 trials \u2022 probe every 2 weeks' : (item.numTrials||5) + ' trials'}`;
     }
 
     const deleteBtn = (type === 'goals' && AUTH.role === 'admin')
@@ -5462,7 +5467,8 @@ async function loadMasteryStatus() {
   document.querySelectorAll('.mastery-loading').forEach(function(el) { el.style.display = 'none'; });
 }
 
-const MAINTENANCE_DAYS = 14;   // f68: Tatiana's ruling — one probe every 2 weeks
+const MAINTENANCE_DAYS   = 14;  // f68: Tatiana's ruling — probe every 2 weeks
+const MAINTENANCE_TRIALS = 3;   // ...of 3 trials, not 1 (f69)
 
 /**
  * f68: hide maintenance goals that are not due yet.

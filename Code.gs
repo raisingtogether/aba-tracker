@@ -17,7 +17,7 @@
  * Keep BQ_SYNC_BUILD in BigQuerySync.gs set to the same value: the two files are
  * pasted separately, so a stale BigQuerySync is otherwise invisible.
  */
-var APP_BUILD = '2026-10-08-f68';
+var APP_BUILD = '2026-10-08-f69';
 
 var ADMIN_SHEET_ID = '1VPBADMXvhOww_52O1n2CieTsQB6XCotLt6XdAQsq0ik';
 var AUDIT_SHEET_ID = '1tf98iS18vV08mQtPV9Vq6hQVkEp6Qg-ebUwHkeRlwaQ';
@@ -1332,6 +1332,142 @@ function writeSessionLog(ss, d) {
  * and row-write sequence is wrapped in a ScriptLock to prevent concurrent inserts
  * of duplicate columns when two sessions submit simultaneously.
  */
+/**
+ * f69 DIAGNOSTIC, read-only. Answers "is there data in this client's sheet that
+ * is not this client's?" without taking anyone's word for it.
+ *
+ * For one client it lists every goal column in their Trial Data and reports:
+ *   - is that goal assigned to them in the Goals tab RIGHT NOW
+ *   - how many non-empty values the column holds
+ *
+ * A column with data whose goal is NOT currently assigned is usually legitimate
+ * HISTORY — the goal was assigned once, scored, then un-assigned — not a leak.
+ * A column with data for a goal that was never assigned to them is a real
+ * finding. The distinction matters and no automated check can make it, so this
+ * prints both and lets a human decide.
+ *
+ *   auditClientGoalColumns('<clientId>')
+ */
+function auditClientGoalColumns(clientId) {
+  var cid = String(clientId || '').replace(/^\s+|\s+$/g, '');
+  if (!cid) throw new Error('Pass a clientId, e.g. auditClientGoalColumns("C3")');
+
+  var adminSS = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var clients = sheetToObjects(adminSS, 'Clients');
+  var client  = null;
+  for (var i = 0; i < clients.length; i++) {
+    if (String(clients[i].id || '').replace(/^\s+|\s+$/g, '') === cid) { client = clients[i]; break; }
+  }
+  if (!client) throw new Error('No client with id ' + cid);
+  var sheetId = String(client.sheetId || '').replace(/^\s+|\s+$/g, '');
+  if (!sheetId) throw new Error('Client ' + cid + ' has no sheetId');
+
+  // Which goal codes are assigned to this client today?
+  var assigned = {};
+  var goalsRaw = sheetToObjects(adminSS, 'Goals');
+  for (var gi = 0; gi < goalsRaw.length; gi++) {
+    if (!_goalRowIsForClient(goalsRaw[gi], cid)) continue;
+    var ac = String(goalsRaw[gi].code || '').replace(/^\s+|\s+$/g, '').toUpperCase();
+    if (ac) assigned[ac] = String(goalsRaw[gi].description || '');
+  }
+
+  var ss = SpreadsheetApp.openById(sheetId);
+  var td = ss.getSheetByName('Trial Data');
+  if (!td) { Logger.log('No Trial Data tab for ' + (client.name || cid)); return { success: true, columns: [] }; }
+  var values = td.getDataRange().getValues();
+  if (!values.length) { Logger.log('Trial Data is empty'); return { success: true, columns: [] }; }
+  var headers = values[0];
+
+  // Everything that is not a known base/analytics header is a goal column.
+  var known = {};
+  var baseAndAnalytics = [
+    'Date', 'Setting', 'Therapist', 'Percent Correct', 'Prompt Levels',
+    'Trial Times', 'Probe Flags', 'submissionId', 'clientName', 'clientId',
+    'therapistEmail', 'sessionType', 'billingCode', 'isDraft', 'payloadHash',
+    'submittedAt', 'dateISO'
+  ];
+  for (var ki = 0; ki < baseAndAnalytics.length; ki++) known[baseAndAnalytics[ki]] = true;
+
+  Logger.log('=== ' + (client.name || cid) + ' (' + cid + ') — Trial Data goal columns ===');
+  Logger.log('Goals assigned to this client today: ' + Object.keys(assigned).length);
+  Logger.log('');
+
+  var out = [], flagged = 0;
+  for (var hi = 0; hi < headers.length; hi++) {
+    var h = String(headers[hi] || '').replace(/^\s+|\s+$/g, '');
+    if (!h || known[h]) continue;
+    var filled = 0;
+    for (var r = 1; r < values.length; r++) {
+      var cell = values[r][hi];
+      if (cell !== '' && cell !== null && cell !== undefined) filled++;
+    }
+    var isAssigned = !!assigned[h.toUpperCase()];
+    if (!isAssigned && filled > 0) flagged++;
+    out.push({ column: h, assignedNow: isAssigned, rowsWithData: filled });
+    Logger.log((isAssigned ? '  OK       ' : (filled > 0 ? '  REVIEW   ' : '  empty    ')) +
+               h + '  ·  ' + filled + ' row(s) with data' +
+               (isAssigned ? '' : '  <-- not assigned to this client today'));
+  }
+
+  Logger.log('');
+  Logger.log(out.length + ' goal column(s). ' + flagged + ' hold data for a goal not currently assigned.');
+  if (flagged) {
+    Logger.log('REVIEW each one: a goal that was assigned, scored, then un-assigned is');
+    Logger.log('legitimate history. A goal never assigned to this client is not.');
+  }
+  return { success: true, client: client.name || cid, columns: out, flagged: flagged };
+}
+
+/**
+ * f69: does this Goals row belong to this client? Mirrors the frontend predicate.
+ * Goals carry BOTH clientId and clientIds and nothing declares which wins, so
+ * either may assign ownership.
+ */
+function _goalRowIsForClient(row, clientId) {
+  if (!clientId) return false;
+  var one = String(row.clientId || '').trim();
+  if (one && one === clientId) return true;
+  var many = String(row.clientIds || '').split(/[,;]/);
+  for (var i = 0; i < many.length; i++) {
+    if (many[i].replace(/^\s+|\s+$/g, '') === clientId) return true;
+  }
+  return false;
+}
+
+/**
+ * f69 — CROSS-CLIENT LEAK FIX. code -> description for ONE client only.
+ *
+ * This map used to be built from EVERY row of the Goals tab, keyed on code alone:
+ *
+ *     goalDescMap[code] = description;        // last row with that code wins
+ *
+ * Goal codes are not unique across clients (ABLLS/VB-MAPP codes like C5 recur by
+ * design), so whichever client's row happened to sit lower in the Goals tab
+ * supplied the description for EVERY client's Trial Summary. Juan's sheet was
+ * recording another client's goal description against his own trial values.
+ *
+ * The numbers were never wrong — they come from the client's own sheet and his
+ * own session payload. Only the LABEL was borrowed. But Trial Summary is the
+ * normalised analysis record that feeds trial_records in BigQuery, so the wrong
+ * label propagated into Looker too.
+ *
+ * Falls back to the bare code, never to another client's text.
+ */
+function _goalDescMapForClient(adminSS, clientId) {
+  var map = {};
+  try {
+    var goalsRaw = sheetToObjects(adminSS, 'Goals');
+    for (var i = 0; i < goalsRaw.length; i++) {
+      if (!_goalRowIsForClient(goalsRaw[i], clientId)) continue;
+      var code = String(goalsRaw[i].code || '').replace(/^\s+|\s+$/g, '').toUpperCase();
+      if (code) map[code] = String(goalsRaw[i].description || '').replace(/^\s+|\s+$/g, '');
+    }
+  } catch (e) {
+    Logger.log('[_goalDescMapForClient] ' + e.message);
+  }
+  return map;
+}
+
 function writeTrialData(ss, d) {
   if (!d.trialData || !d.trialData.length) return;
 
@@ -1374,14 +1510,12 @@ function writeTrialData(ss, d) {
   var percentCorrectJSON = JSON.stringify(pctMap);
 
   // Load goal descriptions for Trial Summary (one read; failure is non-fatal)
+  // f69: scoped to THIS client. See _goalDescMapForClient.
   var goalDescMap = {};
   try {
-    var adminSS  = SpreadsheetApp.openById(ADMIN_SHEET_ID);
-    var goalsRaw = sheetToObjects(adminSS, 'Goals');
-    for (var gdi = 0; gdi < goalsRaw.length; gdi++) {
-      var gdCode = String(goalsRaw[gdi].code || '').trim().toUpperCase();
-      if (gdCode) { goalDescMap[gdCode] = String(goalsRaw[gdi].description || '').trim(); }
-    }
+    goalDescMap = _goalDescMapForClient(
+      SpreadsheetApp.openById(ADMIN_SHEET_ID),
+      String((d && d.clientId) || '').replace(/^\s+|\s+$/g, ''));
   } catch (e) {
     Logger.log('[writeTrialData] goalDescMap load failed: ' + e.message);
   }
@@ -1956,7 +2090,11 @@ function _appendTrialSummaryRows(ss, d, goalDescMap, tz) {
     for (var gi = 0; gi < d.trialData.length; gi++) {
       var g     = d.trialData[gi];
       var gCode = String(g.goalCode || '');
-      var desc  = (goalDescMap && goalDescMap[gCode.toUpperCase()]) || gCode;
+      // f69: trust the payload first — the session knows which goal object it
+      // rendered. The map is only a fallback, and it is now client-scoped so it
+      // cannot supply another client's text.
+      var sentName = String(g.goalName || '').replace(/^\s+|\s+$/g, '');
+      var desc  = sentName || (goalDescMap && goalDescMap[gCode.toUpperCase()]) || gCode;
       var tr    = g.trials || [];
 
       var pctVal = '';
@@ -3212,13 +3350,9 @@ function recoverTrialData(dryRun, onlyClientIds) {
   var allClients = sheetToObjects(adminSS, 'Clients');
   var goalsRaw   = sheetToObjects(adminSS, 'Goals');
 
-  var goalDescMap = {};
-  for (var gdi = 0; gdi < goalsRaw.length; gdi++) {
-    var gdCode = String(goalsRaw[gdi].code || '').trim().toUpperCase();
-    if (gdCode) {
-      goalDescMap[gdCode] = String(goalsRaw[gdi].description || '').trim();
-    }
-  }
+  // f69: built PER CLIENT inside the loop below, not once globally — a global map
+  // keyed on code alone handed every client the last-listed client's description.
+  var goalDescByClient = {};
 
   // Optional scope filter: when onlyClientIds is a non-empty array of client ids,
   // process ONLY those clients. Omitted/empty → all active clients (unchanged
@@ -3258,6 +3392,18 @@ function recoverTrialData(dryRun, onlyClientIds) {
     var client   = activeClients[cli];
     var cName    = String(client.name || '').trim();
     var cSheetId = String(client.sheetId || '').trim();
+
+    // f69: this client's own code -> description map.
+    var cid = String(client.id || '').replace(/^\s+|\s+$/g, '');
+    if (!goalDescByClient[cid]) {
+      goalDescByClient[cid] = {};
+      for (var gdi2 = 0; gdi2 < goalsRaw.length; gdi2++) {
+        if (!_goalRowIsForClient(goalsRaw[gdi2], cid)) continue;
+        var gdC = String(goalsRaw[gdi2].code || '').replace(/^\s+|\s+$/g, '').toUpperCase();
+        if (gdC) goalDescByClient[cid][gdC] = String(goalsRaw[gdi2].description || '').replace(/^\s+|\s+$/g, '');
+      }
+    }
+    var goalDescMap = goalDescByClient[cid];
 
     var cStats = {
       name: cName, id: String(client.id || ''),
