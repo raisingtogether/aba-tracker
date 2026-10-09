@@ -2785,7 +2785,9 @@ function buildEndScreen() {
     const pct = Math.round(t.filter(x=>x).length / t.length * 100);
     const row = document.createElement('div');
     row.className = 'sum-row';
-    row.innerHTML = '<span class="sum-lbl">' + escHtml(g.code) + ': ' + escHtml(g.description) + '</span><span class="sum-val" style="color:' + (pct>=80?'var(--success)':pct>=50?'var(--secondary)':'var(--danger)') + '">' + pct + '%</span>';
+    // f69: g.name — these objects come from applyConfig, which maps description
+    // -> name, so g.description rendered BLANK on every session summary.
+    row.innerHTML = '<span class="sum-lbl">' + escHtml(g.code) + ': ' + escHtml(g.name || '') + '</span><span class="sum-val" style="color:' + (pct>=80?'var(--success)':pct>=50?'var(--secondary)':'var(--danger)') + '">' + pct + '%</span>';
     triDiv.appendChild(row);
   });
   if (!hasTrials) triDiv.innerHTML = '<div class="sum-empty">No trials recorded</div>';
@@ -4175,7 +4177,19 @@ async function deleteGoal(idx) {
 
   // Check for recorded session data in client Trial Data sheets
   if (GAS_URL !== 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') {
-    const clients = (raw.clients || []).filter(function(c) { return (c.status || 'active') !== 'inactive'; });
+    // f69: check usage ONLY in the clients this goal is assigned to. Goal codes
+    // are not unique across clients, so passing every client meant deleting
+    // Juan's unused C5 was refused because a DIFFERENT client had scored theirs —
+    // with a message naming a session count that was not his. Fails safe, but
+    // presents as "I cannot delete this and I do not know why".
+    const assignedIds = String(goal.clientIds || goal.clientId || '')
+      .split(/[,;]/).map(function(x){ return x.trim(); }).filter(Boolean);
+    const allActive = (raw.clients || []).filter(function(c) { return (c.status || 'active') !== 'inactive'; });
+    // An unassigned goal falls back to checking everywhere: better to refuse a
+    // delete than to drop a goal that turns out to have history somewhere.
+    const clients = assignedIds.length
+      ? allActive.filter(function(c) { return assignedIds.indexOf(c.id) >= 0; })
+      : allActive;
     try {
       document.getElementById('loading-lbl').textContent = 'Checking goal usage\u2026';
       document.getElementById('loading').classList.add('active');
@@ -7076,7 +7090,7 @@ function meBuildTrials() {
     var trials = _meState.trials[g.code];
     html += '<div class="goal-card" style="margin-bottom:12px"><div class="goal-hdr">' +
       '<span class="goal-code">' + g.code + '</span>' +
-      '<span class="goal-name">' + escHtml(g.description) + '</span>' +
+      '<span class="goal-name">' + escHtml(g.name || '') + '</span>' +   /* f69: not g.description */
       '<span class="goal-pct" id="me-pct-' + g.code + '">&#8212;</span></div><div class="trial-btns">';
     for (var i = 0; i < n; i++) {
       var val = trials[i];
@@ -7278,7 +7292,9 @@ async function submitManualSession() {
     var answered = t.filter(function(x) { return x !== null; });
     var pct = answered.length ? Math.round(t.filter(function(x) { return x === true; }).length / answered.length * 100) : null;
     return {
-      goalCode: g.code, goalName: g.description,
+      // f69: g.name, not g.description — clientObj.goals objects are built by
+      // applyConfig, which maps description -> name. Same bug the session path had.
+      goalCode: g.code, goalName: g.name,
       trials: t.map(function(v) { return v === true ? '\u2713' : v === false ? '\u2717' : ''; }),
       percentage: pct
     };
