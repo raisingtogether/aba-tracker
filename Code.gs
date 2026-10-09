@@ -17,7 +17,7 @@
  * Keep BQ_SYNC_BUILD in BigQuerySync.gs set to the same value: the two files are
  * pasted separately, so a stale BigQuerySync is otherwise invisible.
  */
-var APP_BUILD = '2026-10-08-f69';
+var APP_BUILD = '2026-10-08-f69b';
 
 var ADMIN_SHEET_ID = '1VPBADMXvhOww_52O1n2CieTsQB6XCotLt6XdAQsq0ik';
 var AUDIT_SHEET_ID = '1tf98iS18vV08mQtPV9Vq6hQVkEp6Qg-ebUwHkeRlwaQ';
@@ -1332,6 +1332,59 @@ function writeSessionLog(ss, d) {
  * and row-write sequence is wrapped in a ScriptLock to prevent concurrent inserts
  * of duplicate columns when two sessions submit simultaneously.
  */
+/**
+ * f69 — NO-ARG wrapper, which is the only kind the Apps Script Run dropdown can
+ * actually invoke. auditClientGoalColumns() takes a clientId, so it is not
+ * selectable there; this audits EVERY active client and prints one summary.
+ *
+ * Read-only. Touches no data.
+ */
+function auditAllClientGoalColumns() {
+  var adminSS = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var clients = sheetToObjects(adminSS, 'Clients');
+  var totalFlagged = 0, checked = 0, problems = [];
+
+  for (var i = 0; i < clients.length; i++) {
+    var c = clients[i];
+    var cid = String(c.id || '').replace(/^\s+|\s+$/g, '');
+    if (!cid) continue;
+    if (String(c.status || 'active').toLowerCase() === 'inactive') {
+      Logger.log('(skipping inactive client ' + (c.name || cid) + ')');
+      Logger.log('');
+      continue;
+    }
+    if (!String(c.sheetId || '').replace(/^\s+|\s+$/g, '')) {
+      Logger.log('(no sheetId for ' + (c.name || cid) + ' — never had a session)');
+      Logger.log('');
+      continue;
+    }
+    try {
+      var r = auditClientGoalColumns(cid);
+      checked++;
+      totalFlagged += (r.flagged || 0);
+      if (r.flagged) problems.push((c.name || cid) + ': ' + r.flagged);
+    } catch (e) {
+      Logger.log('ERROR auditing ' + (c.name || cid) + ': ' + e.message);
+    }
+    Logger.log('');
+  }
+
+  Logger.log('==================================================');
+  Logger.log('AUDITED ' + checked + ' client(s).');
+  if (!totalFlagged) {
+    Logger.log('NO columns hold data for a goal that is not assigned to that client.');
+    Logger.log('Goal data is isolated per client.');
+  } else {
+    Logger.log(totalFlagged + ' column(s) across ' + problems.length + ' client(s) hold data for a');
+    Logger.log('goal not assigned to them TODAY: ' + problems.join(' | '));
+    Logger.log('');
+    Logger.log('This is usually legitimate history — a goal that was assigned, scored,');
+    Logger.log('and later un-assigned. It is only a leak if that goal was NEVER theirs.');
+    Logger.log('Check each flagged code against the Goals tab before concluding anything.');
+  }
+  return { checked: checked, flagged: totalFlagged };
+}
+
 /**
  * f69 DIAGNOSTIC, read-only. Answers "is there data in this client's sheet that
  * is not this client's?" without taking anyone's word for it.
