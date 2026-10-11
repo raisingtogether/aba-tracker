@@ -17,7 +17,7 @@
  * Keep BQ_SYNC_BUILD in BigQuerySync.gs set to the same value: the two files are
  * pasted separately, so a stale BigQuerySync is otherwise invisible.
  */
-var APP_BUILD = '2026-10-08-f71';
+var APP_BUILD = '2026-10-11-f71b';
 
 var ADMIN_SHEET_ID = '1VPBADMXvhOww_52O1n2CieTsQB6XCotLt6XdAQsq0ik';
 var AUDIT_SHEET_ID = '1tf98iS18vV08mQtPV9Vq6hQVkEp6Qg-ebUwHkeRlwaQ';
@@ -1332,6 +1332,120 @@ function writeSessionLog(ss, d) {
  * and row-write sequence is wrapped in a ScriptLock to prevent concurrent inserts
  * of duplicate columns when two sessions submit simultaneously.
  */
+/**
+ * f71b — READ-ONLY. Prints the actual VALUES behind each duplicate column set,
+ * side by side, with the date and the neighbouring headers.
+ *
+ * previewDuplicateGoalColumns() said 6 of 7 sets CONFLICT, and CP8 (0 agree /
+ * 17 conflict) and PA6 (0/11) disagree on EVERY overlapping row. Counts alone
+ * cannot distinguish the two explanations, and they call for opposite repairs:
+ *
+ *   (a) TWO DIFFERENT GOALS sharing one code, both scored in the same sessions.
+ *       Each column is then correctly holding its own goal, and merging would
+ *       FUSE TWO OBJECTIVES. The fix is to rename one, not to merge.
+ *
+ *   (b) TWO COLUMN FORMATS. writeTrialData puts the goal CODE in the goal column
+ *       and the trials in the columns after it, so an old 7-column group holds
+ *       the literal string "CP8" while a newer single column holds a value.
+ *       Those conflict by definition with no data disagreement at all.
+ *
+ * The neighbouring headers settle it: a group-format column is followed by
+ * Trial 1..5 and %, a single-format one is not. The values settle the rest.
+ *
+ * Writes nothing.
+ */
+function inspectDuplicateGoalColumns() {
+  var MAX_ROWS = 8;
+  var adminSS = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var clients = sheetToObjects(adminSS, 'Clients');
+
+  var known = { 'Date':1,'Setting':1,'Therapist':1,'Percent Correct':1,'Prompt Levels':1,
+    'Trial Times':1,'Probe Flags':1,'submissionId':1,'clientName':1,'clientId':1,
+    'therapistEmail':1,'sessionType':1,'billingCode':1,'isDraft':1,'payloadHash':1,
+    'submittedAt':1,'dateISO':1,'%':1,'Percentage':1,'Notes':1,'Session ID':1 };
+
+  for (var ci = 0; ci < clients.length; ci++) {
+    var c   = clients[ci];
+    var cid = String(c.id || '').replace(/^\s+|\s+$/g, '');
+    var sid = String(c.sheetId || '').replace(/^\s+|\s+$/g, '');
+    if (!cid || !sid) continue;
+    if (String(c.status || 'active').toLowerCase() === 'inactive') continue;
+
+    var td;
+    try { td = SpreadsheetApp.openById(sid).getSheetByName('Trial Data'); } catch (e) { continue; }
+    if (!td) continue;
+    var values = td.getDataRange().getValues();
+    if (values.length < 2) continue;
+    var headers = values[0];
+
+    var dateCol = -1;
+    for (var di = 0; di < headers.length; di++) {
+      var dn = String(headers[di]).trim();
+      if (dn === 'dateISO') { dateCol = di; break; }
+      if (dn === 'Date' && dateCol < 0) dateCol = di;
+    }
+
+    var byName = {};
+    for (var hi = 0; hi < headers.length; hi++) {
+      var h = String(headers[hi] || '').replace(/^\s+|\s+$/g, '');
+      if (!h || known[h] || /^Trial\s*\d+$/i.test(h)) continue;
+      if (!byName[h]) byName[h] = [];
+      byName[h].push(hi);
+    }
+
+    var names = Object.keys(byName), printed = false;
+    for (var ni = 0; ni < names.length; ni++) {
+      var cols = byName[names[ni]];
+      if (cols.length < 2) continue;
+      if (!printed) { Logger.log('=== ' + (c.name || cid) + ' ==='); printed = true; }
+
+      Logger.log('');
+      Logger.log('  ' + names[ni] + '  x' + cols.length);
+
+      // What follows each column tells us its FORMAT.
+      for (var q = 0; q < cols.length; q++) {
+        var nxt = [];
+        for (var n2 = 1; n2 <= 6 && (cols[q] + n2) < headers.length; n2++) {
+          nxt.push(String(headers[cols[q] + n2] || '(blank)').trim());
+        }
+        Logger.log('    col ' + (q + 1) + ' at sheet column ' + (cols[q] + 1) +
+                   '  followed by: ' + nxt.join(' | '));
+      }
+
+      // Rows where the two columns DISAGREE — the ones that matter.
+      Logger.log('    disagreeing rows (date  ->  col1  vs  col2):');
+      var shown = 0;
+      for (var r = 1; r < values.length && shown < MAX_ROWS; r++) {
+        var a = values[r][cols[0]], b = values[r][cols[1]];
+        var aF = !(a === '' || a === null || a === undefined);
+        var bF = !(b === '' || b === null || b === undefined);
+        if (!aF || !bF) continue;
+        if (String(a) === String(b)) continue;
+        var dt = (dateCol >= 0) ? toDateISO(values[r][dateCol]) : ('row ' + (r + 1));
+        Logger.log('      ' + dt + '  ->  ' + JSON.stringify(String(a)) +
+                   '   vs   ' + JSON.stringify(String(b)));
+        shown++;
+      }
+      if (!shown) Logger.log('      (none)');
+    }
+    if (printed) Logger.log('');
+  }
+
+  Logger.log('==================================================');
+  Logger.log('HOW TO READ THIS');
+  Logger.log('');
+  Logger.log('If a column is followed by Trial 1..5 and %, it is the OLD GROUP');
+  Logger.log('format and its own cell holds the goal CODE as a marker. If the');
+  Logger.log('values below read like "CP8" vs "100" or "3", the two columns are');
+  Logger.log('two FORMATS of one goal, not two goals \u2014 a normalisation, not a merge.');
+  Logger.log('');
+  Logger.log('If BOTH columns hold score-like values that simply differ, they are');
+  Logger.log('TWO DIFFERENT GOALS sharing a code. Then nothing should be merged:');
+  Logger.log('one column must be RENAMED so each objective keeps its identity,');
+  Logger.log('and only Tatiana can say which objective each one was.');
+  return { success: true };
+}
+
 /**
  * f71 — READ-ONLY survey of duplicate goal columns. Writes nothing.
  *
