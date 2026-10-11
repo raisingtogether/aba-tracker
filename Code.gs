@@ -17,7 +17,7 @@
  * Keep BQ_SYNC_BUILD in BigQuerySync.gs set to the same value: the two files are
  * pasted separately, so a stale BigQuerySync is otherwise invisible.
  */
-var APP_BUILD = '2026-10-11-f71b';
+var APP_BUILD = '2026-10-11-f54h';
 
 var ADMIN_SHEET_ID = '1VPBADMXvhOww_52O1n2CieTsQB6XCotLt6XdAQsq0ik';
 var AUDIT_SHEET_ID = '1tf98iS18vV08mQtPV9Vq6hQVkEp6Qg-ebUwHkeRlwaQ';
@@ -1332,6 +1332,93 @@ function writeSessionLog(ss, d) {
  * and row-write sequence is wrapped in a ScriptLock to prevent concurrent inserts
  * of duplicate columns when two sessions submit simultaneously.
  */
+/**
+ * f54h — WHY CAN'T THIS SEND MAIL. Read-only, no arguments.
+ *
+ * checkParentAlertSender() infers "missing scope" from a failed MailApp call —
+ * but that call throws IDENTICALLY whether the scope is absent from the manifest
+ * or present and not yet consented to. So its message has been misleading, and
+ * after three attempts at the manifest nobody could tell which problem we had.
+ *
+ * ScriptApp.getAuthorizationInfo() answers it directly: it reports whether the
+ * script currently needs consent, lists the scopes the project is ASKING for, and
+ * hands back a URL that forces the consent screen. That URL matters — hoping a
+ * Run triggers the prompt is how the re-authorize step gets skipped.
+ *
+ * Needs only script.scriptapp, which this project already has.
+ */
+function whyCantISendMail() {
+  Logger.log('=== AUTHORIZATION STATE ===');
+  Logger.log('');
+
+  var info = null, status = '(unreadable)', url = '', scopes = [];
+  try {
+    info   = ScriptApp.getAuthorizationInfo(ScriptApp.AuthMode.FULL);
+    status = String(info.getAuthorizationStatus());
+    try { url = info.getAuthorizationUrl() || ''; } catch (e1) { url = ''; }
+    try { scopes = info.getAuthorizedScopes() || []; } catch (e2) { scopes = []; }
+  } catch (e) {
+    Logger.log('Could not read authorization info: ' + e.message);
+  }
+
+  Logger.log('Authorization status : ' + status);
+
+  // Can MailApp actually be called right now?
+  var canMail = false, mailErr = '';
+  try { MailApp.getRemainingDailyQuota(); canMail = true; }
+  catch (me) { mailErr = me.message; }
+  Logger.log('MailApp callable     : ' + (canMail ? 'YES' : 'NO'));
+  if (!canMail) Logger.log('MailApp error        : ' + mailErr);
+
+  // Does the PROJECT ask for the mail scope? This is the manifest question, and
+  // it is the one we have been unable to answer by looking at the editor.
+  var asksForMail = false;
+  for (var i = 0; i < scopes.length; i++) {
+    if (String(scopes[i]).indexOf('script.send_mail') >= 0 ||
+        String(scopes[i]).indexOf('mail.google.com') >= 0) { asksForMail = true; break; }
+  }
+  Logger.log('');
+  Logger.log('Scopes this project is authorized for (' + scopes.length + '):');
+  if (!scopes.length) {
+    Logger.log('   (none reported — older runtimes do not expose this)');
+  } else {
+    for (var j = 0; j < scopes.length; j++) Logger.log('   ' + scopes[j]);
+  }
+
+  Logger.log('');
+  Logger.log('=== VERDICT ===');
+  Logger.log('');
+  if (canMail) {
+    Logger.log('Mail works. Run checkParentAlertSender() for the From line, then');
+    Logger.log('sendTestParentAlertTo("you@example.com") to prove delivery.');
+  } else if (status === 'REQUIRED') {
+    Logger.log('THE MANIFEST IS PROBABLY FINE — the script is simply NOT AUTHORIZED');
+    Logger.log('for its current scope set. This is the re-authorize step, and it is');
+    Logger.log('the one that gets skipped. Open this URL, accept, then re-run:');
+    Logger.log('');
+    Logger.log('   ' + (url || '(no URL returned — run any function from the editor and accept the prompt)'));
+  } else if (!asksForMail && scopes.length) {
+    Logger.log('THE MANIFEST DOES NOT ASK FOR THE MAIL SCOPE. The save never took');
+    Logger.log('effect — the list above is what the project is actually authorized');
+    Logger.log('for, and script.send_mail is not in it.');
+    Logger.log('');
+    Logger.log('Updating a manifest is an OWNER-LEVEL operation. If the editor keeps');
+    Logger.log('refusing the save with a 400, check whether this account owns the');
+    Logger.log('script: Project Settings is owner-only. That is also the question');
+    Logger.log('that decides the parent-alert From address.');
+  } else {
+    Logger.log('Status is "' + status + '" and MailApp is not callable, but the scope');
+    Logger.log('list came back empty so the manifest question is unresolved.');
+    Logger.log('Treat the ownership check as the next step.');
+  }
+  Logger.log('');
+  Logger.log('Effective user       : ' + (function () {
+    try { return Session.getEffectiveUser().getEmail() || '(empty — userinfo.email not granted)'; }
+    catch (e) { return '(blocked — userinfo.email not granted)'; }
+  })());
+  return { status: status, canMail: canMail, asksForMail: asksForMail, scopes: scopes };
+}
+
 /**
  * f71b — READ-ONLY. Prints the actual VALUES behind each duplicate column set,
  * side by side, with the date and the neighbouring headers.
