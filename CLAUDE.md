@@ -565,7 +565,15 @@ Full detail and the decision history: `docs/architecture/assessments_plans_desig
   array and re-authorize. `https://mail.google.com/` is deliberately NOT added —
   it grants full mailbox read access for a cosmetic From line.
   `checkParentAlertSender()` / `sendTestParentAlertTo(email)` verify it.
-- **Prerequisite still open:** confirm the Workspace BAA covers Gmail.
+- **WORKING as of Oct 11, 2026.** First alert email ever delivered. The blocker was
+  consent, not the manifest and not the code: the manifest save had succeeded and
+  only authorization was missing. Scope set is now 5 — the original four plus
+  `script.send_mail`. `userinfo.email` was deliberately not added, so
+  `_parentAlertFrom()` cannot read the deployment owner and the audit entry records
+  `from=?`; the From line is whatever the deployment owner is, and a received test
+  email shows it directly without needing the scope.
+- **Prerequisite still open:** confirm the Workspace BAA covers Gmail before
+  auto-send is used widely.
 
 ### Prompt hierarchy (f30a) + probe flag (f30c)
 - One level per goal per session, recording the **programmed** level — that makes
