@@ -17,7 +17,7 @@
  * Keep BQ_SYNC_BUILD in BigQuerySync.gs set to the same value: the two files are
  * pasted separately, so a stale BigQuerySync is otherwise invisible.
  */
-var APP_BUILD = '2026-10-11-f54h';
+var APP_BUILD = '2026-10-11-f54i';
 
 var ADMIN_SHEET_ID = '1VPBADMXvhOww_52O1n2CieTsQB6XCotLt6XdAQsq0ik';
 var AUDIT_SHEET_ID = '1tf98iS18vV08mQtPV9Vq6hQVkEp6Qg-ebUwHkeRlwaQ';
@@ -4567,6 +4567,15 @@ var PARENT_ALERT_FROM_NAME = 'Raising Together';
  */
 var PARENT_ALERT_FROM = 'tatiana@raising2gether.org';
 
+/**
+ * Where sendTestParentAlertNow() sends its delivery test. Leave blank to use
+ * PARENT_ALERT_FROM. Exists because the Apps Script Run dropdown CANNOT PASS
+ * ARGUMENTS — a diagnostic that needs one is a diagnostic nobody can run, and
+ * I have now shipped that mistake three times (the goalId migration,
+ * auditClientGoalColumns, and sendTestParentAlertTo).
+ */
+var TEST_ALERT_RECIPIENT = '';
+
 var _palCache = null;
 
 /**
@@ -4652,6 +4661,29 @@ function checkParentAlertSender() {
   Logger.log('');
 
   if (!f.canSend) {
+    // f54h: this used to assert "MISSING SCOPE" — a cause it cannot actually
+    // observe. The MailApp call throws identically when the scope is absent from
+    // the manifest AND when it is present but not yet consented to, and those
+    // need opposite fixes. Guessing cost three rounds of editing a manifest that
+    // was already correct. Ask Google instead.
+    var authStatus = '(unreadable)', authUrl = '';
+    try {
+      var ai = ScriptApp.getAuthorizationInfo(ScriptApp.AuthMode.FULL);
+      authStatus = String(ai.getAuthorizationStatus());
+      try { authUrl = ai.getAuthorizationUrl() || ''; } catch (e1) {}
+    } catch (e2) {}
+
+    if (authStatus === 'REQUIRED') {
+      Logger.log('>>> NOT A MANIFEST PROBLEM. The script is simply NOT AUTHORIZED for');
+      Logger.log('    its current scope set. Open this and accept EVERY checkbox');
+      Logger.log('    (granular consent lets you allow while leaving one unticked):');
+      Logger.log('');
+      Logger.log('    ' + (authUrl || '(no URL returned — run any function and accept the prompt)'));
+      Logger.log('');
+      Logger.log('    Then re-run this. For the full picture: whyCantISendMail()');
+      return f;
+    }
+
     Logger.log('>>> f54 CANNOT SEND. No parent alert has ever been delivered: every');
     Logger.log('    send throws, the wrapper catches it, and the Parent Alerts row is');
     Logger.log('    written as status=failed. Session data was never at risk.');
@@ -4703,6 +4735,20 @@ function checkParentAlertSender() {
  *
  *   sendTestParentAlertTo('you@example.com')
  */
+/**
+ * NO-ARG wrapper — this is the one to pick in the Run dropdown.
+ * Sends to TEST_ALERT_RECIPIENT, or to PARENT_ALERT_FROM when that is blank.
+ */
+function sendTestParentAlertNow() {
+  var to = String(TEST_ALERT_RECIPIENT || '').replace(/^\s+|\s+$/g, '') ||
+           String(PARENT_ALERT_FROM || '').replace(/^\s+|\s+$/g, '');
+  if (!to) throw new Error('Set TEST_ALERT_RECIPIENT or PARENT_ALERT_FROM first.');
+  Logger.log('Sending the delivery test to: ' + to);
+  Logger.log('(change TEST_ALERT_RECIPIENT at the top of this section to use another address)');
+  Logger.log('');
+  return sendTestParentAlertTo(to);
+}
+
 function sendTestParentAlertTo(toEmail) {
   var to = String(toEmail || '').trim();
   if (!to || to.indexOf('@') < 0) throw new Error('Pass an email address.');

@@ -272,6 +272,40 @@ All sheet writes use `ensureSheetColumns` + colMap-based row building. **Never h
 - **GAS deploy**: Deploy → New Deployment → Web App; Execute as Me; Anyone can access
 - After Code.gs changes: always create a new deployment version (don't reuse old URL)
 
+### Editor-facing functions MUST take no arguments
+**The Apps Script Run dropdown cannot pass arguments.** A diagnostic or migration
+that needs one is a function nobody can run — it throws
+`Error: Pass an email address.` or similar the moment it is selected. This mistake
+has shipped **three times**: the goalId migration steps, `auditClientGoalColumns`,
+and `sendTestParentAlertTo`.
+
+**Rule:** anything meant to be run from the editor gets a no-arg wrapper, and the
+wrapper is the one named in instructions. Current wrappers:
+`whyCantISendMail` · `checkParentAlertSender` · `sendTestParentAlertNow` ·
+`auditAllClientGoalColumns` · `previewDuplicateGoalColumns` ·
+`inspectDuplicateGoalColumns` · `traceUnassignedGoalRows` · `migrateGoalIdsNow` ·
+`rollbackGoalsToLatestBackup` · `importVBMAPP` · `importVBMAPPBarriers` ·
+`listInstruments` · `seedAssessmentBillingCode` · `backupGoalsTab` ·
+`verifyGoalIds` · `previewGoalIdMigration`.
+(`inspectInstrumentSource` is safe — its argument defaults to
+`VBMAPP_SOURCE_SHEET_ID`.)
+
+### A diagnostic must not infer a cause it cannot observe
+`checkParentAlertSender` reported **"MISSING SCOPE script.send_mail"** whenever a
+`MailApp` call failed. That call throws **identically** when the scope is absent
+from the manifest and when it is present but **not yet consented to** — opposite
+fixes. The wrong message cost three rounds of editing a manifest that was already
+correct, plus a wrong theory about script ownership.
+
+`ScriptApp.getAuthorizationInfo(ScriptApp.AuthMode.FULL)` answers it properly:
+`getAuthorizationStatus()` (`REQUIRED` vs `NOT_REQUIRED`),
+`getAuthorizedScopes()` (what is actually granted), and `getAuthorizationUrl()`
+(a link that **forces** the consent screen). Use `whyCantISendMail()`.
+
+**Granular consent is a trap:** the authorize URL carries
+`enable_granular_consent=true`, so Google shows a checkbox per permission and you
+can click Allow while leaving one unticked. Tick everything.
+
 ### GAS Deployment (CRITICAL)
 **Step 0 — `git push` FIRST.** Step 1 copies from GitHub Raw, which serves
 `origin/main`, NOT the working tree. A commit that has not been pushed is
