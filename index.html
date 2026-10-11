@@ -504,12 +504,47 @@
     .pin-error { min-height: 20px; color: var(--danger); font-size: 13px; font-weight: 700; text-align: center; margin: 8px 0 12px; }
     .pin-hint { font-size: 13px; color: var(--g400); font-weight: 600; text-align: center; margin-bottom: 20px; }
 
-    /* ── IPAD / TABLET ── */
+
+    /* ── IPAD / TABLET (f72) ─────────────────────────────────────────────
+       This block used to PIN .screen to 420px and centre it on a grey ground,
+       which simulated a phone and left most of an iPad unused. It also existed
+       TWICE, byte-identical — edit one and the other still applied.
+
+       Now the app fills the tablet and the CONTENT is capped and centred
+       instead, so line lengths stay readable without wasting the screen.
+       Nothing below 768px is touched, so phones are byte-identical to before. */
     @media (min-width: 768px) {
-      body { display: flex; align-items: center; justify-content: center; background: var(--g200); min-height: 100dvh; }
-      .screen { width: 420px; min-height: 100dvh; max-height: 100dvh; overflow: hidden; box-shadow: 0 0 40px rgba(0,0,0,.15); position: relative; }
-      .behavior-grid { grid-template-columns: 1fr 1fr 1fr; }
+      body { display: block; background: var(--bg); }
+      .screen {
+        width: 100%; max-width: none; min-height: 100dvh;
+        max-height: none; overflow: visible; box-shadow: none; position: relative;
+      }
+      /* Headers stay full-width like an app bar; everything scrollable is capped. */
+      .content, .client-list, .therapist-grid, .section-lbl,
+      .resume-list, .trials-wrap, .tantrum-wrap, .abc-wrap, .notes-wrap {
+        max-width: 880px; margin-left: auto; margin-right: auto;
+      }
+      .content { padding-left: 28px; padding-right: 28px; }
+      .therapist-grid { grid-template-columns: repeat(3, 1fr); }
+      .behavior-grid  { grid-template-columns: repeat(3, 1fr); max-width: 880px; margin: 0 auto; }
       .modal-sheet { border-radius: 24px; margin-bottom: 20px; }
+      /* Touch targets stay phone-sized — an iPad is still used standing up,
+         one-handed, next to a child. Bigger canvas, not bigger buttons. */
+    }
+
+    @media (min-width: 1024px) {
+      .content, .client-list, .therapist-grid, .section-lbl,
+      .resume-list, .tantrum-wrap, .abc-wrap, .notes-wrap { max-width: 980px; }
+      .therapist-grid { grid-template-columns: repeat(4, 1fr); }
+      .behavior-grid  { grid-template-columns: repeat(4, 1fr); max-width: 980px; }
+      /* Goal cards two-up ONLY here. On an iPad in landscape this halves the
+         scrolling during a trial block; below 1024px it would squeeze the trial
+         buttons, which are the thing an RBT taps mid-session. */
+      .trials-wrap {
+        max-width: 980px; display: grid; grid-template-columns: 1fr 1fr;
+        gap: 11px; align-items: start;
+      }
+      .trials-wrap .goal-card { margin-bottom: 0; }
     }
   
     /* ── GEAR BUTTON ── */
@@ -658,15 +693,7 @@
     .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; transform: none !important;
                             box-shadow: none; }
 
-    /* ── IPAD / TABLET ── */
-    @media (min-width: 768px) {
-      body { display: flex; align-items: center; justify-content: center;
-             background: var(--g200); min-height: 100dvh; }
-      .screen { width: 420px; min-height: 100dvh; max-height: 100dvh;
-                overflow: hidden; box-shadow: 0 0 40px rgba(0,0,0,.15); position: relative; }
-      .behavior-grid { grid-template-columns: 1fr 1fr 1fr; }
-      .modal-sheet { border-radius: 24px; margin-bottom: 20px; }
-    }
+    /* (the duplicate iPad block that lived here was removed in f72 — see above) */
 
     /* ── AUTH / LOGIN ── */
     .login-wrap { max-width: 420px; margin: 0 auto; padding: 20px 20px 40px; }
@@ -860,7 +887,7 @@
 <!-- SCREEN 2 — SELECT CLIENT -->
 <div class="screen" id="screen-client">
   <div class="header">
-    <button class="hdr-back" onclick="goTo('therapist')">&#8249;</button>
+    <button class="hdr-back pick-only" onclick="goHomeScreen()">&#8249;</button>
     <div style="flex:1">
       <div class="hdr-title">Select Client</div>
       <div class="hdr-sub" id="hdr-therapist-name">&#8212;</div>
@@ -1081,7 +1108,7 @@
 <!-- SCREEN: ADMIN PANEL -->
 <div class="screen" id="screen-admin">
   <div class="header">
-    <button class="hdr-back" onclick="goTo('therapist')">&#8249;</button>
+    <button class="hdr-back pick-only" onclick="goHomeScreen()">&#8249;</button>
     <div><div class="hdr-title">Admin Panel</div><div class="hdr-sub">Config management</div></div>
     <button class="hdr-back" onclick="reloadConfigFromServer()" title="Reload config" style="margin-left:auto">&#8635;</button>
   </div>
@@ -1494,8 +1521,8 @@ function applyConfig(raw, opts = {}) {
   S.behaviors = {};
   CFG.BEHAVIORS.forEach(b => { S.behaviors[b.key] = 0; });
 
-  buildTherapistScreen();
-  if (opts.navigate !== false) goTo('therapist');
+  if (opts.navigate !== false) goHomeScreen();
+  else if (canPickTherapist()) buildTherapistScreen();
 }
 
 async function reloadConfigFromServer() {
@@ -1529,6 +1556,74 @@ function goTo(name) {
 
 
 // ─── THERAPIST SELECTION ──────────────────────────────────────────────
+/**
+ * f72: who may choose WHICH therapist a session is recorded under.
+ *
+ * ADMIN ONLY. The picker was shown to 'bcba' as well, and selectTherapist() sets
+ * S.therapist, whose NAME goes into the session record, the Trial Summary, the
+ * weekly billing report and payroll — while therapistEmail stays the signed-in
+ * user's. So a BCBA could file a session under another therapist's name with
+ * their own email attached: a service-delivery and billing-integrity mismatch,
+ * not just a UX annoyance.
+ *
+ * Everyone else lands directly in their own profile. That is also why the back
+ * arrows on the client and admin screens are hidden for them — a '<' that
+ * reaches the picker defeats the gate.
+ *
+ * Note for config: this reads ROLE, and role comes from the Admins tab first,
+ * then the Therapists tab's `role` column. Tatiana must be in the ADMINS tab to
+ * keep the picker. If she is only a therapist with role 'bcba' she will land in
+ * her own profile like everyone else — one row in RT Admin, not a code change.
+ */
+function canPickTherapist() {
+  return (AUTH.role || '') === 'admin';
+}
+
+/**
+ * The one place that decides where "home" is after login, a submit, a discard or
+ * a config reload. Four call sites used to each hardcode goTo('therapist').
+ */
+/**
+ * The signed-in user's own therapist record, resolved from AUTH.
+ *
+ * MUST come from AUTH, not from S. resetState() nulls S.therapist, and both
+ * newSession() and discardStaleSession() reset BEFORE routing home — so reading
+ * S here would bounce a therapist to the login screen the moment they finished a
+ * session and tapped "New session". AUTH.user.therapistId is the durable fact.
+ */
+function resolveSelfTherapist() {
+  var tid = AUTH.user ? AUTH.user.therapistId : null;
+  if (!tid) return null;
+  for (var i = 0; i < CFG.THERAPISTS.length; i++) {
+    if (CFG.THERAPISTS[i].id === tid) return CFG.THERAPISTS[i];
+  }
+  return null;
+}
+
+function goHomeScreen() {
+  if (canPickTherapist()) {
+    buildTherapistScreen();
+    goTo('therapist');
+    return;
+  }
+  // Re-resolve every time rather than trusting S to have survived a reset.
+  if (!S.therapist) S.therapist = resolveSelfTherapist();
+  if (!S.therapist) {
+    // No profile linked. They must NOT fall back to the picker — that is the
+    // hole this closes — so say what is wrong and who can fix it.
+    toast('No therapist profile is linked to your account \u2014 ask the admin to ' +
+          'check your email in the Therapists tab', 'err');
+    logAuditEvent('login_no_therapist_record', AUTH.user ? AUTH.user.email : '', '',
+                  'role=' + (AUTH.role || '') + ' \u2014 blocked from the therapist picker');
+    goTo('login');
+    return;
+  }
+  var hdr = document.getElementById('hdr-therapist-name');
+  if (hdr) hdr.textContent = 'Therapist: ' + S.therapist.name;   // selectTherapist used to do this
+  buildClientScreen();
+  goTo('client');
+}
+
 function buildTherapistScreen() {
   const grid = document.getElementById('therapist-grid');
   grid.innerHTML = '';
@@ -3483,8 +3578,7 @@ function newSession() {
   renderNotesForm();
   if (wcEl)    { wcEl.textContent = '0 / ' + NOTES_MIN_WORDS + ' words'; wcEl.classList.remove('met'); }
   if (subBtn)  { subBtn.disabled = true; }
-  buildTherapistScreen();
-  goTo('therapist');
+  goHomeScreen();
 }
 
 function resetState() {
@@ -4512,8 +4606,7 @@ function discardStaleSession() {
   resetState();
   var sc = document.getElementById('success-screen');
   if (sc) sc.classList.remove('active');
-  buildTherapistScreen();
-  goTo('therapist');
+  goHomeScreen();
 }
 
 document.addEventListener('visibilitychange', function() {
@@ -5371,23 +5464,23 @@ function afterAuth() {
 
   const role = AUTH.role || 'collector';
 
-  // Pre-select self as therapist for non-admin roles
-  if ((role === 'bcba' || role === 'therapist' || role === 'collector') && AUTH.user && AUTH.user.therapistId) {
-    const selfT = CFG.THERAPISTS.find(th => th.id === AUTH.user.therapistId);
+  // Pre-select self for non-admin roles, through the one resolver (f72).
+  if (role !== 'admin') {
+    const selfT = resolveSelfTherapist();
     if (selfT) {
       S.therapist = selfT;
-      document.getElementById('hdr-therapist-name').textContent = 'Therapist: ' + selfT.name;
+      const h = document.getElementById('hdr-therapist-name');
+      if (h) h.textContent = 'Therapist: ' + selfT.name;
     }
   }
 
-  if (role === 'admin' || role === 'bcba') {
-    buildTherapistScreen();
-    goTo('therapist');
-  } else {
-    // therapist or collector: go straight to client selection
-    buildClientScreen();
-    goTo('client');
-  }
+  // f72: admin picks; everyone else — bcba included — starts in their own profile.
+  goHomeScreen();
+
+  // f72: the back arrows lead to the therapist picker, so they are admin-only too.
+  document.querySelectorAll('.pick-only').forEach(function(btn) {
+    btn.style.display = canPickTherapist() ? '' : 'none';
+  });
 
   // Gear icon: only admin and bcba
   document.querySelectorAll('.gear-btn').forEach(function(btn) {
