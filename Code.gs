@@ -17,7 +17,7 @@
  * Keep BQ_SYNC_BUILD in BigQuerySync.gs set to the same value: the two files are
  * pasted separately, so a stale BigQuerySync is otherwise invisible.
  */
-var APP_BUILD = '2026-10-11-f54i';
+var APP_BUILD = '2026-10-11-f54j';
 
 var ADMIN_SHEET_ID = '1VPBADMXvhOww_52O1n2CieTsQB6XCotLt6XdAQsq0ik';
 var AUDIT_SHEET_ID = '1tf98iS18vV08mQtPV9Vq6hQVkEp6Qg-ebUwHkeRlwaQ';
@@ -4576,6 +4576,26 @@ var PARENT_ALERT_FROM = 'tatiana@raising2gether.org';
  */
 var TEST_ALERT_RECIPIENT = '';
 
+/**
+ * The address parents actually see, VERIFIED by reading the From header of a
+ * real delivered test on 11 Oct 2026 — not inferred.
+ *
+ * It exists because userinfo.email is deliberately not in the scope set, so
+ * Session.getEffectiveUser() is blocked and _parentAlertFrom() cannot read the
+ * deployment owner. Without this the audit entry recorded `from=?` for every
+ * send, which is honest but useless in a disclosure record.
+ *
+ * It matches PARENT_ALERT_FROM, which means the deployment is owned by the
+ * address parents should see: MailApp already sends from it and NO Gmail scope
+ * and no "Send mail as" alias are needed.
+ *
+ * IF OWNERSHIP OF THE SCRIPT EVER CHANGES, THIS GOES STALE and the audit would
+ * name an address that was not on the message. checkParentAlertSender() warns
+ * when it can read the owner and the two disagree — dormant today, and it
+ * activates by itself if userinfo.email is ever added.
+ */
+var PARENT_ALERT_FROM_VERIFIED = 'tatiana@raising2gether.org';
+
 var _palCache = null;
 
 /**
@@ -4703,6 +4723,15 @@ function checkParentAlertSender() {
     return f;
   }
 
+  Logger.log('Verified From (from a real delivered test): ' + PARENT_ALERT_FROM_VERIFIED);
+  if (f.owner && PARENT_ALERT_FROM_VERIFIED &&
+      f.owner !== String(PARENT_ALERT_FROM_VERIFIED).toLowerCase()) {
+    Logger.log('');
+    Logger.log('*** STALE CONSTANT. The deployment owner now reads ' + f.owner + ',');
+    Logger.log('    but PARENT_ALERT_FROM_VERIFIED still says ' + PARENT_ALERT_FROM_VERIFIED + '.');
+    Logger.log('    Ownership changed. Update the constant or the audit trail will');
+    Logger.log('    name an address that was never on the message.');
+  }
   Logger.log('Daily quota remaining        : ' + MailApp.getRemainingDailyQuota());
   Logger.log('');
   if (f.ownerIsTarget) {
@@ -4851,8 +4880,10 @@ function _sendParentAlertEmail(client, records, dateISO) {
       sent: true,
       recipients: okList,
       // The address a parent actually saw, not the configured one — the audit
-      // trail has to survive a misconfigured alias.
-      sentFrom: sender.from || sender.owner || '',
+      // trail has to survive a misconfigured alias. Falls back to the VERIFIED
+      // constant rather than '' so the disclosure record names an address; see
+      // PARENT_ALERT_FROM_VERIFIED for how it was established.
+      sentFrom: sender.from || sender.owner || PARENT_ALERT_FROM_VERIFIED || '',
       error: failList.length ? 'Partial send — failed for ' + failList.join('; ') : ''
     };
   } catch (e) {
