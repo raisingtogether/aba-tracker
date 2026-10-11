@@ -513,11 +513,21 @@
        Now the app fills the tablet and the CONTENT is capped and centred
        instead, so line lengths stay readable without wasting the screen.
        Nothing below 768px is touched, so phones are byte-identical to before. */
-    @media (min-width: 768px) {
+    /* 740px catches iPad mini portrait (744 CSS px), which a 768 breakpoint missed.
+       AND (min-height: 600px) keeps PHONES OUT: an iPhone Pro Max in landscape is
+       ~932 x 430, so width alone would have handed it the tablet layout and broken
+       "the iPhone stays the same". Every iPad orientation clears 600px of height
+       (mini portrait 1133, Pro landscape 1024, oldest iPad landscape 768). */
+    @media (min-width: 740px) and (min-height: 600px) {
       body { display: block; background: var(--bg); }
       .screen {
-        width: 100%; max-width: none; min-height: 100dvh;
-        max-height: none; overflow: visible; box-shadow: none; position: relative;
+        width: 100%; max-width: none; box-shadow: none; position: relative;
+        /* The HEIGHT CAP STAYS. It is what gives .session-body a bounded height,
+           which is what lets .tab-content scroll INSIDE the app shell. Without it
+           the whole page scrolls and the session timer and tab bar scroll away
+           mid-session — exactly what an RBT must not lose while scoring trials.
+           Only the WIDTH and the grey phone frame were the problem. */
+        height: 100dvh; min-height: 100dvh; max-height: 100dvh; overflow: hidden;
       }
       /* Headers stay full-width like an app bar; everything scrollable is capped. */
       .content, .client-list, .therapist-grid, .section-lbl,
@@ -532,7 +542,7 @@
          one-handed, next to a child. Bigger canvas, not bigger buttons. */
     }
 
-    @media (min-width: 1024px) {
+    @media (min-width: 1024px) and (min-height: 600px) {
       .content, .client-list, .therapist-grid, .section-lbl,
       .resume-list, .tantrum-wrap, .abc-wrap, .notes-wrap { max-width: 980px; }
       .therapist-grid { grid-template-columns: repeat(4, 1fr); }
