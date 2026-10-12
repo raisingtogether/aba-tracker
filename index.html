@@ -542,6 +542,18 @@
          one-handed, next to a child. Bigger canvas, not bigger buttons. */
     }
 
+    /* f73: the complaint was that names and objectives stayed phone-sized on a
+       big screen. More canvas should mean more READABLE, not just more empty. */
+    @media (min-width: 740px) and (min-height: 600px) {
+      .client-btn .c-name       { font-size: 19px; }
+      .client-btn .c-goals      { font-size: 14.5px; }
+      .therapist-btn .t-name    { font-size: 17px; }
+      .goal-name                { font-size: 15.5px; }
+      .goal-code                { font-size: 13px; }
+      .section-lbl              { font-size: 13px; }
+      .admin-item-name          { font-size: 16px; }
+    }
+
     @media (min-width: 1024px) and (min-height: 600px) {
       .content, .client-list, .therapist-grid, .section-lbl,
       .resume-list, .tantrum-wrap, .abc-wrap, .notes-wrap { max-width: 980px; }
@@ -555,6 +567,29 @@
         gap: 11px; align-items: start;
       }
       .trials-wrap .goal-card { margin-bottom: 0; }
+
+      /* ── f73 SPLIT VIEW: client list left, selected client right ──
+         Only screen-client + screen-start. screen-session deliberately stays
+         full width: the trial grid is what an RBT taps mid-session and it must
+         not be squeezed into a column. */
+      body.split-view #screen-client,
+      body.split-view #screen-start { position: fixed; top: 0; bottom: 0; }
+      body.split-view #screen-client {
+        left: 0; width: 360px; border-right: 1px solid var(--g200);
+        background: #fff; z-index: 2; overflow-y: auto;
+      }
+      body.split-view #screen-start {
+        left: 360px; right: 0; overflow-y: auto;
+      }
+      /* The list owns navigation in this mode, so the detail pane's own back
+         arrow would be a second, contradictory control. */
+      body.split-view #screen-start .hdr-back { display: none; }
+      body.split-view #screen-client .client-list,
+      body.split-view #screen-client .section-lbl { max-width: none; margin: 0; }
+      .client-btn.is-open {
+        border-color: var(--primary);
+        background: rgba(0,167,199,.07);
+      }
     }
   
     /* ── GEAR BUTTON ── */
@@ -1558,11 +1593,46 @@ async function reloadConfigFromServer() {
 
 
 // ─── SCREEN NAVIGATION ────────────────────────────────────────────────
+// f73: on a wide screen the client LIST and the selected client's START panel
+// sit side by side instead of replacing each other. Scoped to exactly that pair:
+// once a session begins, screen-session takes the full width, because the trial
+// grid is the critical path and splitting it would shrink the buttons an RBT
+// taps mid-session.
+const SPLIT_MIN_W = 1024, SPLIT_MIN_H = 600;
+function splitViewAvailable() {
+  return window.innerWidth >= SPLIT_MIN_W && window.innerHeight >= SPLIT_MIN_H;
+}
+
 function goTo(name) {
   if (name === 'end') buildEndScreen();
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.getElementById('screen-' + name).classList.add('active');
+
+  var split = (name === 'start') && splitViewAvailable();
+  document.body.classList.toggle('split-view', split);
+  if (split) {
+    // Keep the list visible beside it, and mark which row is selected.
+    document.getElementById('screen-client').classList.add('active');
+    highlightSelectedClient();
+  }
 }
+
+/** Mark the open client in the list so the pane and the row agree. */
+function highlightSelectedClient() {
+  var want = (S.client && S.client.id) ? String(S.client.id) : '';
+  document.querySelectorAll('#client-list .client-btn').forEach(function (b) {
+    b.classList.toggle('is-open', !!want && b.getAttribute('data-client-id') === want);
+  });
+}
+
+// Leaving the split (rotate, resize, narrow window) must not strand two panes.
+window.addEventListener('resize', function () {
+  if (document.body.classList.contains('split-view') && !splitViewAvailable()) {
+    document.body.classList.remove('split-view');
+    document.querySelectorAll('.screen').forEach(function (x) { x.classList.remove('active'); });
+    document.getElementById('screen-start').classList.add('active');
+  }
+});
 
 
 // ─── THERAPIST SELECTION ──────────────────────────────────────────────
@@ -1681,6 +1751,7 @@ function buildClientScreen() {
       '<div class="c-goals">' + c.goals.length + ' goal' + (c.goals.length !== 1 ? 's' : '') +
       ' \u2022 ' + c.behaviors.length + ' behavior' + (c.behaviors.length !== 1 ? 's' : '') + '</div></div>' +
       '<div class="c-arr">\u203a</div>';
+    btn.setAttribute('data-client-id', c.id);   // f73: for split-view highlighting
     btn.onclick = () => selectClient(c);
     list.appendChild(btn);
   });
@@ -1690,6 +1761,7 @@ function buildClientScreen() {
 
 async function selectClient(c) {
   S.client = c;
+  if (document.body.classList.contains('split-view')) highlightSelectedClient();
   const now = new Date();
   S.dateStr    = fmtDate(now);
   S.timeIn     = fmtTime(now);
