@@ -572,15 +572,41 @@
          Only screen-client + screen-start. screen-session deliberately stays
          full width: the trial grid is what an RBT taps mid-session and it must
          not be squeezed into a column. */
+      /* width:auto MATTERS. The 740px block sets .screen { width:100% }, and for
+         a fixed element an explicit width makes `right` be ignored — so the
+         detail pane was 100% of the VIEWPORT starting at 360px, overflowing that
+         far off-screen. That is what pushed the card right and clipped the
+         list's header. */
+      body.split-view { overflow: hidden; }          /* panes scroll, page does not */
       body.split-view #screen-client,
-      body.split-view #screen-start { position: fixed; top: 0; bottom: 0; }
+      body.split-view #screen-start {
+        position: fixed; top: 0; bottom: 0; width: auto; max-width: none;
+        height: auto; max-height: none;
+      }
       body.split-view #screen-client {
-        left: 0; width: 360px; border-right: 1px solid var(--g200);
-        background: #fff; z-index: 2; overflow-y: auto;
+        left: 0; right: auto; width: 340px;
+        border-right: 1px solid var(--g200);
+        background: var(--card, #fff); z-index: 2; overflow-y: auto;
       }
       body.split-view #screen-start {
-        left: 360px; right: 0; overflow-y: auto;
+        left: 340px; right: 0; overflow-y: auto;
       }
+      /* Headers stay put while their own pane scrolls. */
+      body.split-view #screen-client .header,
+      body.split-view #screen-start .header { position: sticky; top: 0; z-index: 3; }
+
+      /* The detail column reads better narrow and centred than stretched to
+         1430px — session details are a form, not a table. */
+      body.split-view #screen-start .content {
+        max-width: 620px; margin-left: auto; margin-right: auto;
+      }
+
+      /* Denser rows: at 340px the point of the list is seeing MORE children at
+         once, not bigger cards. */
+      body.split-view #screen-client .client-btn { padding: 13px 14px; }
+      body.split-view #screen-client .client-btn .av { width: 42px; height: 42px; font-size: 14px; }
+      body.split-view #screen-client .client-btn .c-name { font-size: 17px; }
+      body.split-view #screen-client .client-btn .c-goals { font-size: 13px; }
       /* The list owns navigation in this mode, so the detail pane's own back
          arrow would be a second, contradictory control. */
       body.split-view #screen-start .hdr-back { display: none; }
