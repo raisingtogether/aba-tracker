@@ -18,7 +18,7 @@
  * every release. doGet reports this value, so one unauthenticated call proves
  * whether THIS file was pasted too (the two are pasted separately).
  */
-var BQ_SYNC_BUILD = '2026-10-11-f54j';
+var BQ_SYNC_BUILD = '2026-10-12-q22';
 function bqSyncBuild() { return BQ_SYNC_BUILD; }
 
 var BQ_PROJECT     = 'rt-aba-tracker';
@@ -441,27 +441,6 @@ function bqReadBehaviorRows(clientSS, client, goalDescMap, labelToKeyMap) {
     var row = data[ri];
     if (!row[0]) continue;
 
-    // f30a: prompt level per goal, and the automatic per-trial timestamps.
-    var lvlMap  = {};
-    var timeMap = {};
-    var lvlJSONIdx = cm['Prompt Levels'];
-    if (lvlJSONIdx !== undefined && lvlJSONIdx < row.length) {
-      var lvlJSONStr = String(row[lvlJSONIdx] || '');
-      if (lvlJSONStr) { try { lvlMap = JSON.parse(lvlJSONStr) || {}; } catch (e) {} }
-    }
-    var timeJSONIdx = cm['Trial Times'];
-    if (timeJSONIdx !== undefined && timeJSONIdx < row.length) {
-      var timeJSONStr = String(row[timeJSONIdx] || '');
-      if (timeJSONStr) { try { timeMap = JSON.parse(timeJSONStr) || {}; } catch (e) {} }
-    }
-
-    var probeMap = {};
-    var probeJSONIdx = cm['Probe Flags'];
-    if (probeJSONIdx !== undefined && probeJSONIdx < row.length) {
-      var probeJSONStr = String(row[probeJSONIdx] || '');
-      if (probeJSONStr) { try { probeMap = JSON.parse(probeJSONStr) || {}; } catch (e) {} }
-    }
-
     var submissionId   = bqStr(cm, row, 'submissionId');
     var dateISO        = bqStr(cm, row, 'dateISO');
     var dateDisplay    = bqDateCell(cm, row, 'Date');
@@ -642,6 +621,33 @@ function bqReadTrialRows(clientSS, client, goalDescMap) {
         try { pctMap = JSON.parse(pctJSONStr); } catch (e) {}
       }
     }
+
+    // f30a/f30c — MOVED HERE 12 Oct 2026. This block lived in
+    // bqReadBehaviorRows, where behaviours have no prompt levels and it was dead
+    // code, while bqReadTrialRows USED lvlMap/timeMap/probeMap without declaring
+    // them. Every client's trial sync therefore died with
+    // "lvlMap is not defined" on the first scored goal.
+    // f30a: prompt level per goal, and the automatic per-trial timestamps.
+    var lvlMap  = {};
+    var timeMap = {};
+    var lvlJSONIdx = cm['Prompt Levels'];
+    if (lvlJSONIdx !== undefined && lvlJSONIdx < row.length) {
+      var lvlJSONStr = String(row[lvlJSONIdx] || '');
+      if (lvlJSONStr) { try { lvlMap = JSON.parse(lvlJSONStr) || {}; } catch (e) {} }
+    }
+    var timeJSONIdx = cm['Trial Times'];
+    if (timeJSONIdx !== undefined && timeJSONIdx < row.length) {
+      var timeJSONStr = String(row[timeJSONIdx] || '');
+      if (timeJSONStr) { try { timeMap = JSON.parse(timeJSONStr) || {}; } catch (e) {} }
+    }
+
+    var probeMap = {};
+    var probeJSONIdx = cm['Probe Flags'];
+    if (probeJSONIdx !== undefined && probeJSONIdx < row.length) {
+      var probeJSONStr = String(row[probeJSONIdx] || '');
+      if (probeJSONStr) { try { probeMap = JSON.parse(probeJSONStr) || {}; } catch (e) {} }
+    }
+
 
     var submissionId   = bqStr(cm, row, 'submissionId');
     var dateISO        = bqStr(cm, row, 'dateISO');
