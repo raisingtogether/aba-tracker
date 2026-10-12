@@ -17,7 +17,7 @@
  * Keep BQ_SYNC_BUILD in BigQuerySync.gs set to the same value: the two files are
  * pasted separately, so a stale BigQuerySync is otherwise invisible.
  */
-var APP_BUILD = '2026-10-12-q22';
+var APP_BUILD = '2026-10-12-q23b';
 
 var ADMIN_SHEET_ID = '1VPBADMXvhOww_52O1n2CieTsQB6XCotLt6XdAQsq0ik';
 var AUDIT_SHEET_ID = '1tf98iS18vV08mQtPV9Vq6hQVkEp6Qg-ebUwHkeRlwaQ';
@@ -4542,6 +4542,142 @@ var PROMPT_LEVEL_LABELS = {
 function _promptLevelLabel(code) {
   var c = String(code || '').trim();
   return PROMPT_LEVEL_LABELS[c] || '';
+}
+
+var PARENT_ALERTS_TAB = 'Parent Alerts';
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * q23 — THE f54 HELPER LAYER. Seven functions were CALLED and NONE DEFINED:
+ *
+ *   _parentAlertsSheet  _alertColMap  _setAlertCells  _findClientRecord
+ *   _firstNameOf        _parentAlertId _parseRecipients
+ *
+ * So the entire parent-alert LIFECYCLE has never run. The admin Alerts tab
+ * showed "_parentAlertsSheet is not defined", and the write path failed the same
+ * way — silently, because evaluateParentAlerts is wrapped in try/catch inside
+ * processSession so a mail or config failure can never cost a therapist their
+ * session. That protection is exactly what hid this for weeks.
+ *
+ * Proving the EMAIL TRANSPORT works (Oct 11) proved nothing about this: the test
+ * sender writes no row and calls none of these.
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+/** header row -> { headerName: columnIndex }. First occurrence wins. */
+function _alertColMap(headerRow) {
+  var map = {};
+  if (!headerRow) return map;
+  for (var i = 0; i < headerRow.length; i++) {
+    var h = String(headerRow[i] || '').replace(/^\s+|\s+$/g, '');
+    if (h && map[h] === undefined) map[h] = i;
+  }
+  return map;
+}
+
+/**
+ * Write named fields into ONE existing alert row, by colMap, never by position.
+ * `rowNumber` is 1-based for getRange. Fields absent from the sheet are skipped
+ * rather than throwing, so an older Parent Alerts tab still works.
+ */
+function _setAlertCells(sheet, rowNumber, cm, fields) {
+  if (!sheet || !cm || !fields) return;
+  for (var key in fields) {
+    if (!fields.hasOwnProperty(key)) continue;
+    var idx = cm[key];
+    if (idx === undefined) continue;
+    sheet.getRange(rowNumber, idx + 1).setValue(fields[key]);
+  }
+}
+
+/**
+ * Match a client by id first, then by name. Id is authoritative; the name
+ * fallback exists only for older rows written before clientId was carried
+ * everywhere, and it trims and lowercases so whitespace cannot hide a match.
+ */
+function _findClientRecord(clients, clientId, clientName) {
+  if (!clients || !clients.length) return null;
+  var wantId = String(clientId || '').replace(/^\s+|\s+$/g, '');
+  if (wantId) {
+    for (var i = 0; i < clients.length; i++) {
+      if (String(clients[i].id || '').replace(/^\s+|\s+$/g, '') === wantId) return clients[i];
+    }
+  }
+  var wantName = String(clientName || '').replace(/^\s+|\s+$/g, '').toLowerCase();
+  if (wantName) {
+    for (var j = 0; j < clients.length; j++) {
+      if (String(clients[j].name || '').replace(/^\s+|\s+$/g, '').toLowerCase() === wantName) return clients[j];
+    }
+  }
+  return null;
+}
+
+/**
+ * First name only. The minimal-content tier names the child by FIRST NAME alone —
+ * a full name in an unencrypted email is more identifying than the disclosure
+ * needs to be.
+ */
+function _firstNameOf(fullName) {
+  var n = String(fullName || '').replace(/^\s+|\s+$/g, '');
+  if (!n) return '';
+  var parts = n.split(/\s+/);
+  return parts[0] || '';
+}
+
+/**
+ * Idempotency key: submissionId + behaviorKey. Re-submitting the same session
+ * must not raise a second alert for the same behaviour, and a retry after an
+ * offline queue flush is exactly that case.
+ */
+function _parentAlertId(submissionId, behaviorKey) {
+  return String(submissionId || '') + '::' + String(behaviorKey || '');
+}
+
+/**
+ * parentEmail is a COMMA-SEPARATED LIST. Split on comma, semicolon or newline,
+ * trim, drop anything without a plausible address shape, and de-duplicate
+ * case-insensitively.
+ *
+ * Each returned address is mailed SEPARATELY by _sendParentAlertEmail — never a
+ * shared To: line, because co-parents must not learn each other's address from
+ * us. Custody and contact arrangements vary and that is a disclosure nobody
+ * asked us to make.
+ */
+function _parseRecipients(raw) {
+  var out = [], seen = {};
+  var parts = String(raw || '').split(/[,;\n\r]+/);
+  for (var i = 0; i < parts.length; i++) {
+    var a = parts[i].replace(/^\s+|\s+$/g, '');
+    if (!a) continue;
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(a)) continue;
+    var k = a.toLowerCase();
+    if (seen[k]) continue;
+    seen[k] = true;
+    out.push(a);
+  }
+  return out;
+}
+
+/**
+ * q23 — THIS FUNCTION DID NOT EXIST. Four call sites referenced it and none
+ * defined it: evaluateParentAlerts (writes the row), listParentAlerts (the admin
+ * Alerts tab), approveParentAlert and dismissParentAlert.
+ *
+ * So the whole f54 alert LIFECYCLE has never run. The Alerts tab showed
+ * "_parentAlertsSheet is not defined", and the write path failed the same way —
+ * silently, because evaluateParentAlerts is wrapped in try/catch inside
+ * processSession so a mail or config failure can never cost a therapist their
+ * session. That protection is exactly what hid this.
+ *
+ * Proving the EMAIL TRANSPORT works (Oct 11) proved nothing about this: the test
+ * sender writes no row and calls none of these functions.
+ *
+ * Uses getOrCreateSheet + ensureSheetColumns like every other tab, so an existing
+ * sheet gains any missing column rather than being rewritten.
+ */
+function _parentAlertsSheet() {
+  var ss = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var sheet = getOrCreateSheet(ss, PARENT_ALERTS_TAB, PARENT_ALERT_HEADERS);
+  ensureSheetColumns(sheet, PARENT_ALERT_HEADERS);
+  return sheet;
 }
 
 var PARENT_ALERT_HEADERS = [
