@@ -17,7 +17,7 @@
  * Keep BQ_SYNC_BUILD in BigQuerySync.gs set to the same value: the two files are
  * pasted separately, so a stale BigQuerySync is otherwise invisible.
  */
-var APP_BUILD = '2026-10-18-f74b';
+var APP_BUILD = '2026-10-18-f75';
 
 var ADMIN_SHEET_ID = '1VPBADMXvhOww_52O1n2CieTsQB6XCotLt6XdAQsq0ik';
 var AUDIT_SHEET_ID = '1tf98iS18vV08mQtPV9Vq6hQVkEp6Qg-ebUwHkeRlwaQ';
@@ -540,6 +540,117 @@ function getBiweeklyHours(periodStart, periodEnd, clients) {
 
 
 // ── CONFIG: READ ──────────────────────────────────────────────────────
+
+/**
+ * f75 — HER CLINICAL VOCABULARY, as data.
+ *
+ * Her Behavioral Plan template carries a Lists tab with 21 controlled
+ * vocabularies — the words her practice actually uses for domains, functions,
+ * measures, service codes and so on. They are not ours to invent: inventing a
+ * parallel set is how an app ends up speaking a dialect its clinician does not,
+ * and every later mapping bug starts there.
+ *
+ * Seeded into RT Admin as DATA, the same way Instruments are, so she can extend
+ * a list without a code change and f38 can read the same values it will later
+ * write back into a plan.
+ *
+ * Run seedPlanVocabulary() once. Idempotent: re-running replaces the seeded
+ * rows for a list but leaves any she has added.
+ */
+var PLAN_LISTS_TAB = 'Plan Lists';
+var PLAN_LIST_HEADERS = ['listName', 'value', 'sortOrder', 'status', 'notes'];
+
+var PLAN_VOCABULARY = {
+  Sex:        ['Female', 'Male', 'Other'],
+  Language:   ['English', 'Spanish', 'Bilingual (English/Spanish)', 'Other'],
+  Diagnosis:  ['F84.0 Autism Spectrum Disorder', "F84.5 Asperger's Syndrome",
+               'F80.9 Speech/Language Disorder', 'F90.9 ADHD',
+               'F81.9 Learning Disorder', 'Other'],
+  FundingSource: ['Private Insurance', 'Medicaid', 'Private Pay', 'School District',
+                  'Grant/Scholarship', 'Other'],
+  ServiceType: ['Speech Therapy', 'Occupational Therapy', 'Physical Therapy',
+                'Applied Behavior Analysis', 'Feeding Therapy', 'Other'],
+  AssessmentTool: ['QABF', 'FAST', 'MAS', 'ABC Data Collection',
+                   'Structured Interview', 'Other'],
+  HypothesizedFunction: ['Escape/Avoidance', 'Attention', 'Access to Tangibles',
+                         'Automatic/Sensory', 'Multiple Functions'],
+  BehaviorCategory: ['Aggression', 'Elopement', 'Tantrum',
+                     'Self-Injurious Behavior (SIB)', 'Property Destruction',
+                     'Task Refusal'],
+  SupportLevel: ['Independent', 'Minimal Support', 'Moderate Support', 'Full Support'],
+  Dimension:  ['Frequency', 'Duration', 'Intensity', 'Latency', 'Rate'],
+  Status:     ['New', 'Continued', 'Mastered', 'On Hold', 'Discontinued'],
+  Measure:    ['Frequency', 'Percentage', 'Duration', 'Rate', 'Latency'],
+  CurricularAssessment: ['ABLLS-R', 'VB-MAPP', 'Vineland-3', 'PEAK', 'AFLS', 'Other'],
+  StaffRole:  ['Parent/Caregiver', 'BCBA', 'BCaBA', 'RBT', 'Other'],
+  FidelityFrequency: ['Weekly', 'Biweekly', 'Monthly', 'Quarterly'],
+  ServiceCode: ['97151 Behavior Identification Assessment',
+                '97152 Behavior ID Supporting Assessment',
+                '97153 Adaptive Behavior Treatment by Protocol',
+                '97155 Adaptive Behavior Treatment w/ Protocol Modification',
+                '97156 Family Training',
+                '97158 Group Adaptive Behavior Treatment'],
+  Allocation: ['Weekly', 'Monthly', 'Per Period', 'One-Time'],
+  Location:   ['Home', 'School', 'Community', 'Clinic', 'Telehealth'],
+  Satisfaction: ['1', '2', '3', '4', '5'],
+  YesNo:      ['Yes', 'No', 'N/A'],
+  // The LTO structure her Instructional Goals tab is organised by.
+  Domain:     ['Health and Safety', 'Self-Advocacy', 'Social Relationships',
+               'Community Participation', 'Productive Activity']
+};
+
+function seedPlanVocabulary() {
+  var ss = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var sheet = getOrCreateSheet(ss, PLAN_LISTS_TAB, PLAN_LIST_HEADERS);
+  ensureSheetColumns(sheet, PLAN_LIST_HEADERS);
+
+  var existing = sheetToObjects(ss, PLAN_LISTS_TAB);
+  var have = {};
+  for (var e = 0; e < existing.length; e++) {
+    have[String(existing[e].listName || '').trim() + '|' +
+         String(existing[e].value || '').trim()] = true;
+  }
+
+  var header = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  var cm = {};
+  for (var h = 0; h < header.length; h++) cm[String(header[h]).trim()] = h;
+
+  var added = 0, skipped = 0, lists = 0;
+  for (var name in PLAN_VOCABULARY) {
+    if (!PLAN_VOCABULARY.hasOwnProperty(name)) continue;
+    lists++;
+    var vals = PLAN_VOCABULARY[name];
+    for (var i = 0; i < vals.length; i++) {
+      if (have[name + '|' + vals[i]]) { skipped++; continue; }
+      var row = [];
+      for (var c = 0; c < header.length; c++) row.push('');
+      if (cm.listName  !== undefined) row[cm.listName]  = name;
+      if (cm.value     !== undefined) row[cm.value]     = vals[i];
+      if (cm.sortOrder !== undefined) row[cm.sortOrder] = (i + 1) * 10;
+      if (cm.status    !== undefined) row[cm.status]    = 'active';
+      sheet.appendRow(row);
+      added++;
+    }
+  }
+
+  Logger.log('Seeded ' + lists + ' list(s): ' + added + ' value(s) added, ' +
+             skipped + ' already present.');
+  Logger.log('');
+  Logger.log('These came from the Lists tab of her Behavioral Plan template, so the');
+  Logger.log('app now uses the same words her plans do. Extend a list by adding a');
+  Logger.log('row here \u2014 no code change needed.');
+  Logger.log('');
+  Logger.log('TWO THINGS TO RECONCILE WITH TATIANA:');
+  Logger.log('  1. SupportLevel here is Independent / Minimal / Moderate / Full,');
+  Logger.log('     but the session screen records PROMPT LEVELS as I, VT, G, V, M,');
+  Logger.log('     PP, FP (f30a). Those are two different scales for the same idea.');
+  Logger.log('     Mastery is defined at Independent in BOTH, so they agree at the');
+  Logger.log('     top and nowhere else. She needs to say which one a plan uses.');
+  Logger.log('  2. ServiceCode lists 97153, 97155, 97156 and 97158, which the app');
+  Logger.log('     Billing matrix does NOT contain \u2014 only 97151/97152 were');
+  Logger.log('     seeded. Sessions under those codes cannot be billed today.');
+  return { lists: lists, added: added, skipped: skipped };
+}
 
 /**
  * f74b — ONE DEFINITION PER CLIENT PER BEHAVIOUR.
