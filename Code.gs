@@ -17,7 +17,7 @@
  * Keep BQ_SYNC_BUILD in BigQuerySync.gs set to the same value: the two files are
  * pasted separately, so a stale BigQuerySync is otherwise invisible.
  */
-var APP_BUILD = '2026-10-18-f75';
+var APP_BUILD = '2026-10-18-f75b';
 
 var ADMIN_SHEET_ID = '1VPBADMXvhOww_52O1n2CieTsQB6XCotLt6XdAQsq0ik';
 var AUDIT_SHEET_ID = '1tf98iS18vV08mQtPV9Vq6hQVkEp6Qg-ebUwHkeRlwaQ';
@@ -731,16 +731,19 @@ function saveConfig(cfg) {
         cfg.clients);
 
     if (cfg.behaviors !== undefined)
-      // f74b: the definition columns added to this tab in f74 are NO LONGER
-      // WRITTEN — definitions moved to the per-client Behavior Definitions tab
-      // once Tatiana ruled that topography differs per child. The column names
-      // stay in this list so any values already in those cells are preserved
-      // rather than blanked by objectsToSheet, which rewrites the whole tab from
-      // this header list.
+      // f74c: the three definition columns f74 added here are GONE.
+      //
+      // I had kept them to avoid blanking data, but the canary history proves
+      // none can exist: APP_BUILD went q23b -> f75 and sw.js went v22 -> v24, so
+      // the f74 build that wrote them was never deployed on either side. Nobody
+      // could have typed into a form that never shipped.
+      //
+      // Leaving them would have put three permanently-empty columns on her
+      // Behaviors tab beside a separate Behavior Definitions tab — exactly the
+      // kind of thing that reads as a bug to whoever opens the sheet next year.
       objectsToSheet(ss, 'Behaviors',
         ['key', 'label', 'icon', 'color', 'clientIds', 'status',
-         'alertEnabled', 'alertThreshold', 'alertMode',
-         'topography', 'examples', 'nonExamples'],
+         'alertEnabled', 'alertThreshold', 'alertMode'],
         cfg.behaviors);
 
     if (cfg.goals !== undefined) {
