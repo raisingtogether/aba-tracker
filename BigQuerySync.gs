@@ -18,7 +18,7 @@
  * every release. doGet reports this value, so one unauthenticated call proves
  * whether THIS file was pasted too (the two are pasted separately).
  */
-var BQ_SYNC_BUILD = '2026-10-18-f75b';
+var BQ_SYNC_BUILD = '2026-10-18-f76';
 function bqSyncBuild() { return BQ_SYNC_BUILD; }
 
 var BQ_PROJECT     = 'rt-aba-tracker';
@@ -74,6 +74,13 @@ function syncAllToBigQuery() {
   var behaviors      = bqSheetToObjects(adminSS, 'Behaviors');
   var billing        = bqSheetToObjects(adminSS, 'Billing');
   var authorizations = bqSheetToObjects(adminSS, 'Authorizations');
+  // f76: tolerant — the tab does not exist until the first definition is saved.
+  var behaviorDefs = [];
+  try {
+    if (adminSS.getSheetByName('Behavior Definitions')) {
+      behaviorDefs = bqSheetToObjects(adminSS, 'Behavior Definitions');
+    }
+  } catch (e) { behaviorDefs = []; }
 
   // Build goal code → description lookup
   var goalDescMap = {};
@@ -98,7 +105,8 @@ function syncAllToBigQuery() {
     { name: 'authorizations',      rows: bqBuildAuthorizationRows(authorizations)  },
     { name: 'goals_reference',     rows: bqBuildGoalReferenceRows(goals)           },
     { name: 'behaviors_reference', rows: bqBuildBehaviorReferenceRows(behaviors)   },
-    { name: 'billing_codes',       rows: bqBuildBillingCodeRows(billing)           }
+    { name: 'billing_codes',       rows: bqBuildBillingCodeRows(billing)           },
+    { name: 'behavior_definitions', rows: bqBuildBehaviorDefinitionRows(behaviorDefs) }
   ];
   for (var ri = 0; ri < refTables.length; ri++) {
     var rt = refTables[ri];
@@ -310,6 +318,41 @@ function bqBuildGoalReferenceRows(goals) {
       client_ids:  g.clientIds   || g.clientId || '',
       num_trials:  parseInt(g.numTrials) || 5,
       status:      g.status      || 'active'
+    });
+  }
+  return rows;
+}
+
+/**
+ * f76 — behavior_definitions. One row per client per behaviour, which is the
+ * grain the definitions are written at.
+ *
+ * It is the natural-language answer to "what was actually being counted", so
+ * m17 (smart session notes) needs it to say anything about a count beyond the
+ * number. It also makes a count interpretable months later by someone who was
+ * not in the room.
+ *
+ * CONTAINS FREE CLINICAL TEXT ABOUT A NAMED CHILD. Treat it exactly like
+ * sessions.notes: it must NOT appear in the de-identified dataset. Nothing in
+ * analyst/deidentified_views.sql selects from it today, and nothing should
+ * without the same review the notes column got.
+ */
+function bqBuildBehaviorDefinitionRows(defs) {
+  var rows = [];
+  for (var i = 0; i < defs.length; i++) {
+    var d = defs[i];
+    var cid = String(d.clientId || '').replace(/^\s+|\s+$/g, '');
+    var key = String(d.behaviorKey || '').replace(/^\s+|\s+$/g, '');
+    if (!cid || !key) continue;   // a half-written row is not a definition
+    rows.push({
+      client_id:     cid,
+      behavior_key:  key,
+      topography:    String(d.topography  || ''),
+      onset_offset:  String(d.onsetOffset || ''),
+      examples:      String(d.examples    || ''),
+      non_examples:  String(d.nonExamples || ''),
+      updated_at:    String(d.updatedAt   || ''),
+      updated_by:    String(d.updatedBy   || '')
     });
   }
   return rows;

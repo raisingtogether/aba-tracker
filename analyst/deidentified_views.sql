@@ -32,6 +32,11 @@
 -- Point Looker dashboards and the MCP at these views. Raw PHI then never leaves
 -- BigQuery even if the analyst identity is compromised.
 --
+-- f76: behavior_definitions is NOT selected by any view here, and must not be.
+-- It holds free clinical text describing a NAMED CHILD's behaviour topography —
+-- the same category as sessions.notes, which is excluded for the same reason.
+-- Adding it would need the review that column got, not a one-line edit.
+--
 -- NOTE ON SMALL n: with 7 clients, removing names is NOT de-identification in
 -- any practical sense — "which client has the most elopement" re-identifies by
 -- context alone. These views exist to limit what leaves the premises to an
