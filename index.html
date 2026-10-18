@@ -465,6 +465,89 @@
     .bd-sec.bd-no  .bd-lbl { color: var(--danger, #EF4444); }
     .bd-txt { font-size: 14.5px; line-height: 1.5; color: var(--g800); white-space: pre-line; }
 
+    /* f78 — definition acknowledgement */
+    .dac { display:none; }
+    .dac.show {
+      display:block; background:#FFF7ED; border:1px solid var(--secondary);
+      border-left:4px solid var(--secondary); border-radius:var(--r);
+      padding:13px 15px; margin:0 0 14px;
+    }
+    .dac-ttl { font-size:14px; font-weight:900; color:var(--dark); margin-bottom:4px; }
+    .dac-txt { font-size:13px; font-weight:600; line-height:1.5; color:var(--g600); }
+    .dac-sub {
+      font-size:12px; font-weight:800; letter-spacing:.07em; text-transform:uppercase;
+      color:var(--g400); margin-bottom:16px;
+    }
+    .dac-foot {
+      font-size:11.5px; font-weight:600; line-height:1.45; color:var(--g400);
+      text-align:center; margin-top:10px;
+    }
+    .ack-card {
+      background:#fff; border:1px solid var(--g200); border-left:4px solid var(--g200);
+      border-radius:var(--r); padding:14px; margin-bottom:12px;
+    }
+    .ack-card.ack-on { border-left-color:var(--success); background:#F6FEF9; }
+    .ack-hdr { display:flex; align-items:center; gap:9px; margin-bottom:12px; }
+    .ack-btn {
+      width:100%; margin-top:4px; padding:12px; border:1.5px solid var(--primary);
+      background:#fff; color:var(--primary); border-radius:var(--r);
+      font-size:14px; font-weight:800; font-family:inherit; cursor:pointer;
+      -webkit-tap-highlight-color:transparent;
+    }
+    .ack-btn.on { border-color:var(--success); background:var(--success); color:#fff; }
+    .ack-skip {
+      width:100%; margin-top:10px; padding:11px; border:none; background:none;
+      color:var(--g600); font-size:13px; font-weight:700; font-family:inherit;
+      text-decoration:underline; cursor:pointer;
+    }
+    .ackr-row {
+      background:#fff; border:1px solid var(--g200); border-left:4px solid var(--danger);
+      border-radius:var(--r); padding:12px 14px; margin-bottom:10px;
+    }
+    .ackr-row.ackr-ok { border-left-color:var(--success); }
+    .ackr-hdr { display:flex; align-items:center; gap:9px; margin-bottom:6px; }
+    .ackr-count {
+      font-size:10.5px; font-weight:800; letter-spacing:.06em; text-transform:uppercase;
+      color:var(--g600); background:var(--g100); padding:2px 8px; border-radius:100px;
+    }
+    .ackr-miss { font-size:13px; font-weight:700; color:var(--danger); line-height:1.45; }
+    .ackr-done { font-size:13px; font-weight:700; color:var(--success); line-height:1.45; }
+    .ackr-skip { font-size:12.5px; font-weight:700; color:var(--secondary); margin-top:4px; }
+
+    /* f77 — phase lines */
+    .phase-row {
+      display:flex; align-items:flex-start; gap:12px; background:#fff;
+      border:1px solid var(--g200); border-radius:var(--r);
+      padding:12px 14px; margin-bottom:10px;
+    }
+    .ph-date-badge {
+      flex:none; font-size:12px; font-weight:800; color:var(--primary);
+      background:var(--g100); border-radius:8px; padding:5px 8px;
+      font-variant-numeric:tabular-nums;
+    }
+    .ph-main { flex:1; min-width:0; }
+    .ph-label { font-size:14.5px; font-weight:800; color:var(--g800); }
+    .ph-cat {
+      font-size:10.5px; font-weight:800; letter-spacing:.06em; text-transform:uppercase;
+      color:var(--g400); margin-top:2px;
+    }
+    .ph-desc {
+      font-size:13px; font-weight:600; line-height:1.45; color:var(--g600);
+      margin-top:5px; white-space:pre-line;
+    }
+    .ph-aff { font-size:12px; font-weight:700; color:var(--g400); margin-top:5px; }
+    .ph-del {
+      flex:none; width:30px; height:30px; border:none; background:var(--g100);
+      color:var(--g600); border-radius:8px; font-size:19px; line-height:1;
+      font-family:inherit; cursor:pointer;
+    }
+    .ph-chks { display:flex; flex-wrap:wrap; gap:8px; }
+    .ph-chk {
+      display:flex; align-items:center; gap:6px; font-size:13px; font-weight:700;
+      color:var(--g600); background:var(--g100); border-radius:100px; padding:6px 11px;
+    }
+    .ph-hint { font-size:11.5px; font-weight:600; color:var(--g400); margin-top:7px; line-height:1.45; }
+
     .def-card { background:#fff; border:1px solid var(--g200); border-radius:var(--r);
       padding:14px; margin-bottom:12px; }
     .def-hdr { display:flex; align-items:center; gap:9px; margin-bottom:10px; }
@@ -1041,7 +1124,8 @@
         </div>
       </div>
     </div>
-    <button class="btn btn-primary" onclick="promptLateStart()" id="begin-session-btn">Begin Session &#8594;</button>
+    <div id="def-ack-card" class="dac"></div>
+    <button class="btn btn-primary" onclick="startSessionFlow()" id="begin-session-btn">Begin Session &#8594;</button>
   </div>
 </div>
 
@@ -1223,6 +1307,7 @@
     <button class="admin-tab-btn" id="atab-behaviors"  onclick="showAdminTab('behaviors')">Behaviors</button>
     <button class="admin-tab-btn" id="atab-alerts"     onclick="showAdminTab('alerts')">Alerts</button>
     <button class="admin-tab-btn" id="atab-definitions" onclick="showAdminTab('definitions')">Definitions</button>
+    <button class="admin-tab-btn" id="atab-phases" onclick="showAdminTab('phases')">Phases</button>
     <button class="admin-tab-btn" id="atab-goals"      onclick="showAdminTab('goals')">Goals</button>
     <button class="admin-tab-btn" id="atab-settings"   onclick="showAdminTab('settings')">Settings</button>
         <button class="admin-tab-btn admin-only-tab" id="atab-authorizations" onclick="showAdminTab('authorizations')">Auth</button>
@@ -1264,6 +1349,13 @@
       <button class="btn btn-primary" style="width:100%;margin-top:18px"
               onclick="closeBehaviorDefinition()">Got it</button>
     </div>
+  </div>
+</div>
+
+<!-- f78 — read-and-understood gate, shown before a session starts -->
+<div class="modal-overlay" id="modal-def-ack">
+  <div class="modal-sheet">
+    <div style="padding:22px 22px 18px" id="def-ack-body"></div>
   </div>
 </div>
 
@@ -1608,6 +1700,471 @@ function _behaviorDefFor(raw, clientId, behaviorKey) {
   return { topography:'', onsetOffset:'', examples:'', nonExamples:'' };
 }
 
+/* ─── f78 — DEFINITION ACKNOWLEDGEMENT ────────────────────────────────
+ *
+ * When a definition is new or its wording changed, the person about to collect
+ * data reads it and confirms before the session starts.
+ *
+ * THE GATE FAILS OPEN, DELIBERATELY. If the ack fetch has not answered —
+ * offline, slow, server error — nothing is blocked and the session starts as
+ * before. Blocking data collection on a network call is far the worse failure,
+ * and an un-timed fetch gating a UI path is exactly the bug in
+ * renderResumeCards() that cost Tatiana twenty minutes of session data.
+ *
+ * It is also ESCAPABLE: "Start anyway" works, and records a skip. A hard wall
+ * would be defeated the first time a child escalated while an RBT was reading,
+ * and the realistic result of a wall is tapping through without reading. A
+ * logged skip is a better instrument than a lock Tatiana cannot see past.
+ *
+ * Resumed sessions are NOT re-gated — the gate is on starting a new session.
+ */
+
+/**
+ * Mirror of _defHash() in Code.gs, over the same four fields in the same order
+ * with the same NUL separator and no trimming on either side. Both read the
+ * same untrimmed sheet values, so trimming on one side only would split the
+ * hash in two and ask everyone to re-read everything, once.
+ */
+function _defHashFor(d) {
+  const SEP = String.fromCharCode(0);
+  return simpleHash(
+    String((d && d.topography)  || '') + SEP +
+    String((d && d.onsetOffset) || '') + SEP +
+    String((d && d.examples)    || '') + SEP +
+    String((d && d.nonExamples) || '')
+  );
+}
+
+function _hasDefText(b) {
+  return !!(b && (b.topography || b.onsetOffset || b.examples || b.nonExamples));
+}
+
+function _defAckKey(behaviorKey, hash) { return String(behaviorKey) + '|' + String(hash || ''); }
+
+// Module-level, not on S: these are per-client facts re-fetched on every client
+// selection, and putting them on S would carry them into the session snapshot.
+let _defAcks = { ready: false, clientId: null, read: {} };
+
+/** Behaviours whose CURRENT wording this person has not confirmed reading. */
+function unacknowledgedDefinitions() {
+  if (!_defAcks.ready) return [];          // not known yet — fail open
+  const list = (S.client && S.client.behaviors) || [];
+  return list.filter(b => _hasDefText(b) && !_defAcks.read[_defAckKey(b.key, b.defHash)]);
+}
+
+/**
+ * Fetch what this person has already read for this client. Timed and swallowed:
+ * every failure path leaves _defAcks.ready false, which means no gate.
+ */
+async function loadDefinitionAcks() {
+  const cid = (S.client && S.client.id) ? S.client.id : '';
+  _defAcks = { ready: false, clientId: cid, read: {} };
+  renderDefAckCard();
+  if (GAS_URL === 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') return;
+  const who = (AUTH.user && AUTH.user.email) || '';
+  if (!who || !cid) return;
+
+  try {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 8000);
+    let resp;
+    try {
+      resp = await fetch(GAS_URL, {
+        method: 'POST', headers: { 'Content-Type': 'text/plain' },
+        redirect: 'follow', signal: ctl.signal,
+        body: JSON.stringify({ action: 'listDefinitionAcks', therapistEmail: who, clientId: cid })
+      });
+    } finally { clearTimeout(timer); }
+    const data = await resp.json();
+    if (!data || !data.success) return;
+    // A client switch while this was in flight must not apply the wrong acks.
+    if (!S.client || S.client.id !== cid) return;
+    const read = {};
+    (data.acks || []).forEach(a => {
+      read[_defAckKey(a.behaviorKey, a.defHash)] = a.acknowledgedAt || '1';
+    });
+    _defAcks = { ready: true, clientId: cid, read: read };
+  } catch (e) {
+    /* fail open — _defAcks.ready stays false */
+  }
+  renderDefAckCard();
+}
+
+/** Start-screen notice. Informational: the actual gate is on Begin Session. */
+function renderDefAckCard() {
+  const el = document.getElementById('def-ack-card');
+  if (!el) return;
+  const pending = unacknowledgedDefinitions();
+  if (!pending.length) { el.innerHTML = ''; el.classList.remove('show'); return; }
+  el.classList.add('show');
+  el.innerHTML =
+    '<div class="dac-ttl">' + pending.length + ' behaviour definition' +
+      (pending.length === 1 ? '' : 's') + ' to read</div>' +
+    '<div class="dac-txt">' +
+      escHtml((S.client && S.client.name) ? S.client.name : 'This client') +
+      '’s ' + (pending.length === 1 ? 'definition for ' : 'definitions for ') +
+      pending.map(b => escHtml(b.label)).join(', ') +
+      (pending.length === 1 ? ' is new or has changed.' : ' are new or have changed.') +
+      ' You’ll be shown ' + (pending.length === 1 ? 'it' : 'them') +
+      ' when you begin the session.' +
+    '</div>';
+}
+
+// ── The gate ─────────────────────────────────────────────────────────
+let _ackQueue = [], _ackDone = {};
+
+function startSessionFlow() {
+  const pending = unacknowledgedDefinitions();
+  if (pending.length) { openDefAckModal(pending); return; }
+  promptLateStart();
+}
+
+function openDefAckModal(list) {
+  _ackQueue = list.slice();
+  _ackDone  = {};
+  renderDefAckModal();
+  document.getElementById('modal-def-ack').classList.add('active');
+}
+
+function closeDefAckModal() {
+  document.getElementById('modal-def-ack').classList.remove('active');
+}
+
+/** Shared with showBehaviorDefinition so the two surfaces cannot drift. */
+function _defBodyHtml(b) {
+  let body = '';
+  if (b.topography) {
+    body += '<div class="bd-sec"><div class="bd-lbl">What it looks like</div>' +
+            '<div class="bd-txt">' + escHtml(b.topography) + '</div></div>';
+  }
+  if (b.onsetOffset) {
+    body += '<div class="bd-sec bd-time"><div class="bd-lbl">Starts / stops counting</div>' +
+            '<div class="bd-txt">' + escHtml(b.onsetOffset) + '</div></div>';
+  }
+  if (b.examples) {
+    body += '<div class="bd-sec bd-yes"><div class="bd-lbl">Count it when</div>' +
+            '<div class="bd-txt">' + escHtml(b.examples) + '</div></div>';
+  }
+  if (b.nonExamples) {
+    body += '<div class="bd-sec bd-no"><div class="bd-lbl">Do NOT count</div>' +
+            '<div class="bd-txt">' + escHtml(b.nonExamples) + '</div></div>';
+  }
+  return body;
+}
+
+function renderDefAckModal() {
+  const done  = _ackQueue.filter(b => _ackDone[b.key]).length;
+  const total = _ackQueue.length;
+  const name  = (S.client && S.client.name) ? S.client.name : 'this client';
+
+  let html =
+    '<div class="modal-title" style="margin-bottom:4px">Read before you start</div>' +
+    '<div class="dac-sub">' + escHtml(name) + ' • ' + done + ' of ' + total + ' confirmed</div>';
+
+  _ackQueue.forEach(b => {
+    const ok = !!_ackDone[b.key];
+    html +=
+      '<div class="ack-card' + (ok ? ' ack-on' : '') + '">' +
+        '<div class="ack-hdr">' +
+          '<span class="def-dot" style="background:' + escAttr(b.color || '#ccc') + '"></span>' +
+          '<span class="def-name">' + escHtml(b.label) + '</span>' +
+        '</div>' +
+        _defBodyHtml(b) +
+        '<button class="ack-btn' + (ok ? ' on' : '') + '" ' +
+          'onclick="markDefRead(\'' + esc(b.key) + '\')">' +
+          (ok ? '✓ Read and understood' : 'I have read and understood this') +
+        '</button>' +
+      '</div>';
+  });
+
+  const allDone = done === total;
+  html +=
+    '<button class="btn btn-primary" style="width:100%;margin-top:6px"' +
+      (allDone ? '' : ' disabled') + ' onclick="confirmDefAcks()">' +
+      (allDone ? 'Start session →'
+               : 'Confirm all ' + total + ' to continue') +
+    '</button>' +
+    // Escapable on purpose, and the skip is recorded. See the block comment.
+    '<button class="ack-skip" onclick="skipDefAcks()">Start anyway — ' +
+      'I’ll read later</button>' +
+    '<div class="dac-foot">Skipping is recorded and visible to your BCBA. ' +
+      'It does not stop you collecting data.</div>';
+
+  document.getElementById('def-ack-body').innerHTML = html;
+}
+
+function markDefRead(key) {
+  _ackDone[key] = true;
+  renderDefAckModal();
+}
+
+function confirmDefAcks() {
+  if (_ackQueue.filter(b => _ackDone[b.key]).length !== _ackQueue.length) return;
+  _ackQueue.forEach(b => recordDefinitionAck(b, 'read'));
+  closeDefAckModal();
+  renderDefAckCard();
+  promptLateStart();
+}
+
+function skipDefAcks() {
+  // Anything they DID confirm still counts as read — only the rest is a skip.
+  _ackQueue.forEach(b => recordDefinitionAck(b, _ackDone[b.key] ? 'read' : 'skipped'));
+  closeDefAckModal();
+  renderDefAckCard();
+  promptLateStart();
+}
+
+/**
+ * Queue first, then try to send. The queue is the durable record, so an ack
+ * made in a basement with no signal is not lost — it syncs on reconnect like a
+ * queued session submit.
+ */
+function recordDefinitionAck(b, ackAction) {
+  const payload = {
+    action:         'acknowledgeDefinition',
+    clientId:       (S.client && S.client.id)   || '',
+    clientName:     (S.client && S.client.name) || '',
+    behaviorKey:    b.key,
+    defHash:        b.defHash || '',
+    ackAction:      ackAction,
+    therapistEmail: (AUTH.user && AUTH.user.email) || '',
+    therapistName:  (AUTH.user && AUTH.user.name)  || ''
+  };
+  if (ackAction === 'read') {
+    _defAcks.read[_defAckKey(b.key, b.defHash)] = new Date().toISOString();
+  }
+  enqueuePendingAck(payload);
+  flushAckQueue();
+}
+
+const PENDING_ACKS_KEY = 'rtPendingAcks';
+function readPendingAcks() {
+  try { return JSON.parse(localStorage.getItem(PENDING_ACKS_KEY) || '[]'); }
+  catch (e) { return []; }
+}
+function writePendingAcks(q) {
+  try { localStorage.setItem(PENDING_ACKS_KEY, JSON.stringify(q)); } catch (e) {}
+}
+function enqueuePendingAck(p) {
+  const q = readPendingAcks();
+  if (p.ackAction === 'read') {
+    // Idempotent server-side on the same key, so collapse here too.
+    const k = p.clientId + '|' + p.behaviorKey + '|' + p.defHash;
+    const kept = q.filter(x => x.ackAction !== 'read' ||
+      (x.clientId + '|' + x.behaviorKey + '|' + x.defHash) !== k);
+    kept.push(p);
+    writePendingAcks(kept);
+    return;
+  }
+  // Skips are never collapsed — how often someone started anyway is the signal.
+  q.push(p);
+  writePendingAcks(q);
+}
+
+let _flushingAcks = false;
+async function flushAckQueue() {
+  if (GAS_URL === 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') return;
+  if (_flushingAcks) return;
+  _flushingAcks = true;
+  try {
+    const q = readPendingAcks();
+    if (!q.length) return;
+    const remaining = [];
+    for (let i = 0; i < q.length; i++) {
+      try {
+        const resp = await fetch(GAS_URL, {
+          method: 'POST', headers: { 'Content-Type': 'text/plain' },
+          redirect: 'follow', body: JSON.stringify(q[i])
+        });
+        const data = await resp.json();
+        if (!data || !data.success) remaining.push(q[i]);
+      } catch (e) { remaining.push(q[i]); }
+    }
+    writePendingAcks(remaining);
+  } finally {
+    _flushingAcks = false;
+  }
+}
+
+/* ─── f77 — PHASE LINES ───────────────────────────────────────────────
+ *
+ * Dated markers for what changed in the child's world — summer recess, a new
+ * school, a change of teacher. Capture only, for now: nothing in the app draws
+ * them yet, and Looker can draw reference lines straight off the table.
+ *
+ * Captured now anyway because this data has a short memory window. Nobody
+ * reconstructs in October that the teacher changed in March; it is simply gone,
+ * and every chart crossing that date is then quietly misleading.
+ */
+let _phaseClientId = null;
+
+function renderPhasesTab(container) {
+  const raw     = RAW_CONFIG || DEFAULT_CONFIG;
+  const clients = (raw.clients || []).filter(c => (c.status || 'active') !== 'inactive');
+  if (!_phaseClientId && clients.length) _phaseClientId = clients[0].id;
+
+  const client     = clients.find(c => c.id === _phaseClientId);
+  const cats       = (raw.phaseCategories && raw.phaseCategories.length)
+                      ? raw.phaseCategories : ['Other'];
+  const behaviours = ((CFG.CLIENTS || []).find(c => c.id === _phaseClientId) || {}).behaviors || [];
+  const mine = (raw.phaseChanges || [])
+    .filter(p => String(p.clientId || '').trim() === String(_phaseClientId))
+    .sort((a, b) => String(b.dateISO || '').localeCompare(String(a.dateISO || '')));
+
+  let opts = '';
+  clients.forEach(c => {
+    const n = (raw.phaseChanges || [])
+      .filter(p => String(p.clientId || '').trim() === String(c.id)).length;
+    opts += '<option value="' + escAttr(c.id) + '"' +
+            (c.id === _phaseClientId ? ' selected' : '') + '>' +
+            escHtml(c.name) + ' (' + n + ')</option>';
+  });
+
+  let catOpts = '';
+  cats.forEach(v => { catOpts += '<option value="' + escAttr(v) + '">' + escHtml(v) + '</option>'; });
+
+  let behChecks = '';
+  behaviours.forEach(b => {
+    behChecks += '<label class="ph-chk"><input type="checkbox" class="ph-beh" ' +
+                 'value="' + escAttr(b.key) + '"> ' + escHtml(b.label) + '</label>';
+  });
+
+  let html =
+    '<div class="settings-hdr">Phase lines</div>' +
+    '<p style="font-size:13.5px;color:var(--g400);font-weight:600;line-height:1.5;margin:0 0 14px">' +
+      'Things that changed in the child’s world and might change their behaviour — ' +
+      'a school break, a new teacher, a medication change. Record them <strong>as they ' +
+      'happen</strong>: a chart is only readable against what else changed, and nobody ' +
+      'can reconstruct these dates a year later.' +
+    '</p>' +
+    // A new frontend against an older GAS paste would accept phase lines and
+    // silently drop them: saveConfig has no branch for a key it does not know.
+    // phaseCategories only exists in the newer getConfig, so its absence is a
+    // reliable signal — and saying so beats losing her entries.
+    (raw.phaseCategories ? '' :
+      '<div class="dac show" style="margin-bottom:14px">' +
+        '<div class="dac-ttl">Backend not updated yet</div>' +
+        '<div class="dac-txt">Phase lines added here would not be saved. ' +
+          'Deploy the Apps Script update first, then reload the app.</div>' +
+      '</div>') +
+    '<div class="admin-filter-row"><label for="ph-client">Client</label>' +
+      '<select id="ph-client">' + opts + '</select></div>' +
+
+    '<div class="def-card">' +
+      '<div class="def-hdr"><span class="def-name">Add a phase line</span></div>' +
+      '<div class="form-group" style="margin-bottom:11px">' +
+        '<label class="form-lbl" for="ph-date">Date it took effect</label>' +
+        '<input type="date" class="form-ctrl" id="ph-date" value="' +
+          escAttr(new Date().toISOString().slice(0, 10)) + '">' +
+      '</div>' +
+      '<div class="form-group" style="margin-bottom:11px">' +
+        '<label class="form-lbl" for="ph-cat">What changed</label>' +
+        '<select class="form-ctrl" id="ph-cat">' + catOpts + '</select>' +
+      '</div>' +
+      '<div class="form-group" style="margin-bottom:11px">' +
+        '<label class="form-lbl" for="ph-label">Short label</label>' +
+        '<input type="text" class="form-ctrl" id="ph-label" maxlength="60" ' +
+          'placeholder="Prints beside the line on a chart — e.g. New teacher">' +
+      '</div>' +
+      '<div class="form-group" style="margin-bottom:11px">' +
+        '<label class="form-lbl" for="ph-desc">Detail (optional)</label>' +
+        '<textarea class="form-ctrl" rows="2" id="ph-desc" ' +
+          'placeholder="What happened, and anything you expect it to affect."></textarea>' +
+      '</div>' +
+      (behaviours.length
+        ? '<div class="form-group" style="margin-bottom:11px">' +
+            '<label class="form-lbl">Affects which behaviours?</label>' +
+            '<div class="ph-chks">' + behChecks + '</div>' +
+            '<div class="ph-hint">Tick none to mark it as affecting everything — ' +
+              'which is the usual case for a school change.</div>' +
+          '</div>'
+        : '') +
+      '<button class="btn btn-primary" style="width:100%" onclick="addPhaseChange()">' +
+        'Add phase line</button>' +
+    '</div>';
+
+  if (!mine.length) {
+    html += '<div class="empty-msg">No phase lines recorded for ' +
+            escHtml(client ? client.name : 'this client') + ' yet.</div>';
+  } else {
+    html += '<div class="settings-hdr" style="margin-top:18px">Recorded</div>';
+    mine.forEach(p => {
+      const aff = String(p.affectsBehaviors || '').trim();
+      const affLabels = aff
+        ? aff.split(',').map(k => {
+            const hit = behaviours.find(b => b.key === k.trim());
+            return escHtml(hit ? hit.label : k.trim());
+          }).join(', ')
+        : 'All behaviours';
+      html +=
+        '<div class="phase-row">' +
+          '<div class="ph-date-badge">' + escHtml(String(p.dateISO || '')) + '</div>' +
+          '<div class="ph-main">' +
+            '<div class="ph-label">' + escHtml(String(p.label || '(no label)')) + '</div>' +
+            '<div class="ph-cat">' + escHtml(String(p.category || '')) + '</div>' +
+            (p.description
+              ? '<div class="ph-desc">' + escHtml(String(p.description)) + '</div>' : '') +
+            '<div class="ph-aff">' + affLabels + '</div>' +
+          '</div>' +
+          '<button class="ph-del" title="Delete this phase line" ' +
+            'onclick="deletePhaseChange(\'' + esc(String(p.phaseId || '')) + '\')">×</button>' +
+        '</div>';
+    });
+  }
+
+  container.innerHTML = html;
+  const sel = document.getElementById('ph-client');
+  if (sel) sel.addEventListener('change', function (e) {
+    _phaseClientId = e.target.value;
+    renderPhasesTab(document.getElementById('admin-list'));
+  });
+}
+
+function addPhaseChange() {
+  const raw  = JSON.parse(JSON.stringify(RAW_CONFIG || DEFAULT_CONFIG));
+  const date = (document.getElementById('ph-date')  || {}).value || '';
+  const cat  = (document.getElementById('ph-cat')   || {}).value || '';
+  const lbl  = ((document.getElementById('ph-label') || {}).value || '').trim();
+  const desc = ((document.getElementById('ph-desc')  || {}).value || '').trim();
+  if (!raw.phaseCategories) {
+    toast('Deploy the Apps Script update first \u2014 this would not be saved', 'err');
+    return;
+  }
+  if (!_phaseClientId) { toast('Pick a client first', 'err'); return; }
+  if (!date) { toast('A phase line needs the date it took effect', 'err'); return; }
+  if (!lbl)  { toast('Add a short label — it is what shows on the chart', 'err'); return; }
+
+  const keys = [];
+  document.querySelectorAll('.ph-beh').forEach(el => { if (el.checked) keys.push(el.value); });
+
+  raw.phaseChanges = (raw.phaseChanges || []).concat([{
+    phaseId:          generateUUID(),
+    clientId:         _phaseClientId,
+    dateISO:          date,
+    category:         cat,
+    label:            lbl,
+    description:      desc,
+    affectsBehaviors: keys.join(','),
+    createdAt:        new Date().toISOString(),
+    createdBy:        (AUTH.user && AUTH.user.email) || ''
+  }]);
+
+  RAW_CONFIG = raw;
+  persistConfig(raw);
+  renderPhasesTab(document.getElementById('admin-list'));
+  toast('Phase line added', 'ok');
+}
+
+function deletePhaseChange(phaseId) {
+  const raw = JSON.parse(JSON.stringify(RAW_CONFIG || DEFAULT_CONFIG));
+  raw.phaseChanges = (raw.phaseChanges || [])
+    .filter(p => String(p.phaseId || '') !== String(phaseId));
+  RAW_CONFIG = raw;
+  persistConfig(raw);
+  renderPhasesTab(document.getElementById('admin-list'));
+  toast('Phase line removed', 'ok');
+}
+
 function applyConfig(raw, opts = {}) {
   // Preserve DEFAULT_CONFIG admins if server returned none
   if (!raw.admins || raw.admins.length === 0) {
@@ -1661,7 +2218,10 @@ function applyConfig(raw, opts = {}) {
         const d = _behaviorDefFor(raw, c.id, b.key);
         return { key:b.key, label:b.label, color:b.color||'#00A7C7',
                  topography:d.topography, onsetOffset:d.onsetOffset,
-                 examples:d.examples, nonExamples:d.nonExamples };
+                 examples:d.examples, nonExamples:d.nonExamples,
+                 // f78: the version identity an acknowledgement is keyed on.
+                 // Computed here, from the same values the RBT will read.
+                 defHash:_defHashFor(d) };
       }),
     }));
 
@@ -1901,6 +2461,18 @@ function renderDefinitionsTab(container) {
           'onclick="saveBehaviorDefinitions()">Save definitions for ' +
           escHtml(client ? client.name : 'this client') + '</button>';
 
+  // f78 — who has confirmed reading the current wording. On demand: the acks
+  // table grows without bound and this is an occasional question.
+  html += '<div class="settings-hdr" style="margin-top:20px">Acknowledgements</div>' +
+          '<p style="font-size:13px;color:var(--g400);font-weight:600;line-height:1.5;margin:0 0 10px">' +
+            'An RBT is shown any new or changed definition when they begin a session, ' +
+            'and confirms they have read it. They can start anyway \u2014 that is ' +
+            'recorded here rather than blocking data collection.' +
+          '</p>' +
+          '<button class="btn btn-ghost" style="width:100%" onclick="loadDefAckReport()">' +
+            'Check who has read these</button>' +
+          '<div id="def-ack-report"></div>';
+
   container.innerHTML = html;
   wireDefClientPicker();
 }
@@ -1913,6 +2485,93 @@ function _defField(key, field, label, hint) {
     '<textarea class="form-ctrl" rows="2" id="def-' + escAttr(key) + '-' + field + '" ' +
       'placeholder="' + escAttr(hint) + '">' + escHtml(d[field] || '') + '</textarea>' +
   '</div>';
+}
+
+
+/**
+ * f78 — who has read the CURRENT wording of each definition.
+ *
+ * Fetched on demand rather than on tab render: the acks table grows without
+ * bound, and this is a question Tatiana asks occasionally, not every time she
+ * opens the tab.
+ */
+async function loadDefAckReport() {
+  const host = document.getElementById('def-ack-report');
+  if (!host) return;
+  if (GAS_URL === 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') {
+    host.innerHTML = '<div class="empty-msg">Demo mode — no server to ask.</div>';
+    return;
+  }
+  host.innerHTML = '<div class="empty-msg">Checking…</div>';
+
+  let acks = [];
+  try {
+    const resp = await fetch(GAS_URL, {
+      method: 'POST', headers: { 'Content-Type': 'text/plain' }, redirect: 'follow',
+      body: JSON.stringify({ action: 'getDefinitionAckReport',
+                             clientId: _defClientId, approverRole: AUTH.role || '' })
+    });
+    const data = await resp.json();
+    if (!data || !data.success) {
+      host.innerHTML = '<div class="empty-msg">' +
+        escHtml((data && data.error) || 'Could not load acknowledgements.') + '</div>';
+      return;
+    }
+    acks = data.acks || [];
+  } catch (e) {
+    host.innerHTML = '<div class="empty-msg">Offline — acknowledgements need a connection.</div>';
+    return;
+  }
+
+  const raw = RAW_CONFIG || DEFAULT_CONFIG;
+  const cfgClient  = (CFG.CLIENTS || []).find(c => c.id === _defClientId);
+  const behaviours = (cfgClient ? (cfgClient.behaviors || []) : []).filter(_hasDefText);
+
+  // Who is expected to have read these: the therapists assigned to this client.
+  const expected = (raw.therapists || [])
+    .filter(t => (t.status || 'active') !== 'inactive')
+    .filter(t => String(t.clientIds || '').split(',')
+                   .map(x => x.trim()).includes(String(_defClientId)));
+
+  if (!behaviours.length) {
+    host.innerHTML = '<div class="empty-msg">Nothing to acknowledge yet — ' +
+                     'no definitions written for this client.</div>';
+    return;
+  }
+
+  let html = '';
+  behaviours.forEach(b => {
+    const reads = acks.filter(a => a.behaviorKey === b.key &&
+                                   a.ackAction === 'read' &&
+                                   a.defHash === b.defHash);
+    const skips = acks.filter(a => a.behaviorKey === b.key &&
+                                   a.ackAction === 'skipped' &&
+                                   a.defHash === b.defHash);
+    const readEmails = reads.map(a => String(a.therapistEmail || '').toLowerCase());
+    const missing = expected.filter(
+      t => !readEmails.includes(String(t.email || '').toLowerCase()));
+
+    const ok = expected.length > 0 && missing.length === 0;
+    html +=
+      '<div class="ackr-row' + (ok ? ' ackr-ok' : '') + '">' +
+        '<div class="ackr-hdr">' +
+          '<span class="def-dot" style="background:' + escAttr(b.color || '#ccc') + '"></span>' +
+          '<span class="def-name">' + escHtml(b.label) + '</span>' +
+          '<span class="ackr-count">' + reads.length + ' of ' + expected.length + ' read</span>' +
+        '</div>' +
+        (missing.length
+          ? '<div class="ackr-miss">Not yet read by: ' +
+              missing.map(t => escHtml(t.name || t.email || '?')).join(', ') + '</div>'
+          : (expected.length
+              ? '<div class="ackr-done">Everyone assigned has read the current wording.</div>'
+              : '<div class="ackr-miss">No therapists are assigned to this client.</div>')) +
+        (skips.length
+          ? '<div class="ackr-skip">Started without reading ' + skips.length +
+            ' time' + (skips.length === 1 ? '' : 's') + '</div>'
+          : '') +
+      '</div>';
+  });
+  host.innerHTML = html;
 }
 
 function _hasDefinition(raw, clientId, key) {
@@ -1945,6 +2604,8 @@ function saveBehaviorDefinitions() {
   const who  = AUTH.user ? AUTH.user.email : '';
   const rows = [];
 
+  let changed = 0;
+
   (cfgClient.behaviors || []).forEach(b => {
     const get = f => {
       const el = document.getElementById('def-' + b.key + '-' + f);
@@ -1955,13 +2616,41 @@ function saveBehaviorDefinitions() {
     // An all-blank definition is simply not stored — no empty rows accumulating
     // for every behaviour anyone ever looked at.
     if (!topography && !onsetOffset && !examples && !nonExamples) return;
-    rows.push({ clientId:_defClientId, behaviorKey:b.key, topography, onsetOffset,
-                examples, nonExamples, updatedAt:now, updatedBy:who });
+
+    // f78: this tab rewrites EVERY row for the client on each save, so stamping
+    // `now` unconditionally restamped untouched definitions. Harmless when the
+    // timestamp was decoration; not harmless now that the RBTs are asked to
+    // re-read a changed definition — it would have asked everyone to re-read
+    // all nine because one was edited. So the timestamp moves only when the
+    // words do, and the acknowledgement itself keys off a content hash rather
+    // than this field.
+    const prev = _behaviorDefFor(raw, _defClientId, b.key);
+    const same = prev.topography  === topography  &&
+                 prev.onsetOffset === onsetOffset &&
+                 prev.examples    === examples    &&
+                 prev.nonExamples === nonExamples;
+    const prevRow = (raw.behaviorDefs || []).find(
+      r => String(r.clientId || '').trim() === String(_defClientId) &&
+           String(r.behaviorKey || '').trim() === String(b.key));
+    if (!same) changed++;
+
+    rows.push({
+      clientId:_defClientId, behaviorKey:b.key, topography, onsetOffset,
+      examples, nonExamples,
+      updatedAt: (same && prevRow && prevRow.updatedAt) ? String(prevRow.updatedAt) : now,
+      updatedBy: (same && prevRow && prevRow.updatedBy) ? String(prevRow.updatedBy) : who
+    });
   });
 
   raw.behaviorDefs = keep.concat(rows);
   persistConfig(raw);
-  toast('Definitions saved for ' + cfgClient.name, 'ok');
+  toast(changed
+    ? 'Saved \u2014 ' + changed + ' definition' + (changed === 1 ? '' : 's') +
+      ' changed. Assigned RBTs will be asked to read ' +
+      (changed === 1 ? 'it' : 'them') + ' again before their next session.'
+    : 'Definitions saved for ' + cfgClient.name + ' \u2014 no wording changed, ' +
+      'so nobody is asked to re-read.',
+    'ok');
 }
 
 // ─── CLIENT SELECTION ─────────────────────────────────────────────────
@@ -2007,6 +2696,11 @@ async function selectClient(c) {
   document.getElementById('start-date').textContent = S.dateStr;
   startClock('clock-start', 'start-time');
   goTo('start');
+
+  // f78: NOT awaited, and nothing downstream waits on it. The gate is checked
+  // at Begin Session, by which time this has usually answered; if it has not,
+  // unacknowledgedDefinitions() returns nothing and the session starts.
+  loadDefinitionAcks();
 
   // Check hour limit
   const warn = document.getElementById('hour-warn-msg');
@@ -2831,6 +3525,7 @@ async function flushSubmitQueue() {
 async function onReconnect() {
   await syncPendingPause();
   await flushSubmitQueue();
+  await flushAckQueue();   // f78 — acknowledgements made offline
 }
 window.addEventListener('online', onReconnect);
 
@@ -2858,26 +3553,12 @@ function showBehaviorDefinition(key) {
   for (var i = 0; i < list.length; i++) if (list[i].key === key) { b = list[i]; break; }
   if (!b) return;
 
-  var body = '';
-  if (b.topography) {
-    body += '<div class="bd-sec"><div class="bd-lbl">What it looks like</div>' +
-            '<div class="bd-txt">' + escHtml(b.topography) + '</div></div>';
-  }
-  // f74b: her ruling — onset/offset gets its own box. For a duration behaviour
+  // f74b: her ruling put onset/offset in its own box. For a duration behaviour
   // "when do I start and stop the timer" is its own misidentification risk, and
   // buried inside a paragraph it is the first thing skipped.
-  if (b.onsetOffset) {
-    body += '<div class="bd-sec bd-time"><div class="bd-lbl">Starts / stops counting</div>' +
-            '<div class="bd-txt">' + escHtml(b.onsetOffset) + '</div></div>';
-  }
-  if (b.examples) {
-    body += '<div class="bd-sec bd-yes"><div class="bd-lbl">Count it when</div>' +
-            '<div class="bd-txt">' + escHtml(b.examples) + '</div></div>';
-  }
-  if (b.nonExamples) {
-    body += '<div class="bd-sec bd-no"><div class="bd-lbl">Do NOT count</div>' +
-            '<div class="bd-txt">' + escHtml(b.nonExamples) + '</div></div>';
-  }
+  // f78: shared with the acknowledgement modal so the wording the RBT confirms
+  // reading is byte-identical to the wording they see mid-session.
+  var body = _defBodyHtml(b);
   if (!body) {
     body = '<div class="bd-sec bd-empty"><div class="bd-txt">' +
            'No definition has been written for this behaviour <strong>for this client</strong> yet.<br><br>' +
@@ -4071,6 +4752,7 @@ function renderAdminList(type) {
   if (type === 'payroll')        { renderPayrollTab(container);        return; }
   if (type === 'admins')         { renderAdminsTab(container);         return; }
   if (type === 'definitions')    { renderDefinitionsTab(container);    return; }
+  if (type === 'phases')         { renderPhasesTab(container);         return; }
   if (type === 'mastery')        { renderMasteryReportTab(container);  return; }
   if (type === 'alerts')         { renderParentAlertsTab(container);   return; }
   if (type === 'billing')        { renderBillingReportTab(container);  return; }

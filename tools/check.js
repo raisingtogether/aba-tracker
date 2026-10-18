@@ -252,13 +252,46 @@ for (const src of Object.values(HTMLJS))
 // 'saveSession', and it is also a HAZARD: any MISSPELLED action silently becomes
 // a session write instead of failing. So: warn, name them, do not fail.
 const hasFallthrough = /\}\s*else\s*\{[^}]*processSession\(/.test(router);
+// A guarded catch-all requires a sheetId before it will treat the payload as a
+// session, so an unknown action gets an explicit error instead of a stray write.
+// That downgrades the fallthrough from a hazard to a note.
+const guardedFallthrough = /!data\.sheetId/.test(router);
 const orphan = [...posted].filter(x => !handled.has(x));
 if (!orphan.length) {
   console.log(`  ok    ${posted.size} posted actions all handled (${handled.size} branches)`);
+} else if (hasFallthrough && guardedFallthrough) {
+  orphan.forEach(x => console.log(`  ok    '${x}' has no branch — reaches the catch-all, which is guarded on sheetId, so it is the session write or an explicit error`));
 } else if (hasFallthrough) {
-  orphan.forEach(x => warn('router', `'${x}' has no branch — falls through to processSession(). Intended for the session write; anything else here is a typo that would silently write a session.`));
+  orphan.forEach(x => warn('router', `'${x}' has no branch — falls through to an UNGUARDED processSession(). A typo'd action would silently write a session; guard the catch-all on data.sheetId.`));
 } else {
   orphan.forEach(x => fail('router', `frontend posts action '${x}' with no doPost branch and no fallthrough`));
+}
+
+// ── BigQuery: every synced table has an explicit schema branch ───────────────
+// Adding a table is THREE edits, not two: the table list, the row builder, and
+// a tableId branch in bqCreateTableSchema. Miss the third and it falls through
+// to a {fields: []} fallback while the load job sets autodetect:false — which
+// fails the load outright, so the table never appears and the hourly sync
+// emails an error every hour. f76 shipped exactly that bug (d13).
+console.log('\n=== BigQuery tables have a schema branch ===');
+{
+  const bq = FILES['BigQuerySync.gs'] || '';
+  const declared = new Set();
+  for (const m of bq.matchAll(/\{\s*name:\s*'([a-z_]+)'\s*,\s*rows:/g)) declared.add(m[1]);
+  // The data tables are registered as { name: 'x', rows: buf } too, so this set
+  // is every table the sync writes.
+  const schemad = new Set();
+  for (const m of bq.matchAll(/tableId\s*===\s*'([a-z_]+)'/g)) schemad.add(m[1]);
+  const missing = [...declared].filter(t => !schemad.has(t));
+  if (!declared.size) {
+    warn('bigquery', 'could not find any synced table names — check the regex');
+  } else if (!missing.length) {
+    console.log(`  ok    all ${declared.size} synced tables have a schema branch`);
+  } else {
+    missing.forEach(t => fail('bigquery',
+      `table '${t}' is synced but has no branch in bqCreateTableSchema() — ` +
+      `it would load with an empty schema and autodetect:false, which fails`));
+  }
 }
 
 // ── summary ──────────────────────────────────────────────────────────────────

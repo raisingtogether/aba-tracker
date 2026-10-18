@@ -17,7 +17,7 @@
  * Keep BQ_SYNC_BUILD in BigQuerySync.gs set to the same value: the two files are
  * pasted separately, so a stale BigQuerySync is otherwise invisible.
  */
-var APP_BUILD = '2026-10-18-f76';
+var APP_BUILD = '2026-10-18-f78';
 
 var ADMIN_SHEET_ID = '1VPBADMXvhOww_52O1n2CieTsQB6XCotLt6XdAQsq0ik';
 var AUDIT_SHEET_ID = '1tf98iS18vV08mQtPV9Vq6hQVkEp6Qg-ebUwHkeRlwaQ';
@@ -146,6 +146,25 @@ function doPost(e) {
 
     } else if (data.action === 'dismissParentAlert') {
       result = dismissParentAlert(data.alertId, data.approverEmail, data.approverRole, data.reason);
+
+    } else if (data.action === 'acknowledgeDefinition') {
+      result = acknowledgeDefinition(data);
+
+    } else if (data.action === 'listDefinitionAcks') {
+      result = listDefinitionAcks(data.therapistEmail, data.clientId);
+
+    } else if (data.action === 'getDefinitionAckReport') {
+      result = getDefinitionAckReport(data.clientId, data.approverRole);
+
+    } else if (!data.sheetId) {
+      // The catch-all IS the session write, and a session write always carries
+      // a sheetId. Anything else landing here is an action this deployment does
+      // not know — normally a newer frontend against an older paste, which the
+      // deploy order (GAS before Firebase) is meant to prevent. Say so, rather
+      // than handing a non-session payload to processSession.
+      result = { success: false,
+                 error: 'Unknown action "' + (data.action || '(none)') +
+                        '" — this deployment may be older than the app.' };
 
     } else {
       processSession(data);
@@ -594,6 +613,14 @@ var PLAN_VOCABULARY = {
   Location:   ['Home', 'School', 'Community', 'Clinic', 'Telehealth'],
   Satisfaction: ['1', '2', '3', '4', '5'],
   YesNo:      ['Yes', 'No', 'N/A'],
+  // f77 — what kind of external change a phase line marks. Her three examples
+  // (summer recess, new school, teacher change) plus the ones that come up in
+  // every chart review. Extend by adding a Plan Lists row, no code change.
+  PhaseChangeCategory: ['School break / recess', 'New school', 'Teacher change',
+                        'Medication change', 'Family / home change',
+                        'Placement change', 'Staffing change',
+                        'Intervention change', 'Definition revised',
+                        'Illness / medical', 'Other'],
   // The LTO structure her Instructional Goals tab is organised by.
   Domain:     ['Health and Safety', 'Self-Advocacy', 'Social Relationships',
                'Community Participation', 'Productive Activity']
@@ -684,7 +711,12 @@ function getConfig() {
     billing:        sheetToObjects(ss, 'Billing'),
     authorizations: sheetToObjects(ss, 'Authorizations'),
     admins:         sheetToObjects(ss, 'Admins'),
-    behaviorDefs:   _readBehaviorDefs(ss)
+    behaviorDefs:   _readBehaviorDefs(ss),
+    // f77. Small and bounded — a handful of dated events per client per year.
+    // Definition ACKS deliberately do NOT ride along here: that table grows
+    // without bound, so it is fetched per therapist per client instead.
+    phaseChanges:    _readPhaseChanges(ss),
+    phaseCategories: _phaseCategories(ss)
   };
 }
 
@@ -696,6 +728,262 @@ function _readBehaviorDefs(ss) {
   } catch (e) {
     return [];
   }
+}
+
+/** Trim that tolerates the non-string cell values sheetToObjects returns. */
+function _trimStr(v) {
+  return String(v === null || v === undefined ? '' : v).replace(/^\s+|\s+$/g, '');
+}
+
+/* ─── f78 — DEFINITION ACKNOWLEDGEMENT ────────────────────────────────
+ *
+ * Tatiana's ask: when a definition is new or changed, the RBT should have to
+ * read it and say they understood before collecting data against it.
+ *
+ * WHAT IDENTIFIES A VERSION. Not `updatedAt`: saveBehaviorDefinitions rewrites
+ * every row for a client on each save, so editing one behaviour would restamp
+ * all nine and ask everyone to re-read eight definitions that did not change.
+ * That is how an acknowledgement control becomes a tap-through reflex. So the
+ * version identity is a CONTENT HASH of the four fields — change the words and
+ * the hash changes; save without changing them and nobody is asked again.
+ *
+ * APPEND-ONLY. An old acknowledgement is never overwritten, because the record
+ * "on Oct 20 this RBT read THAT wording" is the point. It is a training record.
+ */
+var DEF_ACK_TAB = 'Definition Acks';
+var DEF_ACK_HEADERS = [
+  'ackId',            // read: email::client::behavior::hash — idempotent on retry
+  'clientId', 'behaviorKey',
+  'defHash',          // which wording was read
+  'ackAction',        // 'read' | 'skipped'
+  'therapistEmail', 'therapistName',
+  'acknowledgedAt', 'dateISO'
+];
+
+/**
+ * Server-side mirror of the frontend `simpleHash` over the four definition
+ * fields, in field order, NUL-separated.
+ *
+ * MUST stay byte-identical to _defHashFor() in index.html — same djb2 variant,
+ * same separator, same field order, and no trimming on either side (both read
+ * the same untrimmed sheet values, so trimming on one side only would split the
+ * hash in two). Same contract as _promptLevelLabel mirroring PROMPT_LEVELS.
+ *
+ * It exists here so behavior_definitions can carry the current hash into
+ * BigQuery — without it "who has not read the current version" is unanswerable
+ * in Looker, since the acks know a hash and the definitions would not.
+ *
+ * 32-bit, so a collision is possible in principle. The consequence is one
+ * missed re-read prompt, not a bad data write.
+ */
+function _defHash(topography, onsetOffset, examples, nonExamples) {
+  var SEP = String.fromCharCode(0);
+  var s = String(topography  || '') + SEP +
+          String(onsetOffset || '') + SEP +
+          String(examples    || '') + SEP +
+          String(nonExamples || '');
+  var h = 0;
+  for (var i = 0; i < s.length; i++) {
+    h = ((h << 5) - h) + s.charCodeAt(i);
+    h = h | 0;
+  }
+  return Math.abs(h).toString(16);
+}
+
+function _defAckSheet() {
+  var ss = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var sheet = getOrCreateSheet(ss, DEF_ACK_TAB, DEF_ACK_HEADERS);
+  ensureSheetColumns(sheet, DEF_ACK_HEADERS);
+  return sheet;
+}
+
+/**
+ * Record that a therapist read (or skipped) one definition version.
+ *
+ * A 'read' is idempotent on ackId, so an offline retry cannot double-record.
+ * A 'skip' always appends: how OFTEN someone started anyway is exactly the
+ * signal Tatiana needs, and de-duplicating it would hide a pattern.
+ */
+function acknowledgeDefinition(p) {
+  p = p || {};
+  var cid  = _trimStr(p.clientId);
+  var key  = _trimStr(p.behaviorKey);
+  var who  = _trimStr(p.therapistEmail).toLowerCase();
+  var hash = String(p.defHash || '');
+  var act  = (String(p.ackAction || 'read') === 'skipped') ? 'skipped' : 'read';
+
+  if (!cid || !key || !who) {
+    return { success: false, error: 'clientId, behaviorKey and therapistEmail are required.' };
+  }
+
+  var lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    var sheet = _defAckSheet();
+    var ackId = (act === 'read')
+      ? (who + '::' + cid + '::' + key + '::' + hash)
+      : ('skip::' + who + '::' + cid + '::' + key + '::' + hash + '::' + new Date().getTime());
+
+    if (act === 'read') {
+      var existing = sheetToObjects(SpreadsheetApp.openById(ADMIN_SHEET_ID), DEF_ACK_TAB);
+      for (var i = 0; i < existing.length; i++) {
+        if (String(existing[i].ackId || '') === ackId) {
+          return { success: true, already: true, ackId: ackId };
+        }
+      }
+    }
+
+    var now    = new Date();
+    var header = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+    var cm = {};
+    for (var h = 0; h < header.length; h++) cm[_trimStr(header[h])] = h;
+
+    var row = [];
+    for (var c = 0; c < header.length; c++) row.push('');
+    if (cm.ackId          !== undefined) row[cm.ackId]          = ackId;
+    if (cm.clientId       !== undefined) row[cm.clientId]       = cid;
+    if (cm.behaviorKey    !== undefined) row[cm.behaviorKey]    = key;
+    if (cm.defHash        !== undefined) row[cm.defHash]        = hash;
+    if (cm.ackAction      !== undefined) row[cm.ackAction]      = act;
+    if (cm.therapistEmail !== undefined) row[cm.therapistEmail] = who;
+    if (cm.therapistName  !== undefined) row[cm.therapistName]  = String(p.therapistName || '');
+    if (cm.acknowledgedAt !== undefined) row[cm.acknowledgedAt] = now.toISOString();
+    if (cm.dateISO        !== undefined) row[cm.dateISO]        = Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+    sheet.appendRow(row);
+
+    try {
+      writeAuditLog(
+        now.toISOString(),
+        who,
+        act === 'read' ? 'definition_acknowledged' : 'definition_ack_skipped',
+        String(p.clientName || cid),
+        'behavior=' + key + ' version=' + hash
+      );
+    } catch (e) {}
+
+    return { success: true, already: false, ackId: ackId };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * What THIS therapist has already read for THIS client. Deliberately narrow:
+ * the acks table grows without bound (therapists x clients x behaviours x
+ * versions), so it must never ride along in getConfig.
+ */
+function listDefinitionAcks(therapistEmail, clientId) {
+  var who = _trimStr(therapistEmail).toLowerCase();
+  var cid = _trimStr(clientId);
+  if (!who) return { success: false, error: 'therapistEmail is required.' };
+
+  var ss = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  if (!ss.getSheetByName(DEF_ACK_TAB)) return { success: true, acks: [] };
+
+  var rows = sheetToObjects(ss, DEF_ACK_TAB);
+  var out = [];
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    if (String(r.ackAction || 'read') !== 'read') continue;
+    if (_trimStr(r.therapistEmail).toLowerCase() !== who) continue;
+    if (cid && _trimStr(r.clientId) !== cid) continue;
+    out.push({
+      clientId:       String(r.clientId    || ''),
+      behaviorKey:    String(r.behaviorKey || ''),
+      defHash:        String(r.defHash     || ''),
+      acknowledgedAt: String(r.acknowledgedAt || '')
+    });
+  }
+  return { success: true, acks: out };
+}
+
+/** Admin/BCBA view: every ack for one client, newest first. */
+function getDefinitionAckReport(clientId, approverRole) {
+  var role = String(approverRole || '').toLowerCase();
+  if (role !== 'admin' && role !== 'bcba') {
+    return { success: false, error: 'Only an Admin or BCBA can view acknowledgements.' };
+  }
+  var cid = _trimStr(clientId);
+  var ss  = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  if (!ss.getSheetByName(DEF_ACK_TAB)) return { success: true, acks: [] };
+
+  var rows = sheetToObjects(ss, DEF_ACK_TAB);
+  var out = [];
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    if (cid && _trimStr(r.clientId) !== cid) continue;
+    out.push({
+      clientId:       String(r.clientId       || ''),
+      behaviorKey:    String(r.behaviorKey    || ''),
+      defHash:        String(r.defHash        || ''),
+      ackAction:      String(r.ackAction      || 'read'),
+      therapistEmail: String(r.therapistEmail || ''),
+      therapistName:  String(r.therapistName  || ''),
+      acknowledgedAt: String(r.acknowledgedAt || '')
+    });
+  }
+  out.sort(function (a, b) {
+    return String(b.acknowledgedAt) < String(a.acknowledgedAt) ? -1
+         : String(b.acknowledgedAt) > String(a.acknowledgedAt) ? 1 : 0;
+  });
+  return { success: true, acks: out };
+}
+
+/* ─── f77 — PHASE LINES ───────────────────────────────────────────────
+ *
+ * A dated marker for something that changed in the child's world: summer
+ * recess, a new school, a change of teacher, a medication change. Standard
+ * single-subject-design annotation — a trend is only interpretable against
+ * what else changed at the same time.
+ *
+ * WHY CAPTURE BEFORE ANY CHART EXISTS. This data has a short memory window.
+ * Nobody reconstructs in October that the teacher changed in March; the
+ * information is simply gone, and every chart crossing that date is quietly
+ * misleading with no way to tell. The capture is one tab; Looker can draw
+ * reference lines straight off it with no app work at all.
+ *
+ * NOT definition versioning — she declined that. A phase line answers "what
+ * changed that might explain this trend", which is the weekly question.
+ */
+var PHASE_TAB = 'Phase Changes';
+var PHASE_HEADERS = [
+  'phaseId', 'clientId', 'dateISO',
+  'category',          // from PhaseChangeCategory in Plan Lists — hers to extend
+  'label',             // short: this is what prints beside the line on a chart
+  'description',
+  'affectsBehaviors',  // comma-separated behaviour keys; BLANK = all of them
+  'createdAt', 'createdBy'
+];
+
+function _readPhaseChanges(ss) {
+  try {
+    if (!ss.getSheetByName(PHASE_TAB)) return [];
+    return sheetToObjects(ss, PHASE_TAB);
+  } catch (e) {
+    return [];
+  }
+}
+
+/**
+ * Her list if she has extended it in Plan Lists, the seeded default otherwise.
+ * Same "the vocabulary is data" principle as the instruments.
+ */
+function _phaseCategories(ss) {
+  var out = [];
+  try {
+    if (ss.getSheetByName(PLAN_LISTS_TAB)) {
+      var rows = sheetToObjects(ss, PLAN_LISTS_TAB);
+      for (var i = 0; i < rows.length; i++) {
+        if (_trimStr(rows[i].listName) !== 'PhaseChangeCategory') continue;
+        if (String(rows[i].status || 'active') === 'inactive') continue;
+        var v = _trimStr(rows[i].value);
+        if (v) out.push(v);
+      }
+    }
+  } catch (e) {
+    out = [];
+  }
+  return out.length ? out : PLAN_VOCABULARY.PhaseChangeCategory;
 }
 
 
@@ -785,6 +1073,10 @@ function saveConfig(cfg) {
 
     if (cfg.behaviorDefs !== undefined) {
       objectsToSheet(ss, BEHAVIOR_DEFS_TAB, BEHAVIOR_DEF_HEADERS, cfg.behaviorDefs);
+    }
+
+    if (cfg.phaseChanges !== undefined) {
+      objectsToSheet(ss, PHASE_TAB, PHASE_HEADERS, cfg.phaseChanges);
     }
 
     if (cfg.admins !== undefined)

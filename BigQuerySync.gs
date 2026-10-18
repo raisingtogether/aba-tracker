@@ -18,7 +18,7 @@
  * every release. doGet reports this value, so one unauthenticated call proves
  * whether THIS file was pasted too (the two are pasted separately).
  */
-var BQ_SYNC_BUILD = '2026-10-18-f76';
+var BQ_SYNC_BUILD = '2026-10-18-f78';
 function bqSyncBuild() { return BQ_SYNC_BUILD; }
 
 var BQ_PROJECT     = 'rt-aba-tracker';
@@ -81,6 +81,19 @@ function syncAllToBigQuery() {
       behaviorDefs = bqSheetToObjects(adminSS, 'Behavior Definitions');
     }
   } catch (e) { behaviorDefs = []; }
+  // f77 / f78: same tolerance — neither tab exists until first use.
+  var phaseChanges = [];
+  try {
+    if (adminSS.getSheetByName('Phase Changes')) {
+      phaseChanges = bqSheetToObjects(adminSS, 'Phase Changes');
+    }
+  } catch (e) { phaseChanges = []; }
+  var defAcks = [];
+  try {
+    if (adminSS.getSheetByName('Definition Acks')) {
+      defAcks = bqSheetToObjects(adminSS, 'Definition Acks');
+    }
+  } catch (e) { defAcks = []; }
 
   // Build goal code → description lookup
   var goalDescMap = {};
@@ -106,7 +119,9 @@ function syncAllToBigQuery() {
     { name: 'goals_reference',     rows: bqBuildGoalReferenceRows(goals)           },
     { name: 'behaviors_reference', rows: bqBuildBehaviorReferenceRows(behaviors)   },
     { name: 'billing_codes',       rows: bqBuildBillingCodeRows(billing)           },
-    { name: 'behavior_definitions', rows: bqBuildBehaviorDefinitionRows(behaviorDefs) }
+    { name: 'behavior_definitions', rows: bqBuildBehaviorDefinitionRows(behaviorDefs) },
+    { name: 'phase_changes',       rows: bqBuildPhaseChangeRows(phaseChanges)       },
+    { name: 'definition_acks',     rows: bqBuildDefinitionAckRows(defAcks)          }
   ];
   for (var ri = 0; ri < refTables.length; ri++) {
     var rt = refTables[ri];
@@ -352,10 +367,85 @@ function bqBuildBehaviorDefinitionRows(defs) {
       examples:      String(d.examples    || ''),
       non_examples:  String(d.nonExamples || ''),
       updated_at:    String(d.updatedAt   || ''),
-      updated_by:    String(d.updatedBy   || '')
+      updated_by:    String(d.updatedBy   || ''),
+      // f78: the version identity the acks are keyed on. Guarded because
+      // _defHash lives in Code.gs — a BigQuerySync pasted without it must
+      // still sync, just without the join key.
+      def_hash:      bqDefHash(d)
     });
   }
   return rows;
+}
+
+/**
+ * _defHash lives in Code.gs (same Apps Script project). Guarded so a stale or
+ * missing Code.gs paste degrades to an empty hash rather than failing the whole
+ * hourly sync — the same reason doGet guards its call to bqSyncBuild.
+ */
+function bqDefHash(d) {
+  try {
+    if (typeof _defHash !== 'function') return '';
+    return _defHash(d.topography, d.onsetOffset, d.examples, d.nonExamples);
+  } catch (e) {
+    return '';
+  }
+}
+
+/**
+ * f77 — phase_changes. The dated markers a chart draws reference lines from.
+ * Not PHI-free: it names a client and describes their circumstances in free
+ * text, so it is excluded from the de-identified views alongside
+ * behavior_definitions and sessions.notes.
+ */
+function bqBuildPhaseChangeRows(rows) {
+  var out = [];
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    var cid = String(r.clientId || '').replace(/^\s+|\s+$/g, '');
+    var dt  = String(r.dateISO  || '').replace(/^\s+|\s+$/g, '');
+    if (!cid || !dt) continue;   // a line with no client or no date cannot be drawn
+    out.push({
+      phase_id:          String(r.phaseId          || ''),
+      client_id:         cid,
+      date_iso:          dt,
+      category:          String(r.category         || ''),
+      label:             String(r.label            || ''),
+      description:       String(r.description      || ''),
+      affects_behaviors: String(r.affectsBehaviors || ''),
+      created_at:        String(r.createdAt        || ''),
+      created_by:        String(r.createdBy        || '')
+    });
+  }
+  return out;
+}
+
+/**
+ * f78 — definition_acks. Who read which wording, and when. No free clinical
+ * text, so unlike behavior_definitions this one CAN appear in a de-identified
+ * view with the client pseudonymised; it joins to behavior_definitions on
+ * client_id + behavior_key + def_hash to answer "who has not read the current
+ * version".
+ */
+function bqBuildDefinitionAckRows(rows) {
+  var out = [];
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    var cid = String(r.clientId    || '').replace(/^\s+|\s+$/g, '');
+    var key = String(r.behaviorKey || '').replace(/^\s+|\s+$/g, '');
+    if (!cid || !key) continue;
+    out.push({
+      ack_id:          String(r.ackId          || ''),
+      client_id:       cid,
+      behavior_key:    key,
+      def_hash:        String(r.defHash        || ''),
+      ack_action:      String(r.ackAction      || 'read'),
+      therapist_email: String(r.therapistEmail || ''),
+      therapist_name:  String(r.therapistName  || ''),
+      acknowledged_at: String(r.acknowledgedAt || ''),
+      date_iso:        String(r.dateISO        || '')
+    });
+  }
+  return out;
 }
 
 function bqBuildBehaviorReferenceRows(behaviors) {
@@ -1186,6 +1276,51 @@ function bqCreateTableSchema(tableId) {
       { name: 'label',      type: 'STRING', mode: 'NULLABLE' },
       { name: 'client_ids', type: 'STRING', mode: 'NULLABLE' },
       { name: 'status',     type: 'STRING', mode: 'NULLABLE' }
+    ]};
+  }
+
+  // f76 shipped this table with no schema branch, which falls through to the
+  // empty-fields fallback — and with autodetect:false that fails the load job
+  // outright. Caught before it ever ran.
+  if (tableId === 'behavior_definitions') {
+    return { fields: [
+      { name: 'client_id',    type: 'STRING', mode: 'NULLABLE' },
+      { name: 'behavior_key', type: 'STRING', mode: 'NULLABLE' },
+      { name: 'topography',   type: 'STRING', mode: 'NULLABLE' },
+      { name: 'onset_offset', type: 'STRING', mode: 'NULLABLE' },
+      { name: 'examples',     type: 'STRING', mode: 'NULLABLE' },
+      { name: 'non_examples', type: 'STRING', mode: 'NULLABLE' },
+      { name: 'updated_at',   type: 'STRING', mode: 'NULLABLE' },
+      { name: 'updated_by',   type: 'STRING', mode: 'NULLABLE' },
+      { name: 'def_hash',     type: 'STRING', mode: 'NULLABLE' }
+    ]};
+  }
+
+  if (tableId === 'phase_changes') {
+    return { fields: [
+      { name: 'phase_id',          type: 'STRING', mode: 'NULLABLE' },
+      { name: 'client_id',         type: 'STRING', mode: 'NULLABLE' },
+      { name: 'date_iso',          type: 'STRING', mode: 'NULLABLE' },
+      { name: 'category',          type: 'STRING', mode: 'NULLABLE' },
+      { name: 'label',             type: 'STRING', mode: 'NULLABLE' },
+      { name: 'description',       type: 'STRING', mode: 'NULLABLE' },
+      { name: 'affects_behaviors', type: 'STRING', mode: 'NULLABLE' },
+      { name: 'created_at',        type: 'STRING', mode: 'NULLABLE' },
+      { name: 'created_by',        type: 'STRING', mode: 'NULLABLE' }
+    ]};
+  }
+
+  if (tableId === 'definition_acks') {
+    return { fields: [
+      { name: 'ack_id',          type: 'STRING', mode: 'NULLABLE' },
+      { name: 'client_id',       type: 'STRING', mode: 'NULLABLE' },
+      { name: 'behavior_key',    type: 'STRING', mode: 'NULLABLE' },
+      { name: 'def_hash',        type: 'STRING', mode: 'NULLABLE' },
+      { name: 'ack_action',      type: 'STRING', mode: 'NULLABLE' },
+      { name: 'therapist_email', type: 'STRING', mode: 'NULLABLE' },
+      { name: 'therapist_name',  type: 'STRING', mode: 'NULLABLE' },
+      { name: 'acknowledged_at', type: 'STRING', mode: 'NULLABLE' },
+      { name: 'date_iso',        type: 'STRING', mode: 'NULLABLE' }
     ]};
   }
 

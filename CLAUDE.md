@@ -51,6 +51,10 @@ ES5 for consistency and safety.
 | Admins | email, name, status |
 | Suspended Sessions | suspendId, therapistEmail, clientId, clientName, sheetId, dateISO, updatedAt, status, stateJson **(v4 pause/resume; transient — NOT synced to BigQuery)** |
 | Parent Alerts | alertId, createdAt, submissionId, dateISO, clientId, clientName, behaviorKey, behaviorLabel, count, threshold, mode, status, recipient, sentAt, sentBy, note **(f54; status = blocked\|pending\|sent\|dismissed\|failed)** |
+| Behavior Definitions | clientId, behaviorKey, topography, onsetOffset, examples, nonExamples, updatedAt, updatedBy **(f74b — grain is clientId + behaviorKey: same behaviour name, different topography per child)** |
+| Definition Acks | ackId, clientId, behaviorKey, defHash, ackAction, therapistEmail, therapistName, acknowledgedAt, dateISO **(f78 — APPEND-ONLY; `ackAction` = read\|skipped)** |
+| Phase Changes | phaseId, clientId, dateISO, category, label, description, affectsBehaviors, createdAt, createdBy **(f77 — blank `affectsBehaviors` = all behaviours)** |
+| Plan Lists | listName, value, sortOrder, status, notes **(f75 — 22 controlled vocabularies from her plan template; extend by adding a row)** |
 | Instruments | instrumentId, version, domain, subdomain, itemCode, label, scoreMin, scoreMax, criterion, sortOrder, status **(f36 — the instrument is DATA, not code)** |
 | Assessments | assessmentId, clientId, clientName, instrumentId, instrumentVersion, administeredDate, assessorEmail, assessorName, status, isBaseline, startedAt, updatedAt, completedAt, itemCount, scoredCount, notes, scoresJson **(f36)** |
 | Assessment Items | assessmentId, clientId, instrumentId, itemCode, domain, subdomain, score, criterion, belowCriterion, administeredDate, dateISO **(f36 — written only at completion)** |
@@ -118,6 +122,11 @@ All sheet writes use `ensureSheetColumns` + colMap-based row building. **Never h
 | `deleteSuspendedSession(suspendId, reason, actorEmail)` | `reason='discarded'` audits as `session_discarded`; anything else keeps the historical `session_resumed_completed` |
 | `checkGoalMastery` | f30b. 80% × 5 consecutive sessions **the goal was run in**, at Independent. No level = not run = **skipped**, not a break |
 | `_promptLevelLabel` / `PROMPT_LEVEL_ORDER` | Server-side mirror of the frontend `PROMPT_LEVELS` order |
+| `_defHash(topo, onset, ex, nonEx)` | f78. **Server mirror of frontend `simpleHash`** over the four definition fields, NUL-separated. Must stay byte-identical to `_defHashFor` — see below |
+| `acknowledgeDefinition(data)` | f78. Appends a read/skip row. `read` is idempotent on `ackId`; `skip` always appends |
+| `listDefinitionAcks(email, clientId)` | f78. Narrow by design — the acks table grows without bound and must NEVER ride along in `getConfig` |
+| `getDefinitionAckReport(clientId, role)` | f78. Admin/BCBA-gated; every ack for one client, newest first |
+| `_readPhaseChanges` / `_phaseCategories` | f77. Tolerant reads; categories come from `Plan Lists` with the seeded list as fallback |
 
 ### Key index.html globals/functions
 | Symbol | Purpose |
@@ -142,6 +151,12 @@ All sheet writes use `ensureSheetColumns` + colMap-based row building. **Never h
 | `discardActiveSession` / `discardSuspendedSession` | Clear a trial session from all **three** stores: server row, local snapshot, offline submit queue |
 | `purgePendingSubmit(submissionId)` | The one that matters — a queued test session would otherwise auto-submit on reconnect |
 | `renderParentAlertsTab` / `saveParentAlertRecipients` | f54 Alerts tab. Recipients live here too because `'clients'` is in `bcbaBlocked` |
+| `_defHashFor(d)` | f78. **Mirror of `_defHash` in Code.gs.** Same djb2, same NUL separator, same field order, **no trimming on either side** — both read the same untrimmed sheet values, so trimming on one side only would split the hash and re-prompt everyone once |
+| `unacknowledgedDefinitions()` | f78. **Fails open:** returns `[]` whenever `_defAcks.ready` is false, so no network failure can block data collection |
+| `startSessionFlow()` | f78. The gate. Replaced `promptLateStart()` on the Begin Session button; resumed sessions are NOT re-gated |
+| `_defBodyHtml(b)` | f78. Shared by `showBehaviorDefinition` and the ack modal so the wording confirmed is byte-identical to the wording shown mid-session |
+| `flushAckQueue` / `rtPendingAcks` | f78. Queue-first-then-send, so an ack made offline is not lost |
+| `renderPhasesTab` / `addPhaseChange` | f77. Refuses to write when `raw.phaseCategories` is absent — that means an older GAS paste whose `saveConfig` would silently drop the rows |
 
 ---
 
@@ -229,7 +244,7 @@ All sheet writes use `ensureSheetColumns` + colMap-based row building. **Never h
 ## Data pipeline (BigQuery)
 
 - **BigQuerySync.gs** is a SEPARATE file in the same Apps Script project
-- 11 tables synced hourly via time-based trigger
+- 14 tables synced hourly via time-based trigger
 - Tables: `sessions`, `behavior_records` (normalized), `trial_records` (normalized), `abc_incidents`, `mastery_log`, `therapists`, `clients`, `authorizations`, `goals_reference`, `behaviors_reference`, `billing_codes`
 - Looker Studio connected with 8 report queries
 - `WRITE_TRUNCATE` with `NEWLINE_DELIMITED_JSON` format (free tier compatible)
@@ -307,6 +322,13 @@ correct, plus a wrong theory about script ownership.
 can click Allow while leaving one unticked. Tick everything.
 
 ### GAS Deployment (CRITICAL)
+**GAS BEFORE FIREBASE whenever the frontend sends a new action or field.**
+`doPost`'s catch-all is the session write, so an action an older paste does not
+know used to fall through to `processSession`. It is now guarded on
+`data.sheetId` and answers with an explicit "this deployment may be older than
+the app" instead — but a new frontend against an old backend still means the
+feature silently does nothing, which is why the order matters.
+
 **Step 0 — `git push` FIRST.** Step 1 copies from GitHub Raw, which serves
 `origin/main`, NOT the working tree. A commit that has not been pushed is
 invisible to the paste, and the symptom is identical to a botched deploy: the
@@ -640,6 +662,62 @@ in the other), same RT Admin config, design tokens copied from `index.html`.
   zero licensing exposure.
 - **Licensing:** store item **codes and scores**; publisher item text may go into her
   RT Admin sheet but **never the repo or a shipped config**.
+
+## Behaviour definitions + acknowledgement (f74b / f78)
+
+Four fields per **client per behaviour**: `topography`, `onsetOffset`,
+`examples`, `nonExamples`. The grain is the point — one shared definition would
+apply one child's topography to every other child assigned to that behaviour,
+which is the exact misidentification the feature exists to prevent.
+
+**The version identity is a CONTENT HASH, not `updatedAt`.** The Definitions tab
+rewrites every row for a client on each save, so `updatedAt` moves on untouched
+rows; keying acknowledgement off it would ask everyone to re-read eight
+definitions because one was edited, and an acknowledgement control that fires
+on unchanged text becomes a tap-through reflex. `saveBehaviorDefinitions` now
+also **preserves `updatedAt` when the four fields are unchanged**, so the
+timestamp means what it says.
+
+**`_defHash` (Code.gs) and `_defHashFor` (index.html) must stay identical.**
+Two implementations is a drift risk accepted for one reason: the server needs
+the hash to stamp `def_hash` into `behavior_definitions`, without which "who has
+not read the current version" is unanswerable in Looker. Verify with the
+equivalence check in `tools/` rather than by eye.
+
+**The gate fails open and is escapable.** Both are deliberate:
+- *Fails open* — `unacknowledgedDefinitions()` returns nothing until the ack
+  fetch has answered. Blocking a session on a network call is far the worse
+  failure, and an un-timed fetch gating a UI path is exactly the bug in
+  `renderResumeCards()` that cost a real session's data.
+- *Escapable* — "Start anyway" records a `skipped` row. A hard wall would be
+  defeated the first time a child escalated mid-read, and its realistic result
+  is tapping through unread. A logged skip is a better instrument than a lock
+  the BCBA cannot see past.
+
+## Phase lines (f77)
+
+Dated markers for what changed in the child's world — her examples: summer
+recess, a new school, a change of teacher. Standard single-subject-design
+annotation; a trend is only interpretable against what else changed.
+
+**Capture ships before any chart reads it, on purpose.** This data has a short
+memory window: nobody reconstructs in October that the teacher changed in March,
+and every chart crossing that date is then quietly misleading with no way to
+tell. Looker draws reference lines straight off the table with no app work.
+
+She **declined definition versioning** and asked for this instead. A phase line
+answers "what changed that might explain this trend", which is the weekly
+question; versioning answers "what did the definition say when this was
+recorded". `Definition revised` is one of the categories, so a definition change
+can be marked as the phase-line event it effectively is.
+
+## PHI classification of the newer tables
+
+| Table | De-identified views | Why |
+|-------|--------------------|-----|
+| `behavior_definitions` | **excluded** | Free clinical text about a named child |
+| `phase_changes` | **excluded** | `label`/`description` carry family, medical and third-party detail. Date + category alone would be safe; the prose is not |
+| `definition_acks` | included | Ids, a behaviour key, an opaque version hash, a timestamp. No prose — `def_hash` identifies a version without revealing a word of it |
 
 ## Billing key hazard
 

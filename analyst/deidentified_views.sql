@@ -37,6 +37,20 @@
 -- the same category as sessions.notes, which is excluded for the same reason.
 -- Adding it would need the review that column got, not a one-line edit.
 --
+-- f77: phase_changes is excluded on the SAME grounds, and the reasoning is
+-- worth stating because the table looks innocuous. `label` and `description`
+-- are free text about a named child's circumstances — "moved to grandmother's
+-- after removal", "started risperidone 0.5mg", "new teacher, Ms <name>". That
+-- is family, medical and third-party information, not behaviour data. A phase
+-- line's DATE and CATEGORY would be safe to expose; its prose is not. If a
+-- de-identified chart needs phase lines, add a view selecting date_iso and
+-- category only, never label or description.
+--
+-- f78: definition_acks IS safe to expose — it carries no free text, only who
+-- read which version when. It is included below, and joins
+-- behavior_definitions on client_id + behavior_key + def_hash to answer "who
+-- has not read the current wording" WITHOUT exposing the wording itself.
+--
 -- NOTE ON SMALL n: with 7 clients, removing names is NOT de-identification in
 -- any practical sense — "which client has the most elopement" re-identifies by
 -- context alone. These views exist to limit what leaves the premises to an
@@ -177,3 +191,37 @@ SELECT
   settings_observed,
   therapist_name
 FROM `rt-aba-tracker.aba_tracker.mastery_log`;
+
+
+-- ============================================================================
+-- f78 — DEFINITION ACKNOWLEDGEMENT COVERAGE
+--
+-- Who has confirmed reading the current wording of each behaviour definition,
+-- and who started a session without reading it.
+--
+-- Safe in this dataset because the ack carries no clinical prose: only ids, a
+-- behaviour key, an opaque version hash and a timestamp. Identifiers pass
+-- through exactly as the other views here pass them — these views exclude free
+-- text, they do not pseudonymise (see NOTE ON SMALL n above), and hashing ids
+-- only here would break every join to the views alongside it.
+--
+-- def_hash is deliberately surfaced UNRESOLVED: it identifies a version
+-- without revealing a word of what that version says, which is exactly why
+-- this table can be here while behavior_definitions cannot.
+-- ============================================================================
+CREATE OR REPLACE VIEW `rt-aba-tracker.aba_tracker_deid.v_definition_acks` AS
+SELECT
+  a.client_id,
+  a.behavior_key,
+  a.def_hash,
+  a.ack_action,
+  a.therapist_email,
+  a.therapist_name,
+  SAFE.PARSE_DATE('%Y-%m-%d', a.date_iso) AS ack_date,
+  a.date_iso,
+  -- TRUE when this ack is for the wording currently in force. A FALSE here is
+  -- the interesting row: it means the definition has been revised since.
+  (a.def_hash = d.def_hash) AS is_current_version
+FROM `rt-aba-tracker.aba_tracker.definition_acks` a
+LEFT JOIN `rt-aba-tracker.aba_tracker.behavior_definitions` d
+  ON d.client_id = a.client_id AND d.behavior_key = a.behavior_key;
