@@ -440,6 +440,29 @@
     .admin-tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); }
 
     /* ── ADMIN LIST ITEMS ── */
+    /* ── f74 BEHAVIOUR DEFINITION ── */
+    .beh-card { position: relative; }
+    .beh-info {
+      position: absolute; top: 6px; right: 6px;
+      width: 24px; height: 24px; border-radius: 50%;
+      border: 1.5px solid var(--g200); background: #fff; color: var(--g400);
+      font-family: Georgia, serif; font-style: italic; font-weight: 700; font-size: 13px;
+      line-height: 1; cursor: pointer; display: grid; place-items: center; padding: 0;
+    }
+    .beh-info:hover { border-color: var(--primary); color: var(--primary); }
+    .beh-info.empty { opacity: .35; }
+    .bd-sec { border-left: 3px solid var(--g200); padding: 2px 0 2px 13px; margin-bottom: 15px; }
+    .bd-sec.bd-yes { border-left-color: var(--success, #16A34A); }
+    .bd-sec.bd-no  { border-left-color: var(--danger, #EF4444); }
+    .bd-sec.bd-empty { border-left-color: var(--g200); color: var(--g400); }
+    .bd-lbl {
+      font-size: 10.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
+      color: var(--g400); margin-bottom: 4px;
+    }
+    .bd-sec.bd-yes .bd-lbl { color: var(--success, #16A34A); }
+    .bd-sec.bd-no  .bd-lbl { color: var(--danger, #EF4444); }
+    .bd-txt { font-size: 14.5px; line-height: 1.5; color: var(--g800); white-space: pre-line; }
+
     .admin-filter-row { display:flex; align-items:center; gap:10px; padding:10px 0 14px; }
     .admin-filter-row label { font-size:11px; font-weight:800; letter-spacing:.06em;
       text-transform:uppercase; color:var(--g400); flex:none; }
@@ -1218,6 +1241,20 @@
 </div>
 
 <!-- LATE START MODAL -->
+<!-- f74 — operational definition, readable without leaving the session -->
+<div class="modal-overlay" id="modal-beh-def" onclick="if(event.target===this)closeBehaviorDefinition()">
+  <div class="modal-sheet">
+    <div style="padding:22px 22px 18px">
+      <div class="modal-title" id="bd-title" style="margin-bottom:4px">&#8212;</div>
+      <div style="font-size:12px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;
+                  color:var(--g400);margin-bottom:16px">How to score this</div>
+      <div id="bd-body"></div>
+      <button class="btn btn-primary" style="width:100%;margin-top:18px"
+              onclick="closeBehaviorDefinition()">Got it</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="modal-late-start">
   <div class="modal-sheet">
     <div class="late-modal-body">
@@ -1583,7 +1620,12 @@ function applyConfig(raw, opts = {}) {
       behaviors: activeBehaviors.filter(b => {
         if (!b.clientIds || !b.clientIds.trim()) return true;
         return b.clientIds.split(',').map(s => s.trim()).includes(c.id);
-      }).map(b => ({ key:b.key, label:b.label, color:b.color||'#00A7C7' })),
+      // f74: the operational definition must reach the SESSION screen, which is
+      // the only place it prevents a miscount. Defaults to '' so a behaviour
+      // without one behaves exactly as before.
+      }).map(b => ({ key:b.key, label:b.label, color:b.color||'#00A7C7',
+                     topography:(b.topography||''), examples:(b.examples||''),
+                     nonExamples:(b.nonExamples||'') })),
     }));
 
   CFG.PLUGINS = (raw.plugins || []);
@@ -2635,13 +2677,66 @@ function switchTab(name) {
 
 
 // ─── BEHAVIOR COUNTERS — uses S.client.behaviors for this session ─────
+/**
+ * f74: show the operational definition for one behaviour, mid-session.
+ *
+ * Read-only and one tap from the counter. An RBT who has to leave the session to
+ * check what counts will not check — so the answer has to be here, and closing it
+ * has to put them straight back on the same screen.
+ */
+function showBehaviorDefinition(key) {
+  var list = (S.client && S.client.behaviors) || [];
+  var b = null;
+  for (var i = 0; i < list.length; i++) if (list[i].key === key) { b = list[i]; break; }
+  if (!b) return;
+
+  var body = '';
+  if (b.topography) {
+    body += '<div class="bd-sec"><div class="bd-lbl">What it looks like</div>' +
+            '<div class="bd-txt">' + escHtml(b.topography) + '</div></div>';
+  }
+  if (b.examples) {
+    body += '<div class="bd-sec bd-yes"><div class="bd-lbl">Count it when</div>' +
+            '<div class="bd-txt">' + escHtml(b.examples) + '</div></div>';
+  }
+  if (b.nonExamples) {
+    body += '<div class="bd-sec bd-no"><div class="bd-lbl">Do NOT count</div>' +
+            '<div class="bd-txt">' + escHtml(b.nonExamples) + '</div></div>';
+  }
+  if (!body) {
+    body = '<div class="bd-sec bd-empty"><div class="bd-txt">' +
+           'No definition has been written for this behaviour yet.<br><br>' +
+           'Ask your BCBA to add one so everyone counts it the same way. ' +
+           'Until then, record what you were trained to record and note anything ' +
+           'unclear in the session notes.</div></div>';
+  }
+
+  document.getElementById('bd-title').textContent = b.label;
+  document.getElementById('bd-title').style.color = b.color || 'var(--g800)';
+  document.getElementById('bd-body').innerHTML = body;
+  document.getElementById('modal-beh-def').classList.add('active');
+}
+
+function closeBehaviorDefinition() {
+  document.getElementById('modal-beh-def').classList.remove('active');
+}
+
 function buildBehaviorGrid() {
   const grid = document.getElementById('behavior-grid');
   grid.innerHTML = '';
   (S.client.behaviors || []).forEach(b => {
     const d = document.createElement('div');
     d.className = 'beh-card';
+    // f74: tapping the i shows what this behaviour IS. It sits apart from the
+    // +/- buttons on purpose — those are the critical path mid-session and must
+    // never be mis-hit. Dimmed when no definition has been written yet, which is
+    // honest and puts the pressure on the config rather than on the RBT.
+    var hasDef = !!(b.topography || b.examples || b.nonExamples);
     d.innerHTML =
+      '<button class="beh-info' + (hasDef ? '' : ' empty') + '" ' +
+        'aria-label="What counts as ' + escAttr(b.label) + '?" ' +
+        'title="What counts as this behaviour?" ' +
+        'onclick="showBehaviorDefinition(\'' + esc(b.key) + '\')">i</button>' +
       '<div class="beh-name" style="color:' + b.color + '">' + b.label +
         '<span class="mastery-loading" id="mastery-loading-beh-' + b.key + '" title="Checking mastery...">&#9203;</span>' +
         '<span class="mastery-badge-beh" id="mastery-beh-' + b.key + '" style="display:none">&#10003; MASTERED</span>' +
@@ -3883,6 +3978,14 @@ function renderAdminList(type) {
         const names = cids.map(id => (raw.clients||[]).find(c=>c.id===id)?.name?.split(' ')[0]||id).join(', ');
         sub = `${item.key} \u2022 ${names}`;
       }
+      // f74: flag the ones with no operational definition HERE, where the person
+      // who can write one is already looking. The RBT's screen shows only a
+      // dimmed icon — nagging them about a config gap they cannot fix is noise.
+      if (!String(item.topography||'').trim() &&
+          !String(item.examples||'').trim() &&
+          !String(item.nonExamples||'').trim()) {
+        sub += ' \u2022 no definition';
+      }
     } else if (type === 'goals') {
       // f70: show EVERY client this goal is assigned to, not one of them.
       //
@@ -4010,7 +4113,7 @@ function newItemTemplate(type) {
   const id = type[0].toUpperCase() + Date.now();
   if (type === 'therapists') return { id, name:'', initials:'', color:'#00A7C7', profile:'RBT', status:'active' };
   if (type === 'clients')    return { id, name:'', initials:'', sheetId:'', status:'active' };
-  if (type === 'behaviors')  return { key:'', label:'', color:'#00A7C7', clientIds:'', status:'active' };
+  if (type === 'behaviors')  return { key:'', label:'', color:'#00A7C7', clientIds:'', status:'active', topography:'', examples:'', nonExamples:'' };
   if (type === 'goals')      return { goalId: newGoalId(), clientId:'', code:'', description:'', numTrials:'5', status:'active' };
   return {};
 }
@@ -4130,6 +4233,26 @@ function buildEditForm(type, item) {
       `<div class="form-group">
         <label class="form-lbl">Assign to Clients</label>
         <div class="client-cb-grid" id="ef-client-checkboxes">${cbRows}</div>
+      </div>` +
+      // f74. Three fields rather than one free-text box: an RBT mid-session scans
+      // for "does this count?", and a structured card answers that in a glance
+      // where a paragraph does not. The placeholders carry the house style so
+      // definitions stay consistent between behaviours.
+      '<div class="settings-hdr" style="margin-top:14px">Operational definition</div>' +
+      `<div class="form-group">
+        <label class="form-lbl" for="ef-topography">What it looks like (topography)</label>
+        <textarea class="form-ctrl" id="ef-topography" rows="3"
+          placeholder="Observable and measurable. Include when it starts and stops counting.&#10;e.g. Leaving the designated area without permission, moving more than 3 feet from the therapist.">${escHtml(item.topography||'')}</textarea>
+      </div>` +
+      `<div class="form-group">
+        <label class="form-lbl" for="ef-examples">Count it when&#8230;</label>
+        <textarea class="form-ctrl" id="ef-examples" rows="3"
+          placeholder="One per line.&#10;e.g. Walks out of the room during a demand&#10;Runs toward the parking lot">${escHtml(item.examples||'')}</textarea>
+      </div>` +
+      `<div class="form-group">
+        <label class="form-lbl" for="ef-nonExamples">Do NOT count when&#8230;</label>
+        <textarea class="form-ctrl" id="ef-nonExamples" rows="3"
+          placeholder="This is the one that stops over-counting. One per line.&#10;e.g. Asks and is given permission to leave&#10;Moves away to a break area that was offered">${escHtml(item.nonExamples||'')}</textarea>
       </div>` +
       '<div class="settings-hdr" style="margin-top:14px">Parent alert</div>' +
       `<div class="form-group">
@@ -4286,12 +4409,18 @@ function saveEntity() {
       document.querySelectorAll('.ef-client-cb:checked')
     ).map(cb => cb.value).join(',');
     if (!key || !label) { toast('Key and label required', 'err'); return; }
+    // f74 — optional by design. Requiring a definition would block someone from
+    // fixing a typo in a label, and a half-written definition is worse than none.
+    const topography  = (document.getElementById('ef-topography')?.value  || '').trim();
+    const examples    = (document.getElementById('ef-examples')?.value    || '').trim();
+    const nonExamples = (document.getElementById('ef-nonExamples')?.value || '').trim();
     const alertEnabled = document.getElementById('ef-alertEnabled')?.checked ? 'yes' : 'no';
     let alertThreshold = parseInt(document.getElementById('ef-alertThreshold')?.value || '1', 10);
     if (isNaN(alertThreshold) || alertThreshold < 1) alertThreshold = 1;
     const alertMode = document.getElementById('ef-alertMode')?.value === 'auto' ? 'auto' : 'review';
     updated = { ...(editModalItem||{}), key, label, color, clientIds,
       alertEnabled, alertThreshold: String(alertThreshold), alertMode,
+      topography, examples, nonExamples,   // f74
       status: editModalItem ? (editModalItem.status||'active') : 'active' };
 
   } else if (type === 'goals') {

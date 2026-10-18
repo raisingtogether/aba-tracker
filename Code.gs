@@ -17,7 +17,7 @@
  * Keep BQ_SYNC_BUILD in BigQuerySync.gs set to the same value: the two files are
  * pasted separately, so a stale BigQuerySync is otherwise invisible.
  */
-var APP_BUILD = '2026-10-12-q23b';
+var APP_BUILD = '2026-10-18-f74';
 
 var ADMIN_SHEET_ID = '1VPBADMXvhOww_52O1n2CieTsQB6XCotLt6XdAQsq0ik';
 var AUDIT_SHEET_ID = '1tf98iS18vV08mQtPV9Vq6hQVkEp6Qg-ebUwHkeRlwaQ';
@@ -588,8 +588,14 @@ function saveConfig(cfg) {
 
     if (cfg.behaviors !== undefined)
       objectsToSheet(ss, 'Behaviors',
+        // f74: the OPERATIONAL DEFINITION, appended. Two RBTs can score the same
+        // event differently without one, which is the commonest source of
+        // unusable behaviour data — the count is precise and the thing counted
+        // is not. `nonExamples` matters most: it is what stops over-counting.
+        // Appended, never inserted, so existing rows keep their columns.
         ['key', 'label', 'icon', 'color', 'clientIds', 'status',
-         'alertEnabled', 'alertThreshold', 'alertMode'],
+         'alertEnabled', 'alertThreshold', 'alertMode',
+         'topography', 'examples', 'nonExamples'],
         cfg.behaviors);
 
     if (cfg.goals !== undefined) {

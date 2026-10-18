@@ -18,7 +18,7 @@
  * every release. doGet reports this value, so one unauthenticated call proves
  * whether THIS file was pasted too (the two are pasted separately).
  */
-var BQ_SYNC_BUILD = '2026-10-12-q23b';
+var BQ_SYNC_BUILD = '2026-10-18-f74';
 function bqSyncBuild() { return BQ_SYNC_BUILD; }
 
 var BQ_PROJECT     = 'rt-aba-tracker';
@@ -323,7 +323,13 @@ function bqBuildBehaviorReferenceRows(behaviors) {
       key:        b.key        || '',
       label:      b.label      || '',
       client_ids: b.clientIds  || '',
-      status:     b.status     || 'active'
+      status:     b.status     || 'active',
+      // f74: the operational definition travels to the warehouse too. It is the
+      // natural-language description of what was counted, which is exactly what
+      // m17 (smart session notes) needs to say anything sensible about a count.
+      topography:   b.topography  || '',
+      examples:     b.examples    || '',
+      non_examples: b.nonExamples || ''
     });
   }
   return rows;
