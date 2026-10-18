@@ -17,7 +17,7 @@
  * Keep BQ_SYNC_BUILD in BigQuerySync.gs set to the same value: the two files are
  * pasted separately, so a stale BigQuerySync is otherwise invisible.
  */
-var APP_BUILD = '2026-10-18-f74';
+var APP_BUILD = '2026-10-18-f74b';
 
 var ADMIN_SHEET_ID = '1VPBADMXvhOww_52O1n2CieTsQB6XCotLt6XdAQsq0ik';
 var AUDIT_SHEET_ID = '1tf98iS18vV08mQtPV9Vq6hQVkEp6Qg-ebUwHkeRlwaQ';
@@ -541,6 +541,28 @@ function getBiweeklyHours(periodStart, periodEnd, clients) {
 
 // ── CONFIG: READ ──────────────────────────────────────────────────────
 
+/**
+ * f74b — ONE DEFINITION PER CLIENT PER BEHAVIOUR.
+ *
+ * Tatiana's ruling: the behaviour NAME is shared, the topographical definition is
+ * NOT. Elopement means something different for each child, so a definition stored
+ * on the shared Behaviors row — which is what f74 shipped — would apply one
+ * child's topography to every other child assigned to it. That is the exact
+ * misidentification the feature exists to prevent.
+ *
+ * So the grain is clientId + behaviorKey, in its own tab. A new tab rather than
+ * reshaping Behaviors, per the data-model rule: existing tabs keep their columns.
+ */
+var BEHAVIOR_DEFS_TAB = 'Behavior Definitions';
+var BEHAVIOR_DEF_HEADERS = [
+  'clientId', 'behaviorKey',
+  'topography',    // what it looks like for THIS child
+  'onsetOffset',   // when it starts and stops counting — her ruling, its own field
+  'examples',      // count it when
+  'nonExamples',   // do NOT count when
+  'updatedAt', 'updatedBy'
+];
+
 function getConfig() {
   var ss = SpreadsheetApp.openById(ADMIN_SHEET_ID);
   return {
@@ -550,8 +572,19 @@ function getConfig() {
     goals:          sheetToObjects(ss, 'Goals'),
     billing:        sheetToObjects(ss, 'Billing'),
     authorizations: sheetToObjects(ss, 'Authorizations'),
-    admins:         sheetToObjects(ss, 'Admins')
+    admins:         sheetToObjects(ss, 'Admins'),
+    behaviorDefs:   _readBehaviorDefs(ss)
   };
+}
+
+/** Tolerant read: the tab may not exist yet on an older RT Admin. */
+function _readBehaviorDefs(ss) {
+  try {
+    if (!ss.getSheetByName(BEHAVIOR_DEFS_TAB)) return [];
+    return sheetToObjects(ss, BEHAVIOR_DEFS_TAB);
+  } catch (e) {
+    return [];
+  }
 }
 
 
@@ -587,12 +620,13 @@ function saveConfig(cfg) {
         cfg.clients);
 
     if (cfg.behaviors !== undefined)
+      // f74b: the definition columns added to this tab in f74 are NO LONGER
+      // WRITTEN — definitions moved to the per-client Behavior Definitions tab
+      // once Tatiana ruled that topography differs per child. The column names
+      // stay in this list so any values already in those cells are preserved
+      // rather than blanked by objectsToSheet, which rewrites the whole tab from
+      // this header list.
       objectsToSheet(ss, 'Behaviors',
-        // f74: the OPERATIONAL DEFINITION, appended. Two RBTs can score the same
-        // event differently without one, which is the commonest source of
-        // unusable behaviour data — the count is precise and the thing counted
-        // is not. `nonExamples` matters most: it is what stops over-counting.
-        // Appended, never inserted, so existing rows keep their columns.
         ['key', 'label', 'icon', 'color', 'clientIds', 'status',
          'alertEnabled', 'alertThreshold', 'alertMode',
          'topography', 'examples', 'nonExamples'],
@@ -634,6 +668,10 @@ function saveConfig(cfg) {
          'billingCode', 'authorizedHours', 'startDate', 'endDate',
          'coInsurance', 'stepUpProgram', 'status', 'unitRate', 'hourlyRate'],
         cfg.authorizations);
+
+    if (cfg.behaviorDefs !== undefined) {
+      objectsToSheet(ss, BEHAVIOR_DEFS_TAB, BEHAVIOR_DEF_HEADERS, cfg.behaviorDefs);
+    }
 
     if (cfg.admins !== undefined)
       objectsToSheet(ss, 'Admins',

@@ -454,6 +454,8 @@
     .bd-sec { border-left: 3px solid var(--g200); padding: 2px 0 2px 13px; margin-bottom: 15px; }
     .bd-sec.bd-yes { border-left-color: var(--success, #16A34A); }
     .bd-sec.bd-no  { border-left-color: var(--danger, #EF4444); }
+    .bd-sec.bd-time { border-left-color: var(--primary, #00A7C7); }
+    .bd-sec.bd-time .bd-lbl { color: var(--primary, #00A7C7); }
     .bd-sec.bd-empty { border-left-color: var(--g200); color: var(--g400); }
     .bd-lbl {
       font-size: 10.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
@@ -462,6 +464,15 @@
     .bd-sec.bd-yes .bd-lbl { color: var(--success, #16A34A); }
     .bd-sec.bd-no  .bd-lbl { color: var(--danger, #EF4444); }
     .bd-txt { font-size: 14.5px; line-height: 1.5; color: var(--g800); white-space: pre-line; }
+
+    .def-card { background:#fff; border:1px solid var(--g200); border-radius:var(--r);
+      padding:14px; margin-bottom:12px; }
+    .def-hdr { display:flex; align-items:center; gap:9px; margin-bottom:10px; }
+    .def-dot { width:12px; height:12px; border-radius:50%; flex:none; }
+    .def-name { font-weight:800; font-size:15.5px; color:var(--g800); flex:1; }
+    .def-state { font-size:10.5px; font-weight:800; letter-spacing:.06em; text-transform:uppercase;
+      color:var(--g400); background:var(--g100); padding:2px 8px; border-radius:100px; }
+    .def-state.on { color:#15803D; background:#E6F4EA; }
 
     .admin-filter-row { display:flex; align-items:center; gap:10px; padding:10px 0 14px; }
     .admin-filter-row label { font-size:11px; font-weight:800; letter-spacing:.06em;
@@ -1211,6 +1222,7 @@
     <button class="admin-tab-btn" id="atab-clients"    onclick="showAdminTab('clients')">Clients</button>
     <button class="admin-tab-btn" id="atab-behaviors"  onclick="showAdminTab('behaviors')">Behaviors</button>
     <button class="admin-tab-btn" id="atab-alerts"     onclick="showAdminTab('alerts')">Alerts</button>
+    <button class="admin-tab-btn" id="atab-definitions" onclick="showAdminTab('definitions')">Definitions</button>
     <button class="admin-tab-btn" id="atab-goals"      onclick="showAdminTab('goals')">Goals</button>
     <button class="admin-tab-btn" id="atab-settings"   onclick="showAdminTab('settings')">Settings</button>
         <button class="admin-tab-btn admin-only-tab" id="atab-authorizations" onclick="showAdminTab('authorizations')">Auth</button>
@@ -1246,7 +1258,7 @@
   <div class="modal-sheet">
     <div style="padding:22px 22px 18px">
       <div class="modal-title" id="bd-title" style="margin-bottom:4px">&#8212;</div>
-      <div style="font-size:12px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;
+      <div id="bd-sub" style="font-size:12px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;
                   color:var(--g400);margin-bottom:16px">How to score this</div>
       <div id="bd-body"></div>
       <button class="btn btn-primary" style="width:100%;margin-top:18px"
@@ -1575,6 +1587,27 @@ function billingCodeFor(profile, sessionType) {
   return '';
 }
 
+/**
+ * f74b: one client's definition of one behaviour, keyed clientId + behaviorKey.
+ * Returns empty strings rather than null so callers need no guards and a
+ * behaviour with no definition yet behaves exactly as before.
+ */
+function _behaviorDefFor(raw, clientId, behaviorKey) {
+  const rows = (raw && raw.behaviorDefs) || [];
+  for (let i = 0; i < rows.length; i++) {
+    if (String(rows[i].clientId || '').trim() === String(clientId) &&
+        String(rows[i].behaviorKey || '').trim() === String(behaviorKey)) {
+      return {
+        topography:  String(rows[i].topography  || ''),
+        onsetOffset: String(rows[i].onsetOffset || ''),
+        examples:    String(rows[i].examples    || ''),
+        nonExamples: String(rows[i].nonExamples || '')
+      };
+    }
+  }
+  return { topography:'', onsetOffset:'', examples:'', nonExamples:'' };
+}
+
 function applyConfig(raw, opts = {}) {
   // Preserve DEFAULT_CONFIG admins if server returned none
   if (!raw.admins || raw.admins.length === 0) {
@@ -1620,12 +1653,16 @@ function applyConfig(raw, opts = {}) {
       behaviors: activeBehaviors.filter(b => {
         if (!b.clientIds || !b.clientIds.trim()) return true;
         return b.clientIds.split(',').map(s => s.trim()).includes(c.id);
-      // f74: the operational definition must reach the SESSION screen, which is
-      // the only place it prevents a miscount. Defaults to '' so a behaviour
-      // without one behaves exactly as before.
-      }).map(b => ({ key:b.key, label:b.label, color:b.color||'#00A7C7',
-                     topography:(b.topography||''), examples:(b.examples||''),
-                     nonExamples:(b.nonExamples||'') })),
+      // f74b: the definition is per CLIENT per behaviour, so it is resolved here
+      // where the client is known. Same behaviour name, different topography for
+      // each child — one shared definition would apply one child's topography to
+      // every other child assigned to it.
+      }).map(b => {
+        const d = _behaviorDefFor(raw, c.id, b.key);
+        return { key:b.key, label:b.label, color:b.color||'#00A7C7',
+                 topography:d.topography, onsetOffset:d.onsetOffset,
+                 examples:d.examples, nonExamples:d.nonExamples };
+      }),
     }));
 
   CFG.PLUGINS = (raw.plugins || []);
@@ -1795,6 +1832,137 @@ function selectTherapist(t) {
   goTo('client');
 }
 
+
+/**
+ * f74b — BEHAVIOUR DEFINITIONS, one client at a time.
+ *
+ * Organised by CHILD rather than by behaviour because that is how the plans are
+ * written: you sit with one child's plan and work down their behaviours. Sorting
+ * by behaviour would mean opening the same plan five times.
+ */
+let _defClientId = '';
+
+function renderDefinitionsTab(container) {
+  const raw = RAW_CONFIG || DEFAULT_CONFIG;
+  const clients = (raw.clients || []).filter(c => (c.status || 'active') !== 'inactive');
+  if (!_defClientId && clients.length) _defClientId = clients[0].id;
+
+  const client = clients.find(c => c.id === _defClientId);
+  const cfgClient = (CFG.CLIENTS || []).find(c => c.id === _defClientId);
+  const behaviours = cfgClient ? (cfgClient.behaviors || []) : [];
+
+  let opts = '';
+  clients.forEach(c => {
+    const assigned = ((CFG.CLIENTS || []).find(x => x.id === c.id) || {}).behaviors || [];
+    const done = assigned.filter(b => _hasDefinition(raw, c.id, b.key)).length;
+    opts += '<option value="' + escAttr(c.id) + '"' + (c.id === _defClientId ? ' selected' : '') + '>' +
+            escHtml(c.name) + ' (' + done + '/' + assigned.length + ' defined)</option>';
+  });
+
+  let html =
+    '<div class="settings-hdr">Behaviour definitions</div>' +
+    '<p style="font-size:13.5px;color:var(--g400);font-weight:600;line-height:1.5;margin:0 0 14px">' +
+      'What each behaviour looks like <strong>for this child</strong>. The RBT reads this from the ' +
+      'session screen by tapping the i on the counter, so two people score the same event the same way.' +
+    '</p>' +
+    '<div class="admin-filter-row"><label for="def-client">Client</label>' +
+      '<select id="def-client">' + opts + '</select></div>';
+
+  if (!behaviours.length) {
+    html += '<div class="empty-msg">No behaviours are assigned to ' +
+            escHtml(client ? client.name : 'this client') + ' yet.</div>';
+    container.innerHTML = html;
+    wireDefClientPicker();
+    return;
+  }
+
+  behaviours.forEach(b => {
+    const d = _behaviorDefFor(raw, _defClientId, b.key);
+    const filled = !!(d.topography || d.onsetOffset || d.examples || d.nonExamples);
+    html +=
+      '<div class="def-card">' +
+        '<div class="def-hdr">' +
+          '<span class="def-dot" style="background:' + escAttr(b.color || '#ccc') + '"></span>' +
+          '<span class="def-name">' + escHtml(b.label) + '</span>' +
+          '<span class="def-state' + (filled ? ' on' : '') + '">' +
+            (filled ? 'defined' : 'not defined yet') + '</span>' +
+        '</div>' +
+        _defField(b.key, 'topography',  'What it looks like',
+          'Observable and measurable, for this child.') +
+        _defField(b.key, 'onsetOffset', 'Starts / stops counting',
+          'When does it begin, and when has it ended? Matters most for duration behaviours.') +
+        _defField(b.key, 'examples',    'Count it when\u2026', 'One per line.') +
+        _defField(b.key, 'nonExamples', 'Do NOT count when\u2026',
+          'One per line. This is what stops over-counting.') +
+      '</div>';
+  });
+
+  html += '<button class="btn btn-primary" style="width:100%;margin-top:6px" ' +
+          'onclick="saveBehaviorDefinitions()">Save definitions for ' +
+          escHtml(client ? client.name : 'this client') + '</button>';
+
+  container.innerHTML = html;
+  wireDefClientPicker();
+}
+
+function _defField(key, field, label, hint) {
+  const raw = RAW_CONFIG || DEFAULT_CONFIG;
+  const d = _behaviorDefFor(raw, _defClientId, key);
+  return '<div class="form-group" style="margin-bottom:11px">' +
+    '<label class="form-lbl" for="def-' + escAttr(key) + '-' + field + '">' + label + '</label>' +
+    '<textarea class="form-ctrl" rows="2" id="def-' + escAttr(key) + '-' + field + '" ' +
+      'placeholder="' + escAttr(hint) + '">' + escHtml(d[field] || '') + '</textarea>' +
+  '</div>';
+}
+
+function _hasDefinition(raw, clientId, key) {
+  const d = _behaviorDefFor(raw, clientId, key);
+  return !!(d.topography || d.onsetOffset || d.examples || d.nonExamples);
+}
+
+function wireDefClientPicker() {
+  const sel = document.getElementById('def-client');
+  if (!sel) return;
+  sel.addEventListener('change', function (e) {
+    _defClientId = e.target.value;
+    renderDefinitionsTab(document.getElementById('admin-list'));
+  });
+}
+
+/**
+ * Writes only THIS client's rows, leaving every other client's untouched.
+ * objectsToSheet rewrites the whole tab from the rows it is given, so the full
+ * set has to be sent back — dropping the others would erase them.
+ */
+function saveBehaviorDefinitions() {
+  const raw = JSON.parse(JSON.stringify(RAW_CONFIG || DEFAULT_CONFIG));
+  const cfgClient = (CFG.CLIENTS || []).find(c => c.id === _defClientId);
+  if (!cfgClient) { toast('Pick a client first', 'err'); return; }
+
+  const keep = (raw.behaviorDefs || []).filter(
+    r => String(r.clientId || '').trim() !== String(_defClientId));
+  const now  = new Date().toISOString();
+  const who  = AUTH.user ? AUTH.user.email : '';
+  const rows = [];
+
+  (cfgClient.behaviors || []).forEach(b => {
+    const get = f => {
+      const el = document.getElementById('def-' + b.key + '-' + f);
+      return el ? el.value.trim() : '';
+    };
+    const topography = get('topography'), onsetOffset = get('onsetOffset');
+    const examples   = get('examples'),   nonExamples = get('nonExamples');
+    // An all-blank definition is simply not stored — no empty rows accumulating
+    // for every behaviour anyone ever looked at.
+    if (!topography && !onsetOffset && !examples && !nonExamples) return;
+    rows.push({ clientId:_defClientId, behaviorKey:b.key, topography, onsetOffset,
+                examples, nonExamples, updatedAt:now, updatedBy:who });
+  });
+
+  raw.behaviorDefs = keep.concat(rows);
+  persistConfig(raw);
+  toast('Definitions saved for ' + cfgClient.name, 'ok');
+}
 
 // ─── CLIENT SELECTION ─────────────────────────────────────────────────
 function buildClientScreen() {
@@ -2695,6 +2863,13 @@ function showBehaviorDefinition(key) {
     body += '<div class="bd-sec"><div class="bd-lbl">What it looks like</div>' +
             '<div class="bd-txt">' + escHtml(b.topography) + '</div></div>';
   }
+  // f74b: her ruling — onset/offset gets its own box. For a duration behaviour
+  // "when do I start and stop the timer" is its own misidentification risk, and
+  // buried inside a paragraph it is the first thing skipped.
+  if (b.onsetOffset) {
+    body += '<div class="bd-sec bd-time"><div class="bd-lbl">Starts / stops counting</div>' +
+            '<div class="bd-txt">' + escHtml(b.onsetOffset) + '</div></div>';
+  }
   if (b.examples) {
     body += '<div class="bd-sec bd-yes"><div class="bd-lbl">Count it when</div>' +
             '<div class="bd-txt">' + escHtml(b.examples) + '</div></div>';
@@ -2705,7 +2880,7 @@ function showBehaviorDefinition(key) {
   }
   if (!body) {
     body = '<div class="bd-sec bd-empty"><div class="bd-txt">' +
-           'No definition has been written for this behaviour yet.<br><br>' +
+           'No definition has been written for this behaviour <strong>for this client</strong> yet.<br><br>' +
            'Ask your BCBA to add one so everyone counts it the same way. ' +
            'Until then, record what you were trained to record and note anything ' +
            'unclear in the session notes.</div></div>';
@@ -2713,6 +2888,11 @@ function showBehaviorDefinition(key) {
 
   document.getElementById('bd-title').textContent = b.label;
   document.getElementById('bd-title').style.color = b.color || 'var(--g800)';
+  // Name the child: definitions differ per client, and an RBT must not carry one
+  // child's topography into the next session.
+  var sub = document.getElementById('bd-sub');
+  if (sub) sub.textContent = 'How to score this for ' +
+    ((S.client && S.client.name) ? S.client.name : 'this client');
   document.getElementById('bd-body').innerHTML = body;
   document.getElementById('modal-beh-def').classList.add('active');
 }
@@ -3890,6 +4070,7 @@ function renderAdminList(type) {
   if (type === 'authorizations') { renderAuthorizationsTab(container); return; }
   if (type === 'payroll')        { renderPayrollTab(container);        return; }
   if (type === 'admins')         { renderAdminsTab(container);         return; }
+  if (type === 'definitions')    { renderDefinitionsTab(container);    return; }
   if (type === 'mastery')        { renderMasteryReportTab(container);  return; }
   if (type === 'alerts')         { renderParentAlertsTab(container);   return; }
   if (type === 'billing')        { renderBillingReportTab(container);  return; }
@@ -3978,14 +4159,8 @@ function renderAdminList(type) {
         const names = cids.map(id => (raw.clients||[]).find(c=>c.id===id)?.name?.split(' ')[0]||id).join(', ');
         sub = `${item.key} \u2022 ${names}`;
       }
-      // f74: flag the ones with no operational definition HERE, where the person
-      // who can write one is already looking. The RBT's screen shows only a
-      // dimmed icon — nagging them about a config gap they cannot fix is noise.
-      if (!String(item.topography||'').trim() &&
-          !String(item.examples||'').trim() &&
-          !String(item.nonExamples||'').trim()) {
-        sub += ' \u2022 no definition';
-      }
+      // f74b: definitions are per client now, so "has a definition" is not a
+      // property of this row. The Definitions tab reports coverage instead.
     } else if (type === 'goals') {
       // f70: show EVERY client this goal is assigned to, not one of them.
       //
@@ -4234,26 +4409,10 @@ function buildEditForm(type, item) {
         <label class="form-lbl">Assign to Clients</label>
         <div class="client-cb-grid" id="ef-client-checkboxes">${cbRows}</div>
       </div>` +
-      // f74. Three fields rather than one free-text box: an RBT mid-session scans
-      // for "does this count?", and a structured card answers that in a glance
-      // where a paragraph does not. The placeholders carry the house style so
-      // definitions stay consistent between behaviours.
-      '<div class="settings-hdr" style="margin-top:14px">Operational definition</div>' +
-      `<div class="form-group">
-        <label class="form-lbl" for="ef-topography">What it looks like (topography)</label>
-        <textarea class="form-ctrl" id="ef-topography" rows="3"
-          placeholder="Observable and measurable. Include when it starts and stops counting.&#10;e.g. Leaving the designated area without permission, moving more than 3 feet from the therapist.">${escHtml(item.topography||'')}</textarea>
-      </div>` +
-      `<div class="form-group">
-        <label class="form-lbl" for="ef-examples">Count it when&#8230;</label>
-        <textarea class="form-ctrl" id="ef-examples" rows="3"
-          placeholder="One per line.&#10;e.g. Walks out of the room during a demand&#10;Runs toward the parking lot">${escHtml(item.examples||'')}</textarea>
-      </div>` +
-      `<div class="form-group">
-        <label class="form-lbl" for="ef-nonExamples">Do NOT count when&#8230;</label>
-        <textarea class="form-ctrl" id="ef-nonExamples" rows="3"
-          placeholder="This is the one that stops over-counting. One per line.&#10;e.g. Asks and is given permission to leave&#10;Moves away to a break area that was offered">${escHtml(item.nonExamples||'')}</textarea>
-      </div>` +
+      // f74b: the definition boxes that lived here were REMOVED. They wrote to
+      // the shared Behaviors row, so one child's topography would have applied
+      // to every other child assigned to that behaviour. Definitions are now
+      // per client, in the Definitions tab.
       '<div class="settings-hdr" style="margin-top:14px">Parent alert</div>' +
       `<div class="form-group">
         <label class="client-cb-row" style="margin:0">
@@ -4411,16 +4570,12 @@ function saveEntity() {
     if (!key || !label) { toast('Key and label required', 'err'); return; }
     // f74 — optional by design. Requiring a definition would block someone from
     // fixing a typo in a label, and a half-written definition is worse than none.
-    const topography  = (document.getElementById('ef-topography')?.value  || '').trim();
-    const examples    = (document.getElementById('ef-examples')?.value    || '').trim();
-    const nonExamples = (document.getElementById('ef-nonExamples')?.value || '').trim();
     const alertEnabled = document.getElementById('ef-alertEnabled')?.checked ? 'yes' : 'no';
     let alertThreshold = parseInt(document.getElementById('ef-alertThreshold')?.value || '1', 10);
     if (isNaN(alertThreshold) || alertThreshold < 1) alertThreshold = 1;
     const alertMode = document.getElementById('ef-alertMode')?.value === 'auto' ? 'auto' : 'review';
     updated = { ...(editModalItem||{}), key, label, color, clientIds,
       alertEnabled, alertThreshold: String(alertThreshold), alertMode,
-      topography, examples, nonExamples,   // f74
       status: editModalItem ? (editModalItem.status||'active') : 'active' };
 
   } else if (type === 'goals') {

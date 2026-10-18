@@ -18,7 +18,7 @@
  * every release. doGet reports this value, so one unauthenticated call proves
  * whether THIS file was pasted too (the two are pasted separately).
  */
-var BQ_SYNC_BUILD = '2026-10-18-f74';
+var BQ_SYNC_BUILD = '2026-10-18-f74b';
 function bqSyncBuild() { return BQ_SYNC_BUILD; }
 
 var BQ_PROJECT     = 'rt-aba-tracker';
@@ -323,13 +323,14 @@ function bqBuildBehaviorReferenceRows(behaviors) {
       key:        b.key        || '',
       label:      b.label      || '',
       client_ids: b.clientIds  || '',
-      status:     b.status     || 'active',
-      // f74: the operational definition travels to the warehouse too. It is the
-      // natural-language description of what was counted, which is exactly what
-      // m17 (smart session notes) needs to say anything sensible about a count.
-      topography:   b.topography  || '',
-      examples:     b.examples    || '',
-      non_examples: b.nonExamples || ''
+      status:     b.status     || 'active'
+      // f74b: the definition fields were REMOVED from this table. Definitions are
+      // now per CLIENT per behaviour (Tatiana's ruling — same name, different
+      // topography per child), and behaviors_reference has one row per behaviour,
+      // so there is no honest place to put them here. They need their own
+      // behavior_definitions table keyed on client_id + behavior_key. Shipping
+      // empty columns would have been worse than shipping none.
+
     });
   }
   return rows;
