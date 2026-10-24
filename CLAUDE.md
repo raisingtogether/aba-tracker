@@ -244,7 +244,7 @@ All sheet writes use `ensureSheetColumns` + colMap-based row building. **Never h
 ## Data pipeline (BigQuery)
 
 - **BigQuerySync.gs** is a SEPARATE file in the same Apps Script project
-- 14 tables synced hourly via time-based trigger
+- 15 tables synced hourly via time-based trigger
 - Tables: `sessions`, `behavior_records` (normalized), `trial_records` (normalized), `abc_incidents`, `mastery_log`, `therapists`, `clients`, `authorizations`, `goals_reference`, `behaviors_reference`, `billing_codes`
 - Looker Studio connected with 8 report queries
 - `WRITE_TRUNCATE` with `NEWLINE_DELIMITED_JSON` format (free tier compatible)
@@ -478,9 +478,10 @@ separate **4–6 week** job gated on the sync clock or Phase 2.
 
 ### Schema findings (Oct 8, 2026) — extracted from the code, not from memory
 
-1. **The HIPAA audit log is NOT in BigQuery.** Eleven tables sync; `audit_log` is
-   not one of them. It is the one dataset with a **statutory six-year retention
-   requirement** and the sheet is its only copy. Fix before anything else here.
+1. ~~**The HIPAA audit log is NOT in BigQuery.**~~ **FIXED Oct 24 2026 (d10).**
+   It is now the 15th table, and **the only one loaded with `WRITE_APPEND`** —
+   see below. Was the one dataset with a statutory six-year retention
+   requirement held in a single copy.
 2. **Three M:N relationships are comma-separated strings** — `Therapists.clientIds`,
    `Behaviors.clientIds`, `Goals.clientIds` (and `Clients.parentEmail`). No join
    tables. Second core weakness after dynamic columns.
@@ -767,6 +768,32 @@ can be marked as the phase-line event it effectively is.
 | `behavior_definitions` | **excluded** | Free clinical text about a named child |
 | `phase_changes` | **excluded** | `label`/`description` carry family, medical and third-party detail. Date + category alone would be safe; the prose is not |
 | `definition_acks` | included | Ids, a behaviour key, an opaque version hash, a timestamp. No prose — `def_hash` identifies a version without revealing a word of it |
+
+## The audit log is the one append-only table (d10)
+
+Every other table is a mirror of current state, so `WRITE_TRUNCATE` is right.
+An audit trail is **not state — it is a record**, and a truncating mirror
+faithfully reproduces deletions. If rows were cleared from the sheet, or the
+sheet lost, or a repair script rewrote it, a truncating sync would carry that
+loss into the only other copy. That defeats the reason the table exists.
+
+- `audit_log` loads with **`WRITE_APPEND`**, resuming from `MAX(ts_iso)` minus a
+  **2-hour lookback**, so no row can fall between two runs.
+- **Gaps are worse than duplicates** for a compliance log, so the overlap is
+  deliberate. `audit_id` is deterministic — `sourceRow + '-' + djb2(content)` —
+  so the overlap de-duplicates in the view.
+- **Query `v_audit_log`, never `audit_log`.** See
+  `analyst/audit_log_retention.sql` for that view, a per-day coverage view for
+  retention evidence, and a tamper check (an edited historical row yields a new
+  `audit_id` at the same `source_row`, so edits show up rather than hiding).
+- **A failed watermark read SKIPS the run** and reports it. Re-sending six years
+  of history on a transient query failure would duplicate it every hour until
+  someone noticed; waiting an hour is strictly better.
+- `bqReadAuditRows` reads **one column** to find the resume point, then only the
+  tail. Reading all five columns of six years of history hourly would reintroduce
+  the O(history) cost f79 just removed.
+- **PHI: excluded from `aba_tracker_deid`.** `client_name` is a direct identifier
+  and `details` is unconstrained free text.
 
 ## Billing key hazard
 

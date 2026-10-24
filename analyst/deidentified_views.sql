@@ -46,6 +46,11 @@
 -- de-identified chart needs phase lines, add a view selecting date_iso and
 -- category only, never label or description.
 --
+-- d10: audit_log is EXCLUDED from this dataset. `client_name` is a direct
+-- identifier and `details` is free text that can contain anything at all. Its
+-- views live in the MAIN dataset instead — see analyst/audit_log_retention.sql,
+-- which also explains why that table alone is append-only.
+--
 -- f78: definition_acks IS safe to expose — it carries no free text, only who
 -- read which version when. It is included below, and joins
 -- behavior_definitions on client_id + behavior_key + def_hash to answer "who

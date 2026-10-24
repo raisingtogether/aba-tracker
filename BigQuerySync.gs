@@ -18,7 +18,7 @@
  * every release. doGet reports this value, so one unauthenticated call proves
  * whether THIS file was pasted too (the two are pasted separately).
  */
-var BQ_SYNC_BUILD = '2026-10-24-f79b';
+var BQ_SYNC_BUILD = '2026-10-24-d10';
 function bqSyncBuild() { return BQ_SYNC_BUILD; }
 
 var BQ_PROJECT     = 'rt-aba-tracker';
@@ -134,7 +134,26 @@ function syncAllToBigQuery() {
     if (blabel && bkey) behaviorLabelToKey[blabel] = bkey;
   }
 
-  // ── SYNC REFERENCE TABLES (always WRITE_TRUNCATE) ───────────────────
+  // ── d10: the audit trail, append-only ──────────────────────────────
+  // Read before the table list is built so a failure here cannot be mistaken
+  // for an empty log. An empty buffer with WRITE_APPEND is a harmless no-op,
+  // but a SKIPPED run must be reported, not silently treated as "nothing new".
+  var auditRows = [];
+  var wm = bqAuditWatermark();
+  if (!wm.ok) {
+    errors.push('audit_log: skipped this run — could not read the watermark (' +
+      wm.error + '). Re-sending the whole history on a transient failure would ' +
+      'duplicate it every hour, so the run is skipped and retried next hour.');
+  } else {
+    try {
+      auditRows = bqReadAuditRows(wm.from);
+    } catch (e) {
+      errors.push('audit_log read: ' + e.message);
+      auditRows = [];
+    }
+  }
+
+  // ── SYNC REFERENCE TABLES (WRITE_TRUNCATE, except audit_log) ────────
   var refTables = [
     { name: 'therapists',          rows: bqBuildTherapistRows(therapists)          },
     { name: 'clients',             rows: bqBuildClientRows(clients)                },
@@ -144,7 +163,9 @@ function syncAllToBigQuery() {
     { name: 'billing_codes',       rows: bqBuildBillingCodeRows(billing)           },
     { name: 'behavior_definitions', rows: bqBuildBehaviorDefinitionRows(behaviorDefs) },
     { name: 'phase_changes',       rows: bqBuildPhaseChangeRows(phaseChanges)       },
-    { name: 'definition_acks',     rows: bqBuildDefinitionAckRows(defAcks)          }
+    { name: 'definition_acks',     rows: bqBuildDefinitionAckRows(defAcks)          },
+    // The ONLY append-only table. See the d10 block for why.
+    { name: 'audit_log',           rows: auditRows, mode: 'WRITE_APPEND'            }
   ];
   // SUBMIT every reference load now, but do NOT wait here. BigQuery load jobs
   // are asynchronous, so the old submit-then-block-then-submit-the-next shape
@@ -155,7 +176,7 @@ function syncAllToBigQuery() {
   for (var ri = 0; ri < refTables.length; ri++) {
     var rt = refTables[ri];
     try {
-      var refJob = bqSubmitLoad(rt.name, rt.rows);
+      var refJob = bqSubmitLoad(rt.name, rt.rows, rt.mode);
       if (refJob) pendingJobs.push({ name: rt.name, jobId: refJob, rowCount: rt.rows.length });
     } catch (e) {
       errors.push(rt.name + ' submit: ' + e.message);
@@ -1080,10 +1101,13 @@ function bqEnsureDataset() {
  * Submit one WRITE_TRUNCATE load job and return its jobId WITHOUT waiting.
  * Returns null when the write is deliberately skipped.
  */
-function bqSubmitLoad(tableId, rows) {
+function bqSubmitLoad(tableId, rows, writeMode) {
   // Data tables are built by reading client sheets, which can transiently fail.
   // Skip the WRITE_TRUNCATE when the buffer is unexpectedly empty so we never
   // wipe the last good copy to zero rows. Reference tables are left as-is.
+  // An append with nothing new is a no-op: skip the job rather than submit it.
+  if (writeMode === 'WRITE_APPEND' && (!rows || rows.length === 0)) return null;
+
   var DATA_TABLES = { sessions: 1, behavior_records: 1, trial_records: 1, abc_incidents: 1, mastery_log: 1 };
   if (DATA_TABLES[tableId] && (!rows || rows.length === 0)) {
     Logger.log('bqSubmitLoad: skip WRITE_TRUNCATE for ' + tableId + ' — 0 rows (preserving last good copy)');
@@ -1096,7 +1120,10 @@ function bqSubmitLoad(tableId, rows) {
       load: {
         destinationTable: { projectId: BQ_PROJECT, datasetId: BQ_DATASET, tableId: tableId },
         sourceFormat:     'NEWLINE_DELIMITED_JSON',
-        writeDisposition: 'WRITE_TRUNCATE',
+        // WRITE_TRUNCATE for every table but audit_log, which is a RECORD and
+        // not current state — see the d10 block. A truncating mirror of an
+        // audit trail reproduces deletions, which is not a backup.
+        writeDisposition: writeMode || 'WRITE_TRUNCATE',
         schema:           bqCreateTableSchema(tableId),
         autodetect:       false
       }
@@ -1431,6 +1458,22 @@ function bqCreateTableSchema(tableId) {
     ]};
   }
 
+  // d10 — append-only. Query v_audit_log, not this table: the sync re-sends a
+  // 2h overlap each run so no row can be missed, and the view de-duplicates on
+  // audit_id.
+  if (tableId === 'audit_log') {
+    return { fields: [
+      { name: 'audit_id',    type: 'STRING',  mode: 'NULLABLE' },
+      { name: 'ts_iso',      type: 'STRING',  mode: 'NULLABLE' },
+      { name: 'date_iso',    type: 'STRING',  mode: 'NULLABLE' },
+      { name: 'user_email',  type: 'STRING',  mode: 'NULLABLE' },
+      { name: 'action',      type: 'STRING',  mode: 'NULLABLE' },
+      { name: 'client_name', type: 'STRING',  mode: 'NULLABLE' },
+      { name: 'details',     type: 'STRING',  mode: 'NULLABLE' },
+      { name: 'source_row',  type: 'INTEGER', mode: 'NULLABLE' }
+    ]};
+  }
+
   if (tableId === 'phase_changes') {
     return { fields: [
       { name: 'phase_id',          type: 'STRING', mode: 'NULLABLE' },
@@ -1746,7 +1789,7 @@ function checkBigQuerySyncHealth() {
     'sessions', 'behavior_records', 'trial_records', 'abc_incidents', 'mastery_log',
     'therapists', 'clients', 'authorizations', 'goals_reference',
     'behaviors_reference', 'billing_codes', 'behavior_definitions',
-    'phase_changes', 'definition_acks'
+    'phase_changes', 'definition_acks', 'audit_log'
   ];
 
   // Job history is read FIRST, because it is what distinguishes the two very
@@ -1864,5 +1907,181 @@ function checkBigQuerySyncHealth() {
 function _bqPad(v, width) {
   var out = String(v === null || v === undefined ? '' : v);
   while (out.length < width) out += ' ';
+  return out;
+}
+
+/* ─── d10 — AUDIT LOG → BIGQUERY ──────────────────────────────────────
+ *
+ * The HIPAA audit trail was the ONE dataset with a statutory six-year
+ * retention requirement and exactly ONE copy: a Google Sheet. Fourteen tables
+ * synced; this was not one of them.
+ *
+ * IT IS THE ONLY TABLE THAT USES WRITE_APPEND, AND THAT IS THE WHOLE POINT.
+ * Every other table is a mirror of current state, so replacing it wholesale
+ * each hour is correct. An audit trail is not state — it is a record, and a
+ * mirror that faithfully reproduces deletions is not a backup. If someone
+ * clears rows from the sheet (or the sheet is lost, or a repair script
+ * rewrites it), a WRITE_TRUNCATE sync would carry that loss straight into the
+ * only other copy, which defeats the entire reason for this table existing.
+ *
+ * SO: append-only, with a lookback watermark and an idempotent row key.
+ *
+ * GAPS ARE WORSE THAN DUPLICATES for a compliance log, so the design biases
+ * deliberately toward duplicates: the watermark is set two hours BEHIND the
+ * newest row already in BigQuery, so every run re-sends a small overlap and no
+ * row can fall between two runs. `audit_id` is deterministic, so the overlap
+ * de-duplicates — query v_audit_log, never the raw table.
+ */
+var BQ_AUDIT_TAB      = 'Audit Log';
+var BQ_AUDIT_LOOKBACK_MS = 2 * 60 * 60 * 1000;   // re-send the last 2h each run
+
+/** djb2, local to this file — an opaque stable id, not a security hash. */
+function _bqHash(str) {
+  var h = 0;
+  var s = String(str || '');
+  for (var i = 0; i < s.length; i++) {
+    h = ((h << 5) - h) + s.charCodeAt(i);
+    h = h | 0;
+  }
+  return Math.abs(h).toString(16);
+}
+
+/**
+ * Normalize whatever the Timestamp cell holds into a comparable ISO string.
+ * Entries written by writeAuditLog are already ISO strings; older rows may be
+ * real Date values. Lexicographic comparison of ISO strings is then the same as
+ * chronological, which is what the watermark relies on.
+ */
+function _bqIsoOf(v) {
+  if (v instanceof Date) {
+    return isNaN(v.getTime()) ? '' : v.toISOString();
+  }
+  var s = String(v === null || v === undefined ? '' : v).replace(/^\s+|\s+$/g, '');
+  if (!s) return '';
+  if (/^\d{4}-\d{2}-\d{2}T/.test(s)) return s;       // already ISO
+  var d = new Date(s);
+  return isNaN(d.getTime()) ? s : d.toISOString();   // unparseable: keep as-is
+}
+
+/**
+ * Where to resume from.
+ *
+ * Distinguishes the two cases that must NOT be treated alike:
+ *   firstRun  — the table does not exist yet, so send everything
+ *   failed    — the table exists but MAX(ts_iso) could not be read. Skip this
+ *               run entirely. Re-sending the whole history on a transient query
+ *               failure would duplicate six years of rows every hour until
+ *               someone noticed, and silently appending from zero would be
+ *               worse than waiting an hour.
+ */
+function bqAuditWatermark() {
+  var exists = true;
+  try {
+    BigQuery.Tables.get(BQ_PROJECT, BQ_DATASET, 'audit_log');
+  } catch (e) {
+    exists = false;
+  }
+  if (!exists) return { ok: true, firstRun: true, from: '' };
+
+  try {
+    var resp = BigQuery.Jobs.query({
+      query: 'SELECT MAX(ts_iso) AS mx FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.audit_log`',
+      useLegacySql: false,
+      timeoutMs: 30000
+    }, BQ_PROJECT);
+    if (!resp || !resp.jobComplete) {
+      return { ok: false, firstRun: false, from: '', error: 'watermark query did not complete in 30s' };
+    }
+    var mx = '';
+    if (resp.rows && resp.rows[0] && resp.rows[0].f && resp.rows[0].f[0]) {
+      mx = String(resp.rows[0].f[0].v || '');
+    }
+    if (!mx) return { ok: true, firstRun: true, from: '' };   // table exists but is empty
+
+    var d = new Date(mx);
+    if (isNaN(d.getTime())) return { ok: true, firstRun: true, from: '' };
+    var from = new Date(d.getTime() - BQ_AUDIT_LOOKBACK_MS).toISOString();
+    return { ok: true, firstRun: false, from: from, newest: mx };
+  } catch (e) {
+    return { ok: false, firstRun: false, from: '', error: e.message };
+  }
+}
+
+/**
+ * Read audit rows at or after `fromIso`.
+ *
+ * Rows are appended chronologically, so ONE column read locates the start and
+ * only the tail is then read in full. Reading all five columns of six years of
+ * audit history every hour would reintroduce exactly the O(history) cost that
+ * f79 removed.
+ */
+function bqReadAuditRows(fromIso) {
+  var sheet;
+  try {
+    var ss = SpreadsheetApp.openById(BQ_AUDIT_SHEET);
+    sheet = ss.getSheetByName(BQ_AUDIT_TAB);
+  } catch (e) {
+    throw new Error('cannot open the audit sheet: ' + e.message);
+  }
+  if (!sheet) return [];
+
+  var last = sheet.getLastRow();
+  if (last < 2) return [];
+
+  // colMap, never fixed positions — the data-model rule applies here too.
+  var header = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 5)).getValues()[0];
+  var cm = {};
+  for (var h = 0; h < header.length; h++) {
+    cm[String(header[h]).replace(/^\s+|\s+$/g, '')] = h;
+  }
+  var cTs  = (cm.Timestamp !== undefined) ? cm.Timestamp : 0;
+  var cUsr = (cm.User      !== undefined) ? cm.User      : 1;
+  var cAct = (cm.Action    !== undefined) ? cm.Action    : 2;
+  var cCli = (cm.Client    !== undefined) ? cm.Client    : 3;
+  var cDet = (cm.Details   !== undefined) ? cm.Details   : 4;
+  var width = Math.max(cTs, cUsr, cAct, cCli, cDet) + 1;
+
+  var startIdx = 0;
+  if (fromIso) {
+    var tsCol = sheet.getRange(2, cTs + 1, last - 1, 1).getValues();
+    startIdx = tsCol.length;                       // default: nothing new
+    for (var i = 0; i < tsCol.length; i++) {
+      if (_bqIsoOf(tsCol[i][0]) >= fromIso) { startIdx = i; break; }
+    }
+    if (startIdx >= tsCol.length) return [];
+  }
+
+  var firstRow = 2 + startIdx;
+  var vals = sheet.getRange(firstRow, 1, last - firstRow + 1, width).getValues();
+
+  var out = [];
+  for (var r = 0; r < vals.length; r++) {
+    var row    = vals[r];
+    var sheetRow = firstRow + r;
+    var tsIso  = _bqIsoOf(row[cTs]);
+    var usr    = String(row[cUsr] || '');
+    var act    = String(row[cAct] || '');
+    var cli    = String(row[cCli] || '');
+    var det    = String(row[cDet] || '');
+    if (!tsIso && !act) continue;                  // blank row
+
+    // Deterministic across re-sends, so the lookback overlap de-duplicates.
+    // The sheet row number is included because two genuinely identical entries
+    // in different rows must stay distinct; the content hash is included
+    // because a row number alone would collide if rows were ever inserted.
+    var audit_id = String(sheetRow) + '-' +
+                   _bqHash(tsIso + '|' + usr + '|' + act + '|' + cli + '|' + det);
+
+    out.push({
+      audit_id:    audit_id,
+      ts_iso:      tsIso,
+      date_iso:    tsIso ? tsIso.substring(0, 10) : '',
+      user_email:  usr,
+      action:      act,
+      client_name: cli,
+      details:     det,
+      source_row:  sheetRow
+    });
+  }
   return out;
 }
