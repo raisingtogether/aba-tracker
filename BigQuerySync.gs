@@ -18,7 +18,7 @@
  * every release. doGet reports this value, so one unauthenticated call proves
  * whether THIS file was pasted too (the two are pasted separately).
  */
-var BQ_SYNC_BUILD = '2026-10-24-f79';
+var BQ_SYNC_BUILD = '2026-10-24-f79b';
 function bqSyncBuild() { return BQ_SYNC_BUILD; }
 
 var BQ_PROJECT     = 'rt-aba-tracker';
@@ -1749,14 +1749,44 @@ function checkBigQuerySyncHealth() {
     'phase_changes', 'definition_acks'
   ];
 
+  // Job history is read FIRST, because it is what distinguishes the two very
+  // different reasons a table can be absent: never attempted, versus attempted
+  // and failed. The first version of this function asserted "no schema branch"
+  // for every missing table and was wrong on its first real run — the tables
+  // were missing because no sync had yet run that knew about them. Same rule as
+  // whyCantISendMail: look before blaming.
+  var jobsByTable = {};
+  var jobRows = [];
+  var jobsReadable = true;
+  try {
+    var list = BigQuery.Jobs.list(BQ_PROJECT, { maxResults: 120, projection: 'full', allUsers: true });
+    var jobs = (list && list.jobs) ? list.jobs : [];
+    for (var j = 0; j < jobs.length; j++) {
+      var cfg = jobs[j].configuration || {};
+      if (!cfg.load) continue;
+      var dest = (cfg.load.destinationTable || {}).tableId || '?';
+      var st   = jobs[j].statistics || {};
+      var secs = (st.endTime && st.creationTime)
+        ? Math.round((Number(st.endTime) - Number(st.creationTime)) / 1000) : -1;
+      var state = ((jobs[j].status || {}).state) || '?';
+      var errR  = ((jobs[j].status || {}).errorResult) || null;
+      var rec = { table: dest, state: state, secs: secs,
+                  err: errR ? (errR.reason + ': ' + String(errR.message || '').substring(0, 90)) : '' };
+      if (!jobsByTable[dest]) jobsByTable[dest] = rec;   // newest first from the API
+      if (jobRows.length < 20) jobRows.push(rec);
+    }
+  } catch (e) {
+    jobsReadable = false;
+    jobRows = [];
+  }
+
   Logger.log('TABLE FRESHNESS  (project ' + BQ_PROJECT + ', dataset ' + BQ_DATASET + ')');
   Logger.log('');
   Logger.log(_bqPad('table', 22) + _bqPad('rows', 10) + 'last written');
   Logger.log('--------------------------------------------------------------');
 
   var now = new Date().getTime();
-  var missing = [];
-  var stale   = [];
+  var neverTried = [], failed = [], stale = [], oldest = 0;
   for (var i = 0; i < tables.length; i++) {
     var t = tables[i];
     try {
@@ -1764,28 +1794,37 @@ function checkBigQuerySyncHealth() {
       var rows = String(meta.numRows || '0');
       var lm   = Number(meta.lastModifiedTime || 0);
       var mins = lm ? Math.round((now - lm) / 60000) : -1;
+      if (mins > oldest) oldest = mins;
       var when = (mins < 0) ? 'unknown'
                : (mins < 90) ? (mins + ' min ago')
                : (Math.round(mins / 60) + ' hours ago');
       if (mins > 150) stale.push(t + ' (' + when + ')');
       Logger.log(_bqPad(t, 22) + _bqPad(rows, 10) + when);
     } catch (e) {
-      missing.push(t);
-      Logger.log(_bqPad(t, 22) + _bqPad('-', 10) + 'TABLE NOT FOUND');
+      var seen = jobsByTable[t];
+      if (!jobsReadable)      { neverTried.push(t); Logger.log(_bqPad(t, 22) + _bqPad('-', 10) + 'MISSING (job history unreadable)'); }
+      else if (!seen)         { neverTried.push(t); Logger.log(_bqPad(t, 22) + _bqPad('-', 10) + 'MISSING \u2014 never attempted'); }
+      else if (seen.err)      { failed.push(t + ' \u2014 ' + seen.err); Logger.log(_bqPad(t, 22) + _bqPad('-', 10) + 'MISSING \u2014 last load FAILED'); }
+      else                    { failed.push(t + ' \u2014 load reported ' + seen.state + ' but no table'); Logger.log(_bqPad(t, 22) + _bqPad('-', 10) + 'MISSING \u2014 unexplained'); }
     }
   }
 
   Logger.log('');
-  if (!missing.length && !stale.length) {
-    Logger.log('All ' + tables.length + ' tables exist and were written within the');
-    Logger.log('last sync window. Any "unconfirmed load" email was a polling');
-    Logger.log('artefact, NOT data loss.');
+  if (!neverTried.length && !failed.length && !stale.length) {
+    Logger.log('All ' + tables.length + ' tables exist and were written recently.');
+    Logger.log('Any "unconfirmed load" email was a polling artefact, NOT data loss.');
   }
-  if (missing.length) {
-    Logger.log('MISSING TABLES: ' + missing.join(', '));
-    Logger.log('  A table that has never loaded usually means no schema branch in');
-    Logger.log('  bqCreateTableSchema() — an empty schema with autodetect:false');
-    Logger.log('  fails the load every time.');
+  if (neverTried.length) {
+    Logger.log('NEVER ATTEMPTED: ' + neverTried.join(', '));
+    Logger.log('  No load job for these appears in recent history, so the sync has');
+    Logger.log('  not yet RUN with the code that knows about them. Normal right');
+    Logger.log('  after a deploy that adds tables \u2014 the next hourly run creates');
+    Logger.log('  them. Run syncAllToBigQuery() now if you do not want to wait.');
+    Logger.log('  If they are still absent after a sync HAS run, then suspect a');
+    Logger.log('  missing branch in bqCreateTableSchema().');
+  }
+  if (failed.length) {
+    Logger.log('LOAD FAILED: ' + failed.join(' | '));
   }
   if (stale.length) {
     Logger.log('STALE (>2.5h, so it missed at least one hourly run): ' + stale.join(', '));
@@ -1794,33 +1833,25 @@ function checkBigQuerySyncHealth() {
   Logger.log('');
   Logger.log('RECENT LOAD JOBS  (how long they really take)');
   Logger.log('--------------------------------------------------------------');
-  try {
-    var list = BigQuery.Jobs.list(BQ_PROJECT, { maxResults: 40, projection: 'full', allUsers: true });
-    var jobs = (list && list.jobs) ? list.jobs : [];
-    var shown = 0, slowest = 0;
-    for (var j = 0; j < jobs.length && shown < 20; j++) {
-      var cfg = jobs[j].configuration || {};
-      if (!cfg.load) continue;
-      var dest = (cfg.load.destinationTable || {}).tableId || '?';
-      var st   = jobs[j].statistics || {};
-      var secs = (st.endTime && st.creationTime)
-        ? Math.round((Number(st.endTime) - Number(st.creationTime)) / 1000) : -1;
-      if (secs > slowest) slowest = secs;
-      var state = ((jobs[j].status || {}).state) || '?';
-      var err   = ((jobs[j].status || {}).errorResult || {}).reason || '';
-      Logger.log(_bqPad(dest, 22) + _bqPad(state, 10) +
-                 (secs < 0 ? 'running' : secs + 's') + (err ? ('  ERROR: ' + err) : ''));
-      shown++;
-    }
-    if (!shown) Logger.log('(no load jobs found in recent history)');
-    else {
-      Logger.log('');
-      Logger.log('Slowest of the above: ' + slowest + 's. The sync now waits for all');
-      Logger.log('loads together rather than one after another, so the total wait is');
-      Logger.log('this number, not the sum.');
-    }
-  } catch (e) {
-    Logger.log('Could not list jobs: ' + e.message);
+  var slowest = 0;
+  for (var r = 0; r < jobRows.length; r++) {
+    if (jobRows[r].secs > slowest) slowest = jobRows[r].secs;
+    Logger.log(_bqPad(jobRows[r].table, 22) + _bqPad(jobRows[r].state, 10) +
+               (jobRows[r].secs < 0 ? 'running' : jobRows[r].secs + 's') +
+               (jobRows[r].err ? ('  ERROR: ' + jobRows[r].err) : ''));
+  }
+  if (!jobRows.length) {
+    Logger.log(jobsReadable ? '(no load jobs found in recent history)'
+                            : '(could not read job history)');
+  } else {
+    Logger.log('');
+    Logger.log('Slowest load: ' + slowest + 's. The sync waits for all loads TOGETHER,');
+    Logger.log('so the whole wait is about this, not the sum of fourteen of them.');
+    Logger.log('');
+    Logger.log('So if a sync takes much longer than ' + (slowest + 10) + 's, the time is');
+    Logger.log('going into READING THE CLIENT SHEETS, not into BigQuery. The gap');
+    Logger.log('between when the reference tables and the event tables were written');
+    Logger.log('above is that read phase, measured.');
   }
 
   Logger.log('');

@@ -495,6 +495,37 @@ separate **4–6 week** job gated on the sync clock or Phase 2.
    `trial_1`…`trial_10` as fixed fields. Normalisation is partial — one row per
    goal, but trials are still columns.
 
+### Measured Oct 24 2026 — where the sync time actually goes
+
+`checkBigQuerySyncHealth()` on the live project, immediately after f79:
+
+| Fact | Number |
+|---|---|
+| BigQuery load jobs | **1–3s each** — never the bottleneck |
+| Read phase (7 clients) | **~420s**, measured as the gap between the reference-table and event-table write times |
+| Oct 23 run, old serial code | 1233s, of which ~850s was sleeping on five unconfirmed polls |
+| Row counts | sessions 389 · behavior_records 4,727 · trial_records 12,829 · abc 176 · mastery 70 · goals_reference 260 |
+
+**So the loads were never the problem and a longer timeout was never the fix.**
+f79 removes the ~850s of serialized sleeping, which leaves **~420–450s of
+genuine sheet reading** — still 2.5× the 180s threshold below. Incremental sync
+is therefore the next real job, not a deferred one, and the justification is
+measured rather than predicted.
+
+**The five Oct 23 "timeouts" have no confirmed cause.** Load jobs run in 1–3s,
+so a 170s poll failure is not explained by slowness, and nothing in the job
+history reproduces it. It is recorded as transient and unexplained rather than
+given a story. f79 makes it moot three ways: loads now overlap the read phase so
+they have minutes of slack, `Jobs.get` is wrapped so an API blip no longer aborts
+a wait, and an unconfirmed load is reported as unconfirmed instead of as failure.
+
+**A diagnostic must check before it accuses — again.** The first
+`checkBigQuerySyncHealth()` printed "usually means no schema branch" for all
+three missing tables. The real reason was that no sync had yet run with code that
+knew those tables existed. It now reads the load-job history first and
+distinguishes **never attempted** from **attempted and failed**. Third time this
+rule has been learned here, after `checkParentAlertSender` and the no-arg rule.
+
 **What actually breaks, in arrival order:**
 1. **The hourly sync** — re-reads every tab of every client and `WRITE_TRUNCATE`s
    11 tables inside a 6-min cap. O(clients × history). First wall, ~25–35 clients.
