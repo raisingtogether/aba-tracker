@@ -495,36 +495,54 @@ separate **4–6 week** job gated on the sync clock or Phase 2.
    `trial_1`…`trial_10` as fixed fields. Normalisation is partial — one row per
    goal, but trials are still columns.
 
-### Measured Oct 24 2026 — where the sync time actually goes
+### Measured Oct 24 2026 — the sync was almost entirely waiting
 
-`checkBigQuerySyncHealth()` on the live project, immediately after f79:
+`syncAllToBigQuery()` on the live project, immediately after f79:
 
-| Fact | Number |
+```
+Sync complete in 50s | 14 tables, 7 clients, ~18,500 rows
+```
+
+| | |
 |---|---|
-| BigQuery load jobs | **1–3s each** — never the bottleneck |
-| Read phase (7 clients) | **~420s**, measured as the gap between the reference-table and event-table write times |
-| Oct 23 run, old serial code | 1233s, of which ~850s was sleeping on five unconfirmed polls |
-| Row counts | sessions 389 · behavior_records 4,727 · trial_records 12,829 · abc 176 · mastery 70 · goals_reference 260 |
+| Before (Oct 23, serial waits) | **1233s** |
+| After (f79, overlapped loads) | **50s** |
+| BigQuery load jobs | 1–3s each — never the bottleneck |
+| Read + build phase | **~45s**, i.e. the whole remaining cost |
+| Rows | sessions 389 · behavior_records 4,727 · trial_records 12,829 · abc 176 · mastery 70 · goals_reference 260 · behavior_definitions 20 · phase_changes 1 · definition_acks 2 |
 
-**So the loads were never the problem and a longer timeout was never the fix.**
-f79 removes the ~850s of serialized sleeping, which leaves **~420–450s of
-genuine sheet reading** — still 2.5× the 180s threshold below. Incremental sync
-is therefore the next real job, not a deferred one, and the justification is
-measured rather than predicted.
+**A 25× reduction, and essentially all of the old runtime was pathological
+waiting rather than work.**
+
+**Correction worth keeping, because it nearly cost two days.** On first reading
+the health report I inferred a ~420s read phase from the 7-minute gap between
+when the reference tables and the event tables were written, and concluded
+incremental sync was now urgent *on evidence*. That was wrong. The gap was the
+**serial sleeping itself** — a couple of 170s unconfirmed polls landing between
+the two phases — not reading. The read phase was always ~45s. Two timestamps are
+not a measurement when there is an unmeasured wait between them; the Audit Log's
+own `Sync complete in Ns` was the real number all along, and it is the one to
+trust.
+
+**So incremental sync is NOT urgent.** At 50s we are at 28% of the 180s
+threshold below, with 7 clients. Reading is O(clients × history), so ~180s lands
+near 25 clients — which is exactly what the original prediction said, and f79
+restored that headroom rather than changing the shape. Do not start the
+~2-day incremental-sync job on the strength of the Oct 23 email.
 
 **The five Oct 23 "timeouts" have no confirmed cause.** Load jobs run in 1–3s,
-so a 170s poll failure is not explained by slowness, and nothing in the job
-history reproduces it. It is recorded as transient and unexplained rather than
-given a story. f79 makes it moot three ways: loads now overlap the read phase so
-they have minutes of slack, `Jobs.get` is wrapped so an API blip no longer aborts
-a wait, and an unconfirmed load is reported as unconfirmed instead of as failure.
+so slowness does not explain a 170s poll failure, and nothing in the job history
+reproduces it. Recorded as transient and unexplained rather than given a story.
+f79 makes it moot three ways: loads overlap the read phase so they have slack,
+`Jobs.get` is wrapped so an API blip no longer aborts a wait, and an unconfirmed
+load is reported as unconfirmed instead of as failure.
 
 **A diagnostic must check before it accuses — again.** The first
-`checkBigQuerySyncHealth()` printed "usually means no schema branch" for all
+`checkBigQuerySyncHealth()` printed "usually means no schema branch" for the
 three missing tables. The real reason was that no sync had yet run with code that
-knew those tables existed. It now reads the load-job history first and
-distinguishes **never attempted** from **attempted and failed**. Third time this
-rule has been learned here, after `checkParentAlertSender` and the no-arg rule.
+knew they existed. It now reads the load-job history first and distinguishes
+**never attempted** from **attempted and failed**. Third time this rule has been
+learned here, after `checkParentAlertSender` and the no-arg rule.
 
 **What actually breaks, in arrival order:**
 1. **The hourly sync** — re-reads every tab of every client and `WRITE_TRUNCATE`s
