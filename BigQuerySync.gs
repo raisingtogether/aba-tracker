@@ -18,7 +18,7 @@
  * every release. doGet reports this value, so one unauthenticated call proves
  * whether THIS file was pasted too (the two are pasted separately).
  */
-var BQ_SYNC_BUILD = '2026-10-18-f78';
+var BQ_SYNC_BUILD = '2026-10-24-f79';
 function bqSyncBuild() { return BQ_SYNC_BUILD; }
 
 var BQ_PROJECT     = 'rt-aba-tracker';
@@ -40,6 +40,26 @@ var BQ_TRIAL_ANALYTICS = [
 ];
 
 
+/**
+ * Wall-clock budget for one sync, in seconds. The hourly trigger is killed at
+ * the Apps Script execution cap, and a sync killed mid-run leaves tables stale
+ * with NO error email — the worst of both. So the sync watches its own clock
+ * and reports what it could not finish instead of being cut off.
+ *
+ * The Oct 23 2026 run took 1233s, of which ~850s was sleeping serially on five
+ * load jobs that had not confirmed. See bqAwaitJobs.
+ */
+var BQ_MAX_RUNTIME_SEC = 1500;
+var _bqStartMs = 0;
+
+function bqSecondsLeft() {
+  if (!_bqStartMs) return BQ_MAX_RUNTIME_SEC;
+  var used = Math.floor((new Date().getTime() - _bqStartMs) / 1000);
+  var left = BQ_MAX_RUNTIME_SEC - used;
+  return left > 0 ? left : 0;
+}
+
+
 // ── MAIN ENTRY POINT ──────────────────────────────────────────────────
 
 /**
@@ -48,8 +68,11 @@ var BQ_TRIAL_ANALYTICS = [
  */
 function syncAllToBigQuery() {
   var startTime = new Date();
-  var errors    = [];
-  var counts    = {};
+  _bqStartMs    = startTime.getTime();
+  var errors      = [];
+  var unconfirmed = [];
+  var counts      = {};
+  var pendingJobs = [];
 
   // Ensure the BQ dataset exists before doing anything else
   try {
@@ -123,13 +146,19 @@ function syncAllToBigQuery() {
     { name: 'phase_changes',       rows: bqBuildPhaseChangeRows(phaseChanges)       },
     { name: 'definition_acks',     rows: bqBuildDefinitionAckRows(defAcks)          }
   ];
+  // SUBMIT every reference load now, but do NOT wait here. BigQuery load jobs
+  // are asynchronous, so the old submit-then-block-then-submit-the-next shape
+  // made total wall time the SUM of all nine job latencies. Submitting them all
+  // up front and collecting them after the client sheets have been read means
+  // the jobs run DURING the read — which is the longest phase — and cost
+  // close to zero extra wall time.
   for (var ri = 0; ri < refTables.length; ri++) {
     var rt = refTables[ri];
     try {
-      bqSyncTable(rt.name, rt.rows);
-      counts[rt.name] = rt.rows.length;
+      var refJob = bqSubmitLoad(rt.name, rt.rows);
+      if (refJob) pendingJobs.push({ name: rt.name, jobId: refJob, rowCount: rt.rows.length });
     } catch (e) {
-      errors.push(rt.name + ': ' + e.message);
+      errors.push(rt.name + ' submit: ' + e.message);
     }
   }
 
@@ -154,8 +183,25 @@ function syncAllToBigQuery() {
   //     to `continue` with no log, no error and no count.
   var skipped = [];
   var syncedClients = 0;
+  // Set when the read loop bails out on the clock. A PARTIAL read must never
+  // reach a WRITE_TRUNCATE: replacing a complete table with half the rows is
+  // worse than not writing at all, because the result looks plausible in Looker
+  // and nothing says it is short. The existing zero-row guard does not catch
+  // this — a partial buffer is not an empty one.
+  var readIncomplete = false;
 
   for (var ci = 0; ci < clients.length; ci++) {
+    // Leave enough budget to finish the loads and write the audit row. Without
+    // this the trigger is simply killed at the execution cap, mid-read, with no
+    // audit line and no email — the one failure mode nobody finds out about.
+    if (bqSecondsLeft() < 300) {
+      readIncomplete = true;
+      for (var rem = ci; rem < clients.length; rem++) {
+        skipped.push(String(clients[rem].name || clients[rem].id || 'row ' + (rem + 2)) +
+                     ' \u2014 sync ran out of time before reading this client');
+      }
+      break;
+    }
     var client = clients[ci];
     var cLabel = String(client.name || client.id || '(unnamed row ' + (ci + 2) + ')');
     var cInactive = (String(client.status || 'active').trim().toLowerCase() === 'inactive');
@@ -206,14 +252,41 @@ function syncAllToBigQuery() {
     { name: 'abc_incidents',   rows: abcBuf       },
     { name: 'mastery_log',     rows: masteryBuf   }
   ];
-  for (var dt = 0; dt < dataTables.length; dt++) {
-    var tbl = dataTables[dt];
-    try {
-      bqSyncTable(tbl.name, tbl.rows);
-      counts[tbl.name] = tbl.rows.length;
-    } catch (e) {
-      errors.push(tbl.name + ' sync: ' + e.message);
+  if (readIncomplete) {
+    // Reference tables are already submitted and are complete — they are read
+    // from RT Admin in one pass. Only the event tables are at risk here.
+    errors.push('Read phase ran out of time after ' + syncedClients + ' of ' +
+      clients.length + ' clients. The five event tables were deliberately NOT ' +
+      'written, so BigQuery still holds the last COMPLETE copy rather than a ' +
+      'partial one. Fix is incremental sync, not a longer timeout.');
+  } else {
+    for (var dt = 0; dt < dataTables.length; dt++) {
+      var tbl = dataTables[dt];
+      try {
+        var dataJob = bqSubmitLoad(tbl.name, tbl.rows);
+        if (dataJob) pendingJobs.push({ name: tbl.name, jobId: dataJob, rowCount: tbl.rows.length });
+      } catch (e) {
+        errors.push(tbl.name + ' submit: ' + e.message);
+      }
     }
+  }
+
+  // ── WAIT FOR EVERY LOAD AT ONCE ─────────────────────────────────────
+  // One loop over all outstanding jobs, so the wait is the SLOWEST job rather
+  // than the sum. The reference loads have had the whole read phase to finish.
+  var waitBudget = bqSecondsLeft() - 30;          // keep 30s to write the audit row
+  if (waitBudget < 30) waitBudget = 30;
+  var settled = bqAwaitJobs(pendingJobs, waitBudget);
+
+  for (var sd = 0; sd < settled.done.length; sd++) {
+    counts[settled.done[sd].name] = settled.done[sd].rowCount;
+  }
+  for (var sf = 0; sf < settled.failed.length; sf++) {
+    errors.push(settled.failed[sf].name + ' load FAILED: ' + settled.failed[sf].error);
+  }
+  for (var su = 0; su < settled.unconfirmed.length; su++) {
+    unconfirmed.push(settled.unconfirmed[su].name +
+      ' (job ' + settled.unconfirmed[su].jobId + ')');
   }
 
   // ── AUDIT LOG ENTRY ─────────────────────────────────────────────────
@@ -225,6 +298,9 @@ function syncAllToBigQuery() {
   var details = 'Sync complete in ' + elapsed + 's | rows: ' + JSON.stringify(counts);
   if (skipped.length) details += ' | SKIPPED CLIENTS: ' + skipped.join('; ');
   if (errors.length)  details += ' | errors: ' + errors.join('; ');
+  if (unconfirmed.length)
+    details += ' | UNCONFIRMED (may have completed after we stopped waiting): ' +
+               unconfirmed.join('; ');
   bqAuditLog('bigquery_sync', details);
   if (skipped.length) {
     Logger.log('WARNING: ' + skipped.length + ' client(s) contributed no data this sync: ' +
@@ -241,14 +317,30 @@ function syncAllToBigQuery() {
     }
   }
 
-  // MEDIUM-8: Send email alert on any sync error
-  if (errors.length > 0 && BQ_ADMIN_EMAIL) {
+  // MEDIUM-8: Send email alert on any sync error.
+  // An UNCONFIRMED load is reported separately and in different words, because
+  // the old message said "timed out" and read as data loss when the table had
+  // almost always loaded a few seconds after we gave up waiting. A diagnostic
+  // must not assert a cause it cannot observe — same rule as whyCantISendMail.
+  if ((errors.length > 0 || unconfirmed.length > 0) && BQ_ADMIN_EMAIL) {
     try {
       MailApp.sendEmail(
         BQ_ADMIN_EMAIL,
-        'RT ABA Tracker \u2014 BigQuery Sync Error',
-        'The following errors occurred during the hourly BigQuery sync:\n\n' +
-          errors.join('\n') +
+        'RT ABA Tracker \u2014 BigQuery Sync ' +
+          (errors.length ? 'Error' : 'Notice'),
+        (errors.length
+          ? 'The following errors occurred during the hourly BigQuery sync:\n\n' +
+            errors.join('\n') + '\n\n'
+          : 'The hourly BigQuery sync completed with no errors.\n\n') +
+          (unconfirmed.length
+            ? 'These loads had not confirmed before the sync stopped waiting:\n' +
+              unconfirmed.join('\n') +
+              '\n\nThis is NOT necessarily data loss. A BigQuery load job often\n' +
+              'finishes after we stop polling it. To check whether the data is\n' +
+              'actually there, run checkBigQuerySyncHealth() in the Apps Script\n' +
+              'editor — it reports each table\u0027s row count and how long ago it\n' +
+              'was last written.\n\n'
+            : '') +
           (skipped.length
             ? '\n\nClients that contributed no data (reports will look empty for them):\n' +
               skipped.join('\n')
@@ -984,37 +1076,108 @@ function bqEnsureDataset() {
  * Works on the BigQuery free tier — does NOT use streaming insertAll.
  * Creates the table if it does not exist; replaces all data if it does.
  */
-function bqSyncTable(tableId, rows) {
+/**
+ * Submit one WRITE_TRUNCATE load job and return its jobId WITHOUT waiting.
+ * Returns null when the write is deliberately skipped.
+ */
+function bqSubmitLoad(tableId, rows) {
   // Data tables are built by reading client sheets, which can transiently fail.
   // Skip the WRITE_TRUNCATE when the buffer is unexpectedly empty so we never
   // wipe the last good copy to zero rows. Reference tables are left as-is.
   var DATA_TABLES = { sessions: 1, behavior_records: 1, trial_records: 1, abc_incidents: 1, mastery_log: 1 };
   if (DATA_TABLES[tableId] && (!rows || rows.length === 0)) {
-    Logger.log('bqSyncTable: skip WRITE_TRUNCATE for ' + tableId + ' — 0 rows (preserving last good copy)');
+    Logger.log('bqSubmitLoad: skip WRITE_TRUNCATE for ' + tableId + ' — 0 rows (preserving last good copy)');
     try { bqAuditLog('bigquery_sync_skip', 'Skipped truncate of ' + tableId + ' — 0 rows in buffer (likely a read failure)'); } catch (e) {}
-    return;
+    return null;
   }
 
-  var schema = bqCreateTableSchema(tableId);
-
-  // Build newline-delimited JSON blob
-  var ndjBlob = bqRowsToNDJSONBlob(rows);
-
-  // Submit load job — WRITE_TRUNCATE handles both create-if-not-exists and replace
   var job = {
     configuration: {
       load: {
         destinationTable: { projectId: BQ_PROJECT, datasetId: BQ_DATASET, tableId: tableId },
         sourceFormat:     'NEWLINE_DELIMITED_JSON',
         writeDisposition: 'WRITE_TRUNCATE',
-        schema:           schema,
+        schema:           bqCreateTableSchema(tableId),
         autodetect:       false
       }
     }
   };
 
-  var jobResult = BigQuery.Jobs.insert(job, BQ_PROJECT, ndjBlob);
-  bqWaitForJob(jobResult.jobReference.jobId);
+  var jobResult = BigQuery.Jobs.insert(job, BQ_PROJECT, bqRowsToNDJSONBlob(rows));
+  return jobResult.jobReference.jobId;
+}
+
+/**
+ * Poll EVERY outstanding load job in one loop, so the wait is the slowest job
+ * rather than the sum of all of them. With fourteen tables the old per-job wait
+ * could spend 14 x 170s = 2380s sleeping, which is longer than the trigger is
+ * allowed to run at all.
+ *
+ * Returns { done, failed, unconfirmed }. The three are genuinely different:
+ *   done        — BigQuery said DONE with no errorResult
+ *   failed      — BigQuery said DONE with an errorResult. Real, actionable.
+ *   unconfirmed — we ran out of budget. Says nothing about whether it worked,
+ *                 so it must never be reported as a failure.
+ */
+function bqAwaitJobs(jobs, budgetSec) {
+  var out = { done: [], failed: [], unconfirmed: [] };
+  var waiting = [];
+  for (var i = 0; i < jobs.length; i++) {
+    if (jobs[i] && jobs[i].jobId) waiting.push(jobs[i]);
+  }
+  if (!waiting.length) return out;
+
+  var deadline = new Date().getTime() + (budgetSec * 1000);
+  var pass = 0;
+
+  while (waiting.length > 0 && new Date().getTime() < deadline) {
+    Utilities.sleep(pass < 5 ? 1000 : 3000);
+    pass++;
+    var still = [];
+    for (var j = 0; j < waiting.length; j++) {
+      var w = waiting[j];
+      var job;
+      try {
+        job = BigQuery.Jobs.get(BQ_PROJECT, w.jobId);
+      } catch (e) {
+        still.push(w);          // transient API blip — keep waiting, do not fail
+        continue;
+      }
+      if (job && job.status && job.status.state === 'DONE') {
+        if (job.status.errorResult) {
+          w.error = job.status.errorResult.message;
+          out.failed.push(w);
+        } else {
+          out.done.push(w);
+        }
+      } else {
+        still.push(w);
+      }
+    }
+    waiting = still;
+  }
+
+  for (var k = 0; k < waiting.length; k++) out.unconfirmed.push(waiting[k]);
+  return out;
+}
+
+/**
+ * Submit one table and wait for it. Kept for any caller that syncs a single
+ * table on its own; the hourly sync uses bqSubmitLoad + bqAwaitJobs so the
+ * loads overlap.
+ */
+function bqSyncTable(tableId, rows) {
+  var jobId = bqSubmitLoad(tableId, rows);
+  if (!jobId) return;
+  var r = bqAwaitJobs([{ name: tableId, jobId: jobId, rowCount: rows ? rows.length : 0 }], 180);
+  if (r.failed.length) {
+    throw new Error('BQ load job failed (' + jobId + '): ' + r.failed[0].error);
+  }
+  if (r.unconfirmed.length) {
+    throw new Error(tableId + ': load not confirmed within 180s (job ' + jobId +
+      '). The job may still have completed — run checkBigQuerySyncHealth() to ' +
+      'see the row count and last-modified time before treating this as data loss.');
+  }
 }
 
 /**
@@ -1045,35 +1208,7 @@ function bqRowsToNDJSONBlob(rows) {
   return Utilities.newBlob(lines.join('\n'), 'application/octet-stream');
 }
 
-/**
- * Poll a BigQuery job until it reaches DONE state (or times out).
- * MEDIUM-9: first 5 polls use 1s sleep; subsequent polls use 3s.
- * LOW-14: after timeout, does one final check before throwing.
- * Throws if the job reports an error or does not complete within ~3 minutes.
- */
-function bqWaitForJob(jobId) {
-  var maxAttempts = 60; // up to ~3-minute ceiling
-  for (var attempt = 0; attempt < maxAttempts; attempt++) {
-    // MEDIUM-9: fast polls first, then back off
-    Utilities.sleep(attempt < 5 ? 1000 : 3000);
-    var job = BigQuery.Jobs.get(BQ_PROJECT, jobId);
-    if (job.status.state === 'DONE') {
-      if (job.status.errorResult) {
-        throw new Error('BQ load job failed (' + jobId + '): ' + job.status.errorResult.message);
-      }
-      return; // success
-    }
-  }
-  // LOW-14: one final check — job may have completed during the last sleep
-  var finalJob = BigQuery.Jobs.get(BQ_PROJECT, jobId);
-  if (finalJob.status.state === 'DONE') {
-    if (finalJob.status.errorResult) {
-      throw new Error('BQ load job failed (' + jobId + '): ' + finalJob.status.errorResult.message);
-    }
-    return; // job completed just before timeout
-  }
-  throw new Error('BQ load job timed out after ' + maxAttempts + ' polls: ' + jobId);
-}
+
 
 
 // ── SCHEMA DEFINITIONS ────────────────────────────────────────────────
@@ -1594,4 +1729,109 @@ function checkBigQueryClientCoverage() {
   Logger.log('=== end coverage check ===');
 
   return { total: clients.length, willSync: willSync, skipped: willSkip, emptyButReachable: noData };
+}
+
+/**
+ * No-arg health report for the hourly sync. Answers the one question an
+ * "unconfirmed load" email cannot: IS THE DATA ACTUALLY THERE?
+ *
+ * Reads table metadata only — row counts and last-modified times — so it costs
+ * nothing and touches no patient data. Then lists the recent load jobs with
+ * their real durations, which is the number to watch as the practice grows.
+ *
+ * No-arg because the Apps Script Run dropdown cannot pass arguments.
+ */
+function checkBigQuerySyncHealth() {
+  var tables = [
+    'sessions', 'behavior_records', 'trial_records', 'abc_incidents', 'mastery_log',
+    'therapists', 'clients', 'authorizations', 'goals_reference',
+    'behaviors_reference', 'billing_codes', 'behavior_definitions',
+    'phase_changes', 'definition_acks'
+  ];
+
+  Logger.log('TABLE FRESHNESS  (project ' + BQ_PROJECT + ', dataset ' + BQ_DATASET + ')');
+  Logger.log('');
+  Logger.log(_bqPad('table', 22) + _bqPad('rows', 10) + 'last written');
+  Logger.log('--------------------------------------------------------------');
+
+  var now = new Date().getTime();
+  var missing = [];
+  var stale   = [];
+  for (var i = 0; i < tables.length; i++) {
+    var t = tables[i];
+    try {
+      var meta = BigQuery.Tables.get(BQ_PROJECT, BQ_DATASET, t);
+      var rows = String(meta.numRows || '0');
+      var lm   = Number(meta.lastModifiedTime || 0);
+      var mins = lm ? Math.round((now - lm) / 60000) : -1;
+      var when = (mins < 0) ? 'unknown'
+               : (mins < 90) ? (mins + ' min ago')
+               : (Math.round(mins / 60) + ' hours ago');
+      if (mins > 150) stale.push(t + ' (' + when + ')');
+      Logger.log(_bqPad(t, 22) + _bqPad(rows, 10) + when);
+    } catch (e) {
+      missing.push(t);
+      Logger.log(_bqPad(t, 22) + _bqPad('-', 10) + 'TABLE NOT FOUND');
+    }
+  }
+
+  Logger.log('');
+  if (!missing.length && !stale.length) {
+    Logger.log('All ' + tables.length + ' tables exist and were written within the');
+    Logger.log('last sync window. Any "unconfirmed load" email was a polling');
+    Logger.log('artefact, NOT data loss.');
+  }
+  if (missing.length) {
+    Logger.log('MISSING TABLES: ' + missing.join(', '));
+    Logger.log('  A table that has never loaded usually means no schema branch in');
+    Logger.log('  bqCreateTableSchema() — an empty schema with autodetect:false');
+    Logger.log('  fails the load every time.');
+  }
+  if (stale.length) {
+    Logger.log('STALE (>2.5h, so it missed at least one hourly run): ' + stale.join(', '));
+  }
+
+  Logger.log('');
+  Logger.log('RECENT LOAD JOBS  (how long they really take)');
+  Logger.log('--------------------------------------------------------------');
+  try {
+    var list = BigQuery.Jobs.list(BQ_PROJECT, { maxResults: 40, projection: 'full', allUsers: true });
+    var jobs = (list && list.jobs) ? list.jobs : [];
+    var shown = 0, slowest = 0;
+    for (var j = 0; j < jobs.length && shown < 20; j++) {
+      var cfg = jobs[j].configuration || {};
+      if (!cfg.load) continue;
+      var dest = (cfg.load.destinationTable || {}).tableId || '?';
+      var st   = jobs[j].statistics || {};
+      var secs = (st.endTime && st.creationTime)
+        ? Math.round((Number(st.endTime) - Number(st.creationTime)) / 1000) : -1;
+      if (secs > slowest) slowest = secs;
+      var state = ((jobs[j].status || {}).state) || '?';
+      var err   = ((jobs[j].status || {}).errorResult || {}).reason || '';
+      Logger.log(_bqPad(dest, 22) + _bqPad(state, 10) +
+                 (secs < 0 ? 'running' : secs + 's') + (err ? ('  ERROR: ' + err) : ''));
+      shown++;
+    }
+    if (!shown) Logger.log('(no load jobs found in recent history)');
+    else {
+      Logger.log('');
+      Logger.log('Slowest of the above: ' + slowest + 's. The sync now waits for all');
+      Logger.log('loads together rather than one after another, so the total wait is');
+      Logger.log('this number, not the sum.');
+    }
+  } catch (e) {
+    Logger.log('Could not list jobs: ' + e.message);
+  }
+
+  Logger.log('');
+  Logger.log('WHAT TO WATCH: the Audit Log line "Sync complete in Ns". The fix for a');
+  Logger.log('rising N is incremental sync (a dateISO watermark with WRITE_APPEND for');
+  Logger.log('the event tables), not a longer timeout.');
+}
+
+/** Fixed-width column padding for the log tables above. */
+function _bqPad(v, width) {
+  var out = String(v === null || v === undefined ? '' : v);
+  while (out.length < width) out += ' ';
+  return out;
 }
